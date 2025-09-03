@@ -164,7 +164,7 @@ const People = () => {
             Object.values({
                 // id: monument.id,
                 role: roles?.find((r) => r.id === rp.role)?.name,
-                name: peopleType.find((p) => p.id === rp.person)?.first_name,
+                name: peopleType?.find((p) => p.id === rp.person)?.first_name,
                 last_name: peopleType.find((p) => p.id === rp.person)
                     ?.last_name,
                 email: peopleType.find((p) => p.id === rp.person)?.email,

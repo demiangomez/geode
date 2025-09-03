@@ -454,10 +454,16 @@ export async function getTraceReceiverByRinex<T>(
     api: AxiosInstance,
     receiver_serial: string,
     receiver_type?: string,
+    extraParams?: Record<string, any>,
 ): Promise<T> {
     try {
         const params = new URLSearchParams({ receiver_serial });
         if (receiver_type) params.append("receiver_type", receiver_type);
+        if (extraParams) {
+            Object.entries(extraParams).forEach(([k, v]) =>
+                params.append(k, String(v)),
+            );
+        }
         const response = await api.get(`api/rinex?${params.toString()}`);
         return response.data as Promise<T>;
     } catch (error) {
@@ -469,10 +475,16 @@ export async function getTraceReceiverByStationInfo<T>(
     api: AxiosInstance,
     receiver_serial: string,
     receiver_code?: string,
+    extraParams?: Record<string, any>,
 ): Promise<T> {
     try {
         const params = new URLSearchParams({ receiver_serial });
         if (receiver_code) params.append("receiver_code", receiver_code);
+        if (extraParams) {
+            Object.entries(extraParams).forEach(([k, v]) =>
+                params.append(k, String(v)),
+            );
+        }
         const response = await api.get(`api/station-info?${params.toString()}`);
         return response.data as Promise<T>;
     } catch (error) {
@@ -1946,20 +1958,20 @@ export async function swapTryOrdenService<T>(
     }
 }
 
-export async function getPeopleByName<T>(
-    api: AxiosInstance,
-    first_name: string | undefined,
-    last_name: string | undefined,
-): Promise<T> {
-    try {
-        const response = await api.get(
-            `api/people/has-duplicates/${first_name ?? ""}/${last_name ?? ""}`,
-        );
-        return response.data as Promise<T>;
-    } catch (error) {
-        return Promise.reject(error);
-    }
-}
+// export async function getPeopleByName<T>(
+//     api: AxiosInstance,
+//     first_name: string | undefined,
+//     last_name: string | undefined,
+// ): Promise<T> {
+//     try {
+//         const response = await api.get(
+//             `api/people/has-duplicates/${first_name ?? ""}/${last_name ?? ""}`,
+//         );
+//         return response.data as Promise<T>;
+//     } catch (error) {
+//         return Promise.reject(error);
+//     }
+// }
 
 export async function postPeopleService<T>(
     api: AxiosInstance,

@@ -245,19 +245,19 @@ const Station = () => {
             location.pathname !== `/${nc}/${sc}` &&
             location.pathname !== `/${nc}/${sc}/rinex`
         ) {
-            additionalClasses = "mr-8";
+            additionalClasses = "mr-24";
         } else if (location.pathname === `/${nc}/${sc}`) {
             additionalClasses = "mr-0";
         } else if (
             errorMessages.length === 0 &&
             location.pathname === `/${nc}/${sc}/rinex`
         ) {
-            additionalClasses = "mr-8";
+            additionalClasses = "mr-24";
         } else if (
             errorMessages.length > 0 &&
             location.pathname === `/${nc}/${sc}/rinex`
         ) {
-            additionalClasses = "mr-2";
+            additionalClasses = "mr-20";
         }
 
         return `${baseClasses} ${additionalClasses}`;

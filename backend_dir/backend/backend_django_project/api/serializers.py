@@ -320,10 +320,77 @@ class StationSerializer(serializers.ModelSerializer):
             Check that lat, lon and height are provided
             or auto_x, auto_y and auto_z are provided
         """
-        if 'lat' not in data or 'lon' not in data or 'height' not in data:
-            if 'auto_x' not in data or 'auto_y' not in data or 'auto_z' not in data:
+        by_ecef = False
+        by_lat_lon = False
+
+        if 'lat' in data and 'lon' in data and 'height' in data and data['lat'] not in ("", None) and data['lon'] not in ("", None) and data['height'] not in ("", None):
+            by_lat_lon = True
+
+        if 'auto_x' in data and 'auto_y' in data and 'auto_z' in data and data['auto_x'] not in ("", None) and data['auto_y'] not in ("", None) and data['auto_z'] not in ("", None):
+            by_ecef = True
+
+        if not (by_lat_lon or by_ecef):
+            raise serializers.ValidationError(
+                "fields 'lat', 'lon' and 'height' or ECEF coordinates (fields 'auto_x', 'auto_y', 'auto_z') must be provided")
+
+        if by_ecef == True:
+            try:
+                if not isinstance(data['auto_x'], float):
+                    float(data['auto_x'])
+                if not isinstance(data['auto_y'], float):
+                    float(data['auto_y'])
+                if not isinstance(data['auto_z'], float):
+                    float(data['auto_z'])
+            except (ValueError, TypeError):
                 raise serializers.ValidationError(
-                    "fields 'lat', 'lon' and 'height' or ECEF coordinates (fields 'auto_x', 'auto_y', 'auto_z') must be provided")
+                    "fields 'auto_x', 'auto_y' and 'auto_z' must be valid floating point numbers")
+
+            lat, lon, height = ecef2lla([float(data['auto_x']),
+                                         float(data['auto_y']), float(data['auto_z'])])
+            data['lat'] = lat[0]
+            data['lon'] = lon[0]
+            data['height'] = height[0]
+            if height[0] < -500 or height[0] > 10000:
+                raise serializers.ValidationError(
+                    "Invalid ECEF coordinates. When translating from ECEF to LLA, height must be between -500 and 10000 meters")
+
+        if by_lat_lon == True:
+            try:
+                data['lat'] = data['lat'] if isinstance(
+                    data['lat'], float) else float(data['lat'])
+                data['lon'] = data['lon'] if isinstance(
+                    data['lon'], float) else float(data['lon'])
+                data['height'] = data['height'] if isinstance(
+                    data['height'], float) else float(data['height'])
+            except (ValueError, TypeError):
+                raise serializers.ValidationError(
+                    "fields 'lat', 'lon' and 'height' must be valid floating point numbers")
+
+            # Validate latitude and longitude ranges
+            if data['lat'] < -90 or data['lat'] > 90:
+                raise serializers.ValidationError(
+                    "field 'lat' must be between -90 and 90 degrees")
+            if data['lon'] < -180 or data['lon'] > 180:
+                raise serializers.ValidationError(
+                    "field 'lon' must be between -180 and 180 degrees")
+
+            auto_x, auto_y, auto_z = lla2ecef(
+                [data['lat'], data['lon'], data['height']])
+            data['auto_x'] = auto_x[0]
+            data['auto_y'] = auto_y[0]
+            data['auto_z'] = auto_z[0]
+
+        # set country code
+        geolocator = Nominatim(user_agent="Parallel.GAMIT")
+
+        reverse = RateLimiter(geolocator.reverse, min_delay_seconds=1)
+
+        location = reverse("%f, %f" %
+                           (data['lat'], data['lon']))
+
+        if location and 'country_code' in location.raw['address'].keys():
+            data["country_code"] = coco.convert(names=location.raw['address']['country_code'],
+                                                to='ISO3')
 
         return data
 
@@ -347,40 +414,6 @@ class StationSerializer(serializers.ModelSerializer):
         validated_data.pop('station_code', None)
 
         return super().update(instance, validated_data)
-
-    def to_internal_value(self, data):
-        internal_value = super().to_internal_value(data)
-
-        # set country code
-        if 'lat' in internal_value and 'lon' in internal_value and internal_value['lat'] is not None and internal_value['lon'] is not None:
-            geolocator = Nominatim(user_agent="Parallel.GAMIT")
-
-            reverse = RateLimiter(geolocator.reverse, min_delay_seconds=1)
-
-            location = reverse("%f, %f" %
-                               (internal_value['lat'], internal_value['lon']))
-
-            if location and 'country_code' in location.raw['address'].keys():
-                internal_value["country_code"] = coco.convert(names=location.raw['address']['country_code'],
-                                                              to='ISO3')
-
-        # set lat and lon from auto_x, auto_y, auto_z (or viceversa)
-
-        if 'auto_x' in internal_value and 'auto_y' in internal_value and 'auto_z' in internal_value and internal_value['auto_x'] is not None and internal_value['auto_y'] is not None and internal_value['auto_z'] is not None:
-            lat, lon, height = ecef2lla([float(internal_value['auto_x']),
-                                         float(internal_value['auto_y']), float(internal_value['auto_z'])])
-            internal_value['lat'] = lat[0]
-            internal_value['lon'] = lon[0]
-            internal_value['height'] = height[0]
-        else:
-            auto_x, auto_y, auto_z = lla2ecef([float(internal_value['lat']), float(internal_value['lon']),
-                                               float(internal_value['height'])])
-
-            internal_value['auto_x'] = auto_x[0]
-            internal_value['auto_y'] = auto_y[0]
-            internal_value['auto_z'] = auto_z[0]
-
-        return internal_value
 
 
 class StationMetaGapsSerializer(serializers.ModelSerializer):
@@ -654,6 +687,7 @@ class VisitSerializer(serializers.ModelSerializer):
     other_file_count = serializers.SerializerMethodField()
     station_network_code = serializers.SerializerMethodField()
     station_station_code = serializers.SerializerMethodField()
+    people_info = serializers.SerializerMethodField()
 
     class Meta:
         model = models.Visits
@@ -664,8 +698,16 @@ class VisitSerializer(serializers.ModelSerializer):
             'campaign_name': {'read_only': True},
             'observation_file_count': {'read_only': True},
             'visit_image_count': {'read_only': True},
-            'other_file_count': {'read_only': True}
+            'other_file_count': {'read_only': True},
+            'people_info': {'read_only': True}
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Cache for file counts to avoid repeated queries
+        self._file_counts_cache = {}
+        # Check if we should skip file content loading based on context
+        self.skip_file_content = self.context.get('skip_file_content', False)
 
     def validate(self, data):
         # Check that visit date in between campaing date range
@@ -688,6 +730,9 @@ class VisitSerializer(serializers.ModelSerializer):
 
     def get_log_sheet_actual_file(self, obj):
         """Returns the actual file encoded in base64"""
+        # Skip file content loading if requested for performance
+        if self.skip_file_content:
+            return None
 
         if obj.log_sheet_file and obj.log_sheet_file.name:
             try:
@@ -700,6 +745,9 @@ class VisitSerializer(serializers.ModelSerializer):
 
     def get_navigation_actual_file(self, obj):
         """Returns the actual file encoded in base64"""
+        # Skip file content loading if requested for performance
+        if self.skip_file_content:
+            return None
 
         if obj.navigation_file and obj.navigation_file.name:
             try:
@@ -750,25 +798,75 @@ class VisitSerializer(serializers.ModelSerializer):
         return validate_file_size(value)
 
     def get_observation_file_count(self, obj):
+        # Use cached counts if available (set by the view annotations)
+        if hasattr(obj, 'observation_file_count'):
+            return obj.observation_file_count
+        # Fallback to query if annotation not available (e.g., in detail views)
         return models.VisitGNSSDataFiles.objects.filter(visit=obj).count()
 
     def get_visit_image_count(self, obj):
+        # Use cached counts if available (set by the view annotations)
+        if hasattr(obj, 'visit_image_count'):
+            return obj.visit_image_count
+        # Fallback to query if annotation not available
         return models.VisitImages.objects.filter(visit=obj).count()
 
     def get_other_file_count(self, obj):
+        # Use cached counts if available (set by the view annotations)
+        if hasattr(obj, 'other_file_count'):
+            return obj.other_file_count
+        # Fallback to query if annotation not available
         return models.VisitAttachedFiles.objects.filter(visit=obj).count()
 
     def get_station_network_code(self, obj):
-        if hasattr(obj, "station") and obj.station is not None:
-            return obj.station.network_code.network_code
-        else:
-            return None
+        # Use prefetched data if available
+        if hasattr(obj, 'station') and obj.station:
+            if hasattr(obj.station, 'network_code') and obj.station.network_code:
+                return obj.station.network_code.network_code
+        return None
 
     def get_station_station_code(self, obj):
-        if hasattr(obj, "station") and obj.station is not None:
+        # Use prefetched data if available
+        if hasattr(obj, 'station') and obj.station:
             return obj.station.station_code
+        return None
+
+    def get_people_info(self, obj):
+        """Returns people with id and concatenated name instead of just IDs"""
+        # Check if people are already prefetched
+        if hasattr(obj, 'people'):
+            # Use prefetched people if available
+            people_queryset = obj.people.all()
+
+            # If people are prefetched but don't have the needed fields, get them
+            if people_queryset and not hasattr(list(people_queryset)[0], 'first_name'):
+                people_ids = [person.id for person in people_queryset]
+                people_queryset = models.Person.objects.filter(
+                    id__in=people_ids).only('id', 'first_name', 'last_name')
         else:
-            return None
+            # If not prefetched, get only the needed fields
+            people_queryset = models.Person.objects.filter(
+                id__in=obj.people.values_list('id', flat=True)
+            ).only('id', 'first_name', 'last_name')
+
+        # Return list of objects with id and name
+        return [
+            {
+                'id': person.id,
+                'name': f"{person.first_name} {person.last_name}".strip()
+            }
+            for person in people_queryset
+        ]
+
+    def to_representation(self, instance):
+        """Customize the output representation"""
+        representation = super().to_representation(instance)
+
+        # Cambiar el nombre del campo 'people_info' a 'people' en la respuesta
+        if 'people_info' in representation:
+            representation['people'] = representation.pop('people_info')
+
+        return representation
 
 
 class VisitAttachedFilesSerializer(serializers.ModelSerializer):

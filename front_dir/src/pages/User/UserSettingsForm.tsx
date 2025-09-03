@@ -1,23 +1,17 @@
-//Componentes
 import { Alert, ImageUploadCircle, Slider } from "@componentsReact";
 
-//Iconos
 import {
     EyeIcon,
     EyeSlashIcon,
     PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 
-//Hooks
 import { useApi, useAuth, useFormReducer } from "@hooks";
 
-//Hooks de React
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 
-//Fetchs
-import { getRolesService, patchUserService, getUserService } from "@services";
+import { getRolesService, patchUserService } from "@services";
 
-//Interfaces
 import {
     User,
     Role,
@@ -27,17 +21,15 @@ import {
     RolesServiceData,
 } from "@types";
 
-//Reducer Form States
 import { USERS_STATE } from "@utils/reducerFormStates";
-
-//Utils
-// import { jwtDeserializer } from "@utils/index";
+import { apiOkStatuses } from "@utils";
 
 type Props = {
     userData: UsersData | null;
+    getData: () => void;
 };
 
-const UserSettingsForm = ({ userData }: Props) => {
+const UserSettingsForm = ({ userData, getData }: Props) => {
     const { formState, dispatch } = useFormReducer(USERS_STATE);
     const [initialValue, setInitialValue] = useState<UsersData>(
         USERS_STATE as UsersData,
@@ -48,6 +40,8 @@ const UserSettingsForm = ({ userData }: Props) => {
     const [roles, setRoles] = useState<Role[]>([]);
     const [image, setImagen] = useState<string | null>(null);
     const [edit, setEdit] = useState<boolean>(false);
+    const [hasImage, setHasImage] = useState(false);
+
     const [saved, setSaved] = useState<boolean>(false);
     const [seePwd, setSeePwd] = useState<boolean>(false);
     const [loading, setLoading] = useState<boolean>(false);
@@ -55,44 +49,31 @@ const UserSettingsForm = ({ userData }: Props) => {
         { status: number; msg: string; errors?: Errors } | undefined
     >(undefined);
 
+    const errorBadge = msg?.errors?.errors?.map((e) => e.attr);
+
+    const optionalFields = [
+        "first_name",
+        "last_name",
+        "role",
+        "email",
+        "phone",
+        "address",
+    ];
+
+    // Retorna un string remplazando los _ por espacios y en mayuscula o minuscula
+    const translateKey = (key: string, minus: boolean) => {
+        if (minus) {
+            const formatted = key.toLowerCase().replace(/_/g, " ");
+            return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+        } else {
+            return key.toUpperCase().replace("_", " ").replace("_", " ");
+        }
+    };
+
     const getRoles = async () => {
         try {
             const res = await getRolesService<RolesServiceData>(api);
             setRoles(res.data);
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
-    const fetchUser = async (id?: number) => {
-        try {
-            const userId = id ?? Number(formState.id);
-            if (!userId) return;
-            const res = await getUserService<UsersData>(api, userId);
-            if (res) {
-                const user = res;
-                const newInitial = {
-                    id: user.id,
-                    username: user.username,
-                    password: user.password,
-                    first_name: user.first_name,
-                    last_name: user.last_name,
-                    role: {
-                        id: user.role.id,
-                        name: user.role.name,
-                    },
-                    is_active: user.is_active,
-                    email: user.email,
-                    phone: user.phone,
-                    address: user.address,
-                    photo: user.photo,
-                    clustering_distance: user.clustering_distance,
-                };
-
-                setInitialValue(newInitial);
-                dispatch({ type: "set", payload: newInitial });
-                setImagen(null);
-            }
         } catch (err) {
             console.error(err);
         }
@@ -144,20 +125,16 @@ const UserSettingsForm = ({ userData }: Props) => {
                         msg: "User updated successfully",
                     });
                     setSaved(true);
+                    setTimeout(() => {
+                        getData();
+                    }, 100);
                 }
             }
         } catch (err) {
             console.error(err);
         } finally {
-            try {
-                await fetchUser();
-            } catch (err) {
-                console.error("Error refetching user after update:", err);
-            }
+            setEdit(false);
             setLoading(false);
-            setTimeout(() => {
-                window.location.reload();
-            }, 100);
         }
     };
 
@@ -196,7 +173,6 @@ const UserSettingsForm = ({ userData }: Props) => {
                     name: userData.role.name,
                 },
                 is_active: userData.is_active,
-
                 email: userData.email,
                 phone: userData.phone,
                 address: userData.address,
@@ -211,7 +187,7 @@ const UserSettingsForm = ({ userData }: Props) => {
                 payload: initialValue,
             });
         }
-    }, []);
+    }, [userData]);
 
     useEffect(() => {
         getRoles();
@@ -234,197 +210,236 @@ const UserSettingsForm = ({ userData }: Props) => {
     };
 
     return (
-        <>
-            <body className="w-full flex flex-col justify-center min-h-[50vh]">
-                <div className="bg-base-200 p-7 rounded-md align-middle">
-                    <header className="flex justify-between">
-                        <h2 className="text-2xl font-bold my-6">User</h2>
-                        <button
-                            className="flex btn btn-ghost btn-circle self-center"
-                            onClick={() => {
-                                if (edit && !saved) {
-                                    dispatch({
-                                        type: "set",
-                                        payload: initialValue,
-                                    });
-                                    setImagen(null);
-                                }
-                                setEdit(!edit);
-                                setMsg(undefined);
-                            }}
-                        >
-                            <PencilSquareIcon title="edit" className="size-8" />
-                        </button>
-                    </header>
-                    <form
-                        className=" flex flex-col items-center justify-center w-full gap-4 mb-3"
-                        onSubmit={(e: React.FormEvent<HTMLFormElement>) => {
-                            handleSubmit(e);
+        <div className="w-full flex flex-col justify-center h-full">
+            <div className="bg-base-200 px-6 h-full rounded-md align-middle">
+                <header className="flex justify-between">
+                    <h2 className="text-2xl font-bold my-3">User</h2>
+                    <button
+                        className="flex btn btn-ghost btn-circle self-center"
+                        onClick={() => {
+                            if (edit && !saved) {
+                                dispatch({
+                                    type: "set",
+                                    payload: initialValue,
+                                });
+                                setImagen(null);
+                            }
+
+                            setEdit(!edit);
+                            setMsg(undefined);
+                            setHasImage(false);
                         }}
                     >
-                        <ImageUploadCircle
-                            edit={edit}
-                            image={
-                                !edit
-                                    ? saved
-                                        ? (formState.photo ?? null)
-                                        : (initialValue.photo ?? null)
-                                    : (image ?? formState.photo)
-                            }
-                            setImage={setImagen}
-                        />
-                        <div className="w-full grid grid-cols-2 gap-2">
-                            {Object.keys(formState).map((key) => {
-                                const notShow = ["photo", "id", "is_active"];
-                                const doubleRow = [
-                                    "first_name",
-                                    "last_name",
-                                    "role",
-                                    "email",
-                                    "phone",
-                                    "address",
-                                    "clustering_distance",
-                                ];
+                        <PencilSquareIcon title="edit" className="size-8" />
+                    </button>
+                </header>
+                <form
+                    className="flex flex-col items-center justify-center w-full mb-3 "
+                    onSubmit={handleSubmit}
+                >
+                    <ImageUploadCircle
+                        edit={edit}
+                        hasImage={hasImage}
+                        image={
+                            !edit
+                                ? saved
+                                    ? (formState.photo ?? null)
+                                    : (initialValue.photo ?? null)
+                                : (image ?? formState.photo)
+                        }
+                        setImage={setImagen}
+                        setHasImage={setHasImage}
+                    />
+                    <div className="w-full grid grid-cols-2 gap-2">
+                        {Object.keys(formState).map((key) => {
+                            const notShow = ["photo", "id", "is_active"];
+                            const doubleRow = [
+                                "first_name",
+                                "last_name",
+                                "role",
+                                "email",
+                                "phone",
+                                "address",
+                                "clustering_distance",
+                            ];
 
-                                if (!notShow.includes(key))
-                                    return (
-                                        <>
-                                            {key === "role" ? (
-                                                <select
-                                                    name={
-                                                        key === "role"
-                                                            ? "role.id"
-                                                            : key
-                                                    }
-                                                    className={`select select-bordered w-full text-center font-bold col-span-${doubleRow.includes(key) ? "2" : "1"}`}
+                            if (!notShow.includes(key))
+                                return (
+                                    <Fragment key={key}>
+                                        {key === "role" ? (
+                                            <select
+                                                key={key}
+                                                name={
+                                                    key === "role"
+                                                        ? "role.id"
+                                                        : key
+                                                }
+                                                className={`select select-bordered w-full text-center font-bold col-span-${doubleRow.includes(key) ? "2" : "1"}`}
+                                                disabled={!edit}
+                                                onChange={(e) => {
+                                                    handleChange(e.target);
+                                                }}
+                                                value={
+                                                    key === "role" &&
+                                                    formState.role.id
+                                                        ? formState.role.id
+                                                        : ""
+                                                }
+                                            >
+                                                <option disabled value="">
+                                                    {formState.role.name.toLocaleUpperCase() ??
+                                                        "Select a role"}
+                                                </option>
+
+                                                {roles?.map((role) => (
+                                                    <option
+                                                        key={role.id}
+                                                        value={role.id}
+                                                    >
+                                                        {role.name.toUpperCase()}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : key === "clustering_distance" ? (
+                                            <>
+                                                <Slider
+                                                    tittle="CLUSTERING"
+                                                    minValue={0}
+                                                    maxValue={20}
+                                                    name={key}
                                                     disabled={!edit}
+                                                    classContainer="my-2 w-full col-span-2"
+                                                    value={
+                                                        edit
+                                                            ? formState[key]
+                                                            : initialValue[key]
+                                                    }
+                                                    suffixValue="m"
+                                                    suffixStyles={{
+                                                        width: "3rem",
+                                                    }}
+                                                    onChange={(e) =>
+                                                        handleChange(e.target)
+                                                    }
+                                                />
+                                            </>
+                                        ) : (
+                                            <label
+                                                className={`w-full input input-bordered flex items-center sm:col-span-2 xs:col-span-2 
+                                                    col-span-${doubleRow.includes(key) ? "2" : "1"} ${errorBadge?.includes(key) ? "input-error" : ""}`}
+                                                title={
+                                                    errorBadge?.includes(key)
+                                                        ? msg?.errors?.errors.find(
+                                                              (e) =>
+                                                                  e.attr ===
+                                                                  key,
+                                                          )?.detail
+                                                        : translateKey(
+                                                              key,
+                                                              true,
+                                                          )
+                                                }
+                                            >
+                                                <span className="font-bold p-2 w-fit">
+                                                    {translateKey(key, false)}
+                                                </span>
+                                                <input
+                                                    name={key}
+                                                    className="grow truncate min-w-[0]"
+                                                    readOnly={!edit}
+                                                    autoComplete={
+                                                        key === "password"
+                                                            ? "new-password"
+                                                            : "off"
+                                                    }
                                                     onChange={(e) => {
                                                         handleChange(e.target);
                                                     }}
-                                                    value={
-                                                        key === "role" &&
-                                                        formState.role.id
-                                                            ? formState.role.id
+                                                    value={formState[key] ?? ""}
+                                                    type={
+                                                        key === "password" &&
+                                                        !seePwd
+                                                            ? "password"
+                                                            : "text"
+                                                    }
+                                                    placeholder={
+                                                        key === "password"
+                                                            ? "********"
                                                             : ""
                                                     }
-                                                >
-                                                    <option disabled value="">
-                                                        Select a role
-                                                    </option>
+                                                />
 
-                                                    {roles?.map((role) => (
-                                                        <option value={role.id}>
-                                                            {role.name.toUpperCase()}
-                                                        </option>
-                                                    ))}
-                                                </select>
-                                            ) : key ===
-                                              "clustering_distance" ? (
-                                                <>
-                                                    <Slider
-                                                        tittle="CLUSTERING"
-                                                        minValue={0}
-                                                        maxValue={20}
-                                                        name={key}
-                                                        disabled={!edit}
-                                                        classContainer="my-2 w-full col-span-2"
-                                                        value={
-                                                            formState[key] ?? 0
-                                                        }
-                                                        suffixValue="Mts"
-                                                        onChange={(e) =>
-                                                            handleChange(
-                                                                e.target,
-                                                            )
-                                                        }
-                                                    />
-                                                </>
-                                            ) : (
-                                                <label
-                                                    className={`w-full input input-bordered flex items-center sm:col-span-2 xs:col-span-2 col-span-${doubleRow.includes(key) ? "2" : "1"}`}
-                                                >
-                                                    <span className="font-bold p-2 w-fit">
-                                                        {key
-                                                            .toUpperCase()
-                                                            .replace("_", " ")
-                                                            .replace("_", " ")}
-                                                    </span>
-                                                    <input
-                                                        name={key}
-                                                        className="grow truncate min-w-[0]"
-                                                        readOnly={!edit}
-                                                        autoComplete={
-                                                            key === "password"
-                                                                ? "new-password"
-                                                                : "off"
-                                                        }
-                                                        onChange={(e) => {
-                                                            handleChange(
-                                                                e.target,
-                                                            );
-                                                        }}
-                                                        value={
-                                                            formState[key] ?? ""
-                                                        }
-                                                        type={
-                                                            key ===
-                                                                "password" &&
-                                                            !seePwd
-                                                                ? "password"
-                                                                : "text"
-                                                        }
-                                                        placeholder={
-                                                            key === "password"
-                                                                ? "********"
-                                                                : ""
-                                                        }
-                                                    />
-                                                    {key === "password" &&
-                                                    edit ? (
-                                                        !seePwd ? (
-                                                            <EyeSlashIcon
-                                                                className="size-6 cursor-pointer"
-                                                                onClick={() =>
-                                                                    setSeePwd(
-                                                                        !seePwd,
-                                                                    )
-                                                                }
-                                                            />
-                                                        ) : (
-                                                            <EyeIcon
-                                                                className="size-6 cursor-pointer"
-                                                                onClick={() =>
-                                                                    setSeePwd(
-                                                                        !seePwd,
-                                                                    )
-                                                                }
-                                                            />
-                                                        )
-                                                    ) : null}
-                                                </label>
-                                            )}
-                                        </>
-                                    );
-                            })}
-                            <div className="col-span-2 flex justify-center">
-                                {edit && (
-                                    <button
-                                        className="w-36 btn btn-success rounded my-2"
-                                        disabled={loading}
-                                    >
-                                        {loading && (
-                                            <span className="loading loading-spinner loading-md"></span>
+                                                {key === "password" && edit ? (
+                                                    !seePwd ? (
+                                                        <EyeSlashIcon
+                                                            className="size-6 cursor-pointer"
+                                                            onClick={() =>
+                                                                setSeePwd(
+                                                                    !seePwd,
+                                                                )
+                                                            }
+                                                        />
+                                                    ) : (
+                                                        <EyeIcon
+                                                            className="size-6 cursor-pointer"
+                                                            onClick={() =>
+                                                                setSeePwd(
+                                                                    !seePwd,
+                                                                )
+                                                            }
+                                                        />
+                                                    )
+                                                ) : null}
+                                                {edit &&
+                                                    (errorBadge &&
+                                                    errorBadge.includes(key) ? (
+                                                        <span className="badge badge-error right-0">
+                                                            {translateKey(
+                                                                msg?.errors?.errors.find(
+                                                                    (e) =>
+                                                                        e.attr ===
+                                                                        key,
+                                                                )?.code ?? "",
+                                                                true,
+                                                            )}
+                                                        </span>
+                                                    ) : edit &&
+                                                      optionalFields.includes(
+                                                          key,
+                                                      ) ? (
+                                                        <span className="badge badge-secondary">
+                                                            Optional
+                                                        </span>
+                                                    ) : null)}
+                                            </label>
                                         )}
-                                        UPDATE
-                                    </button>
-                                )}
-                            </div>
+                                    </Fragment>
+                                );
+                        })}
+                    </div>
+                    <div className="flex flex-col w-full mt-2 space-y-2">
+                        <Alert msg={msg} />
+
+                        <div className="flex justify-center">
+                            {edit && (
+                                <button
+                                    className="w-36 btn btn-success rounded"
+                                    disabled={
+                                        loading ||
+                                        apiOkStatuses.includes(msg?.status ?? 0)
+                                    }
+                                >
+                                    {loading && (
+                                        <span className="loading loading-spinner loading-md"></span>
+                                    )}
+                                    UPDATE
+                                </button>
+                            )}
                         </div>
-                    </form>
-                    <Alert msg={msg} />
-                </div>
-            </body>
-        </>
+                    </div>
+                </form>
+            </div>
+        </div>
     );
 };
 

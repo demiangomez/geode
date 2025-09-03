@@ -3,14 +3,21 @@ import React, { useState, useRef, Dispatch, SetStateAction } from "react";
 
 type Props = {
     edit: boolean;
+    hasImage: boolean;
     defaultImage?: string;
     image: string | null;
     setImage: Dispatch<SetStateAction<string | null>>;
+    setHasImage: Dispatch<SetStateAction<boolean>>;
 };
 
-const ImageUploadCircle = ({ edit, image, setImage }: Props) => {
+const ImageUploadCircle = ({
+    edit,
+    image,
+    hasImage,
+    setImage,
+    setHasImage,
+}: Props) => {
     const [isDragging, setIsDragging] = useState(false);
-    const [hasImage, setHasImage] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -99,7 +106,7 @@ const ImageUploadCircle = ({ edit, image, setImage }: Props) => {
         <div className="flex items-center justify-center relative mb-10">
             {image && !edit ? (
                 <div
-                    className={`relative w-48 h-48 rounded-full cursor-pointer bg-gray-400 shadow-lg bg-cover bg-center `}
+                    className={`relative w-32 h-32 rounded-full cursor-pointer bg-gray-400 shadow-lg bg-cover bg-center `}
                     style={{ backgroundImage: `url(${formatImageUrl(image)})` }}
                 ></div>
             ) : !image && !edit ? (
@@ -108,7 +115,7 @@ const ImageUploadCircle = ({ edit, image, setImage }: Props) => {
                 />
             ) : (
                 <div
-                    className={`relative w-48 h-48 rounded-full cursor-pointer bg-gray-100 shadow-lg 
+                    className={`relative w-32 h-32 rounded-full cursor-pointer bg-gray-100 shadow-lg 
                                 ${isDragging ? "bg-transparent" : ""} 
                                 ${hasImage ? "bg-cover bg-center" : ""}`}
                     style={
@@ -130,7 +137,7 @@ const ImageUploadCircle = ({ edit, image, setImage }: Props) => {
 
                     <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-center px-8 transition-opacity duration-200 opacity-75">
                         <span className="text-sm flex flex-col items-center">
-                            <CameraIcon className="size-24 z-10 text-gray-600 opacity-75" />
+                            <CameraIcon className="size-14 z-10 text-gray-600 opacity-75" />
                             Click or drag a photo
                         </span>
                     </div>

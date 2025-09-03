@@ -1,24 +1,36 @@
-import { Alert, ConfirmDeleteModal, Modal, Spinner } from '@components/index';
-import { useFormReducer } from '@hooks/index';
-import { deleteSourcesFormatsService, postSourcesFormatsService, putSourcesFormatsService } from '@services';
-import { Errors, SourcesFormatData, ErrorResponse } from '@types';
-import { showModal } from '@utils/index';
-import { SOURCES_FORMATS_STATE } from '@utils/reducerFormStates';
-import { AxiosInstance } from 'axios';
-import { useEffect, useState } from 'react';
+import { Alert, ConfirmDeleteModal, Modal, Spinner } from "@components/index";
+import { useFormReducer } from "@hooks/index";
+import {
+    deleteSourcesFormatsService,
+    postSourcesFormatsService,
+    putSourcesFormatsService,
+} from "@services";
+import { Errors, SourcesFormatData, ErrorResponse } from "@types";
+import { showModal } from "@utils/index";
+import { SOURCES_FORMATS_STATE } from "@utils/reducerFormStates";
+import { AxiosInstance } from "axios";
+import { useEffect, useState } from "react";
 
 interface SourcesFormatsTableModalProps {
     sourceFormat: SourcesFormatData | undefined;
     handleClose: () => void;
     refetch: () => void;
     api: AxiosInstance;
-    type: 'add' | 'edit' | 'none';
+    type: "add" | "edit" | "none";
 }
 
-const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, type }: SourcesFormatsTableModalProps) => {
-    const [msg, setMsg] = useState<{ status: number; msg: string; errors?: Errors } | undefined>(undefined);
+const SourcesFormatsTableModal = ({
+    sourceFormat,
+    handleClose,
+    refetch,
+    api,
+    type,
+}: SourcesFormatsTableModalProps) => {
+    const [msg, setMsg] = useState<
+        { status: number; msg: string; errors?: Errors } | undefined
+    >(undefined);
 
-    const camps = ['format'];
+    const camps = ["format"];
 
     const errorBadge = msg?.errors?.errors?.map((e) => e.attr);
 
@@ -32,15 +44,15 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
         | {
               show: boolean;
               title: string;
-              type: 'add' | 'edit' | 'none';
+              type: "add" | "edit" | "none";
           }
         | undefined
     >(undefined);
 
     const handleSubmit = async () => {
-        if (type === 'add') {
+        if (type === "add") {
             postSourcesFormats();
-        } else if (type === 'edit') {
+        } else if (type === "edit") {
             putSourcesFormats();
         }
     };
@@ -48,7 +60,7 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
     const handleCancel = () => {
         handleClose();
         dispatch({
-            type: 'clear',
+            type: "clear",
         });
     };
 
@@ -59,11 +71,14 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
     const postSourcesFormats = async () => {
         try {
             setLoading(true);
-            const res = await postSourcesFormatsService<ErrorResponse>(api, formState);
+            const res = await postSourcesFormatsService<ErrorResponse>(
+                api,
+                formState,
+            );
             if (res.statusCode === 201) {
                 setMsg({
                     status: res.statusCode,
-                    msg: 'Sources Server Created',
+                    msg: "Sources Server Created",
                 });
                 setSuccess(true);
             } else {
@@ -84,11 +99,15 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
     const putSourcesFormats = async () => {
         try {
             setLoading(true);
-            const res = await putSourcesFormatsService<ErrorResponse>(api, Number(formState.api_id), formState);
+            const res = await putSourcesFormatsService<ErrorResponse>(
+                api,
+                Number(formState.api_id),
+                formState,
+            );
             if (res.statusCode === 200) {
                 setMsg({
                     status: res.statusCode,
-                    msg: 'Sources Server Updated',
+                    msg: "Sources Server Updated",
                 });
                 setSuccess(true);
             } else {
@@ -109,11 +128,14 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
     const deleteSourcesServers = async () => {
         try {
             setLoading(true);
-            const res = await deleteSourcesFormatsService<ErrorResponse>(api, Number(formState.api_id));
+            const res = await deleteSourcesFormatsService<ErrorResponse>(
+                api,
+                Number(formState.api_id),
+            );
             if (res.statusCode === 204) {
                 setMsg({
                     status: res.statusCode,
-                    msg: 'Sources Server Deleted',
+                    msg: "Sources Server Deleted",
                 });
                 setSuccess(true);
             } else {
@@ -134,7 +156,7 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
     useEffect(() => {
         if (sourceFormat) {
             dispatch({
-                type: 'set',
+                type: "set",
                 payload: sourceFormat,
             });
         }
@@ -155,32 +177,54 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
             }}
         >
             <div className="flex flex-col justify-cenmter items-center gap-4">
-                <h2 className="text-2xl font-bold">{type === 'add' ? 'Add Source' : type === 'edit' ? 'Edit Source' : 'View Source'}</h2>
+                <h2 className="text-2xl font-bold">
+                    {type === "add"
+                        ? "Add Source"
+                        : type === "edit"
+                          ? "Edit Source"
+                          : "View Source"}
+                </h2>
                 <div className="flex flex-col gap-3 w-full">
                     {camps.map((camp) => (
                         <div key={camp} className="w-full">
                             <label
                                 className={`w-full input input-bordered flex items-center gap-2 ${
-                                    errorBadge?.includes(camp) ? 'input-error' : ''
+                                    errorBadge?.includes(camp)
+                                        ? "input-error"
+                                        : ""
                                 } `}
                                 title={
                                     errorBadge?.includes(camp)
-                                        ? msg?.errors?.errors.find((e) => e.attr === camp)?.detail
-                                        : (formState[camp as keyof typeof formState] ?? '').toString()
+                                        ? msg?.errors?.errors.find(
+                                              (e) => e.attr === camp,
+                                          )?.detail
+                                        : (
+                                              formState[
+                                                  camp as keyof typeof formState
+                                              ] ?? ""
+                                          ).toString()
                                 }
                             >
                                 <div className="label">
                                     <span className="font-bold">
-                                        {camp === 'server_id' ? 'SERVER' : camp.replace('_', ' ').toUpperCase()}
+                                        {camp === "server_id"
+                                            ? "SERVER"
+                                            : camp
+                                                  .replace("_", " ")
+                                                  .toUpperCase()}
                                     </span>
                                 </div>
                                 <input
                                     className="grow"
                                     type="text"
-                                    value={formState[camp as keyof typeof formState] ?? ''}
+                                    value={
+                                        formState[
+                                            camp as keyof typeof formState
+                                        ] ?? ""
+                                    }
                                     onChange={(e) => {
                                         dispatch({
-                                            type: 'change_value',
+                                            type: "change_value",
                                             payload: {
                                                 inputName: camp,
                                                 inputValue: e.target.value,
@@ -190,7 +234,11 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
                                 />
                                 {errorBadge && errorBadge.includes(camp) && (
                                     <span className="badge badge-error absolute right-0 mb-12 mr-2">
-                                        {errorBadge.includes(camp) ? msg?.errors?.errors.find((e) => e.attr === camp)?.code : ''}
+                                        {errorBadge.includes(camp)
+                                            ? msg?.errors?.errors.find(
+                                                  (e) => e.attr === camp,
+                                              )?.code
+                                            : ""}
                                     </span>
                                 )}
                             </label>
@@ -199,19 +247,25 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
                 </div>
                 <div className="flex flex-row justify-center items-center gap-2">
                     <div>
-                        <button className="btn btn-success btn-md w-[100px]" onClick={handleSubmit} disabled={loading || success}>
+                        <button
+                            className="btn btn-success btn-md w-[100px]"
+                            onClick={handleSubmit}
+                            disabled={loading || success}
+                        >
                             {loading && <Spinner size="md" />}
-                            <span className="font-bold">{type === 'edit' ? 'Update' : 'Add'}</span>
+                            <span className="font-bold">
+                                {type === "edit" ? "Update" : "Add"}
+                            </span>
                         </button>
                     </div>
                     <button
                         className="btn btn-error btn-md w-[100px]"
                         onClick={() => {
-                            if (type === 'edit') {
+                            if (type === "edit") {
                                 setDeleteModals({
                                     show: true,
-                                    title: 'ConfirmDelete',
-                                    type: 'edit',
+                                    title: "ConfirmDelete",
+                                    type: "edit",
                                 });
                             } else {
                                 handleCancel();
@@ -219,13 +273,16 @@ const SourcesFormatsTableModal = ({ sourceFormat, handleClose, refetch, api, typ
                         }}
                         disabled={loading || success}
                     >
-                        {type === 'edit' ? 'Remove' : 'Cancel'}
+                        {type === "edit" ? "Remove" : "Cancel"}
                     </button>
                 </div>
                 <Alert msg={msg} />
             </div>
-            {deleteModals?.show && deleteModals?.type === 'edit' && (
-                <ConfirmDeleteModal confirmRemove={handleRemove} closeModal={() => {}} />
+            {deleteModals?.show && deleteModals?.type === "edit" && (
+                <ConfirmDeleteModal
+                    confirmRemove={handleRemove}
+                    closeModal={() => {}}
+                />
             )}
         </Modal>
     );

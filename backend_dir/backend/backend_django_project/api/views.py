@@ -36,6 +36,8 @@ from pgamit import Utils as pyUtils
 import dateutil.parser
 from io import BytesIO
 import json
+from django.db.models import Count
+from django.db.models import Prefetch
 
 
 def response_is_paginated(response_data):
@@ -292,13 +294,6 @@ class StationList(CustomListCreateAPIView):
 
     @extend_schema(description="Must pass either Geodetic Coordinates (fields 'lat', 'lon', and 'height') or ECEF ('auto_x', 'auto_y' and 'auto_z'). If both types of coordinates are passed then ECEF coordinates will be overried by the Geodesic translation. When creating a station, 'harpos_coeff_otl' can only be set as a string")
     def create(self, request, *args, **kwargs):
-        """
-            Validate that lat, lon and height or ECEF coordinates are provided
-        """
-        data = request.data
-
-        utils.StationUtils.validate_that_coordinates_are_provided(data)
-
         return super().create(request, *args, **kwargs)
 
 
@@ -326,20 +321,9 @@ class StationDetail(generics.RetrieveUpdateDestroyAPIView):
 
         return response
 
-    def update(self, request, *args, **kwargs):
-        """
-            Validate that lat, lon and height or ECEF coordinates are provided
-        """
-        data = request.data
-
-        utils.StationUtils.validate_that_coordinates_are_provided(data)
-
-        return super().update(request, *args, **kwargs)
-
     @extend_schema(description="Must pass either Geodetic Coordinates (fields 'lat', 'lon', and 'height') or ECEF ('auto_x', 'auto_y' and 'auto_z'). If both types of coordinates are passed then ECEF coordinates will be overried by the Geodesic translation. 'network_code' and 'station_code' are not updatable. In order to set harpos_coeff_otl by a file, send it by 'harpos_coeff_otl_by_file' instead of 'harpos_coeff_otl'. You can set both paramets but the contents of 'harpos_coeff_otl' will be ignored.")
     def patch(self, request, *args, **kwargs):
-        kwargs['partial'] = True
-        return self.update(request, *args, **kwargs)
+        return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(description="Must pass either Geodetic Coordinates (fields 'lat', 'lon', and 'height') or ECEF ('auto_x', 'auto_y' and 'auto_z'). If both types of coordinates are passed then ECEF coordinates will be overried by the Geodesic translation. 'network_code' and 'station_code' are not updatable. In order to set harpos_coeff_otl by a file, send it by 'harpos_coeff_otl_by_file' instead of 'harpos_coeff_otl'. You can set both paramets but the contents of 'harpos_coeff_otl' will be ignored.")
     def put(self, request, *args, **kwargs):
@@ -1013,41 +997,78 @@ class CampaignDetail(generics.RetrieveUpdateDestroyAPIView):
 
 
 class VisitList(CustomListCreateAPIView):
-    queryset = models.Visits.objects.all()
     serializer_class = serializers.VisitSerializer
     filter_backends = [DjangoFilterBackend]
     filterset_class = filters.VisitFilter
 
-    @extend_schema(description="Set query param 'without_actual_files' to true to remove log_sheet_actual_file and navigation_actual_file from visits. Set query param 'group_by_day' to true to group visits by date.")
+    def get_queryset(self):
+        """Optimized queryset with prefetch_related and annotations"""
+
+        # Check for performance optimization flags
+        without_actual_files = self.request.query_params.get(
+            'without_actual_files', 'false').lower() == 'true'
+
+        # Base queryset with select_related for foreign keys
+        queryset = models.Visits.objects.select_related(
+            'campaign',
+            'station',
+            'station__network_code'
+        )
+
+        # Use Prefetch to efficiently get first_name and last_name for each person
+        people_prefetch = Prefetch(
+            'people',
+            queryset=models.Person.objects.only(
+                'id', 'first_name', 'last_name')
+        )
+
+        if without_actual_files:
+            queryset = queryset.prefetch_related(
+                'visitgnssdatafiles_set',
+                'visitimages_set',
+                'visitattachedfiles_set',
+                people_prefetch
+            ).annotate(
+                observation_file_count=Count(
+                    'visitgnssdatafiles', distinct=True),
+                visit_image_count=Count('visitimages', distinct=True),
+                other_file_count=Count('visitattachedfiles', distinct=True)
+            )
+        else:
+            # When files are needed, fetch everything
+            queryset = queryset.prefetch_related(
+                'visitgnssdatafiles_set',
+                'visitimages_set',
+                'visitattachedfiles_set',
+                people_prefetch
+            )
+
+        return queryset
+
+    def get_serializer_context(self):
+        """Add context to skip heavy operations in list view"""
+        context = super().get_serializer_context()
+        # Skip file content loading for list views to improve performance
+        without_actual_files = self.request.query_params.get(
+            'without_actual_files', 'false').lower() == 'true'
+        context['skip_file_content'] = without_actual_files
+        return context
+
+    @extend_schema(description="""
+    Performance optimization query parameters:
+    - 'without_actual_files=true': Excludes log_sheet_actual_file and navigation_actual_file (faster response)
+    - 'group_by_day=true': Groups visits by date (applies after optimization)
+    """)
     def list(self, request, *args, **kwargs):
         """If the response status is 200, add some fields of the related station object and group by date if requested."""
 
         # Llamar al método original list()
         response = super().list(request, *args, **kwargs)
 
-        # if 'without_actual_files' query parameter is set to true then remove log_sheet_actual_file and navigation_actual_file from visits
-        without_actual_files = request.query_params.get(
-            'without_actual_files', 'false').lower() == 'true'
-
-        if without_actual_files:
-            for visit in response.data["data"]:
-                if 'log_sheet_actual_file' in visit:
-                    visit.pop('log_sheet_actual_file')
-                if 'navigation_actual_file' in visit:
-                    visit.pop('navigation_actual_file')
-
         if response.status_code == status.HTTP_200_OK:
             # Obtener el valor del parámetro 'group_by_day' desde la URL (por ejemplo, 'group_by_day=true')
             group_by_day = request.query_params.get(
                 'group_by_day', 'false').lower() == 'true'
-
-            # Agregar los nombres de las personas a la lista de personas
-            people_list = models.Person.objects.values_list(
-                'id', 'first_name', 'last_name')
-            people_dict = {
-                person[0]: person[1] + ' ' + person[2]
-                for person in people_list
-            }
 
             # Si se solicita agrupar por día
             if group_by_day:
@@ -1057,17 +1078,6 @@ class VisitList(CustomListCreateAPIView):
                 for visit in response.data["data"]:
                     # Agrupar por 'date'
                     visit_date = visit["date"]
-
-                    # Agregar las personas a la visita
-                    if 'people' in visit:
-                        people_ids = visit["people"].copy()
-                        visit["people"].clear()
-
-                        for people_id in people_ids:
-                            if people_id in people_dict:
-                                visit["people"].append(
-                                    {'id': people_id, 'name': people_dict[people_id]})
-
                     # Agregar la visita al grupo correspondiente
                     grouped_by_day[visit_date].append(visit)
 
@@ -1077,19 +1087,6 @@ class VisitList(CustomListCreateAPIView):
 
                 # Actualizar los datos de la respuesta
                 response.data["data"] = grouped_data
-            else:
-                # Si no se quiere agrupar por día, solo agregar las personas sin agrupar
-                for visit in response.data["data"]:
-
-                    if 'people' in visit:
-                        people_ids = visit["people"].copy()
-
-                        visit["people"].clear()
-
-                        for people_id in people_ids:
-                            if people_id in people_dict:
-                                visit["people"].append(
-                                    {'id': people_id, 'name': people_dict[people_id]})
 
         return response
 
@@ -1097,34 +1094,6 @@ class VisitList(CustomListCreateAPIView):
 class VisitDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = models.Visits.objects.all()
     serializer_class = serializers.VisitSerializer
-
-    def retrieve(self, request, *args, **kwargs):
-        """If response is 200, add some related station fields"""
-
-        response = super().retrieve(request, *args, **kwargs)
-
-        if response.status_code == status.HTTP_200_OK:
-            # Add people name to people array
-
-            people_list = models.Person.objects.values_list(
-                'id', 'first_name', 'last_name')
-
-            people_dict = {
-                person[0]: person[1] + ' ' + person[2]
-                for person in people_list
-            }
-
-            if 'people' in response.data:
-                people_ids = response.data["people"].copy()
-
-                response.data["people"].clear()
-
-                for people_id in people_ids:
-                    if people_id in people_dict:
-                        response.data["people"].append(
-                            {'id': people_id, 'name': people_dict[people_id]})
-
-        return response
 
     @extend_schema(description="In order to delete log_sheet_file, send 'log_sheet_file_delete' as true. The same applies with 'navigation_file_delete' for the navigation_file.")
     def put(self, request, *args, **kwargs):
@@ -1328,10 +1297,26 @@ class EarthquakesAffectedStations(APIView):
             cached_response = cache.get(cache_key, "has expired")
 
             if cached_response == "has expired":
-                affected_stations_including_postseismic, affected_stations_without_postseismic, kml_including_postseismic, kml_without_postseismic, coseismic_displacements = utils.EarthquakeUtils.get_affected_stations(
+                affected_stations_including_postseismic, affected_stations_without_postseismic, kml_including_postseismic, kml_without_postseismic, coseismic_displacements_dict = utils.EarthquakeUtils.get_affected_stations(
                     earthquake)
                 csv_including_postseismic, csv_without_postseismic = utils.EarthquakeUtils.get_stations_csv_list(
-                    earthquake, affected_stations_including_postseismic, affected_stations_without_postseismic)
+                    earthquake, affected_stations_including_postseismic, affected_stations_without_postseismic, coseismic_displacements_dict)
+
+                for station in affected_stations_including_postseismic:
+                    if 'distance' in station:
+                        del station['distance']
+                    if 'azimuth' in station:
+                        del station['azimuth']
+
+                for station in affected_stations_without_postseismic:
+                    if 'distance' in station:
+                        del station['distance']
+                    if 'azimuth' in station:
+                        del station['azimuth']
+
+                coseismic_displacements = list(
+                    coseismic_displacements_dict.values())
+
                 response = {"affected_stations_including_postseismic": affected_stations_including_postseismic, "affected_stations_without_postseismic": affected_stations_without_postseismic,
                             "kml_without_postseismic": kml_without_postseismic, "kml_including_postseismic": kml_including_postseismic, "csv_including_postseismic": csv_including_postseismic, "csv_without_postseismic": csv_without_postseismic, "coseismic_displacements": coseismic_displacements}
                 cache.set(cache_key, response)
@@ -1549,20 +1534,6 @@ class PersonRelations(APIView):
             raise exceptions.CustomServerErrorExceptionHandler(e)
 
         return Response(data={"relations": relations}, status=status.HTTP_200_OK)
-
-
-class PersonHasDuplicates(APIView):
-    serializer_class = serializers.DummySerializer
-
-    @extend_schema(description="Removes leading and trailing spaces and ignores case when checking for duplicates.")
-    def get(self, request, first_name, last_name, format=None):
-        try:
-            has_duplicates = utils.PersonUtils.has_duplicates(
-                first_name, last_name)
-        except Exception as e:
-            raise exceptions.CustomServerErrorExceptionHandler(e)
-
-        return Response(data={"has_duplicates": has_duplicates}, status=status.HTTP_200_OK)
 
 
 class MergePerson(APIView):

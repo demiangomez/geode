@@ -1,6 +1,7 @@
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { useMemo } from "react";
 import { useUser } from "@hooks";
+import { Errors } from "@types";
 
 const BASEURL: string = import.meta.env.VITE_API_URL;
 
@@ -54,6 +55,9 @@ export default function useApi(
                             method: error.config
                                 ? (error.config.method ?? "")
                                 : "",
+                            msg:
+                                (error.response?.data as Errors).errors[0]
+                                    .detail ?? error.message,
                         });
                     }, 50);
                 }

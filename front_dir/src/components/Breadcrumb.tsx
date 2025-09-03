@@ -30,6 +30,10 @@ const Breadcrumb = ({ state, setters }: Props) => {
     };
 
     const matches = useMatches();
+
+    const actualMatch = matches[matches.length - 1];
+    const stationPath = `/${actualMatch.params.nc}/${actualMatch.params.sc}/`;
+
     const crumbs = matches
         .filter((match: any) => Boolean(match.handle?.crumb))
         .map((match: any) => match.handle.crumb(match));
@@ -47,7 +51,8 @@ const Breadcrumb = ({ state, setters }: Props) => {
                                 to={`${matches[idx].pathname}`}
                                 onClick={() =>
                                     (matches as any)[idx]?.handle.crumb() ===
-                                    "Station"
+                                        "Station" &&
+                                    actualMatch.pathname !== stationPath
                                         ? handleStation()
                                         : null
                                 }

@@ -21,6 +21,7 @@ const Pagination = ({
     return (
         <div className="join my-4 w-full justify-center">
             <button
+                type="button"
                 className="join-item btn"
                 onClick={() => handlePage(1)}
                 disabled={activePage === 1}
@@ -32,6 +33,7 @@ const Pagination = ({
                 />
             </button>
             <button
+                type="button"
                 className="join-item btn"
                 onClick={() => handlePage(activePage - 1)}
                 disabled={activePage === 1}
@@ -52,6 +54,7 @@ const Pagination = ({
                     return null;
                 return (
                     <button
+                        type="button"
                         key={i}
                         className={`join-item btn ${pageNumber === activePage ? "btn-active" : ""}`}
                         onClick={() => {
@@ -63,6 +66,7 @@ const Pagination = ({
                 );
             })}
             <button
+                type="button"
                 className="join-item btn"
                 onClick={() => handlePage(activePage + 1)}
                 disabled={activePage === pages}
@@ -74,6 +78,7 @@ const Pagination = ({
                 />
             </button>
             <button
+                type="button"
                 className="join-item btn"
                 onClick={() => handlePage(pages)}
                 disabled={activePage === pages}

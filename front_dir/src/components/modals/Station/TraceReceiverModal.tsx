@@ -31,6 +31,10 @@ const INITIAL_RINEX_FILTERS: RinexFilters = {
     showAntennaCode: true,
     showAntennaSerial: true,
     showAntennaRadome: true,
+    showReceiverCode: true,
+    showReceiverType: true,
+    showObservationStartTime: true,
+    showObservationEndTime: true,
 };
 
 const INITIAL_STATION_INFO_FILTERS: StationInfoFilters = {
@@ -41,38 +45,49 @@ const INITIAL_STATION_INFO_FILTERS: StationInfoFilters = {
     showNorth: true,
     showEast: true,
     showAntennaRadome: true,
+    showReceiverCode: true,
+    showReceiverSerial: true,
+    showDateStart: true,
+    showDateEnd: true,
 };
 
 const RINEX_FILTER_CONFIG = [
-    { key: "showHeight", label: "Height" },
-    { key: "showHeightCode", label: "Height Code" },
     { key: "showAntennaCode", label: "Antenna Code" },
     { key: "showAntennaSerial", label: "Antenna Serial" },
     { key: "showAntennaRadome", label: "Antenna Radome" },
+    { key: "showHeightCode", label: "Height Code" },
+    { key: "showHeight", label: "Height" },
 ];
 
 const STATION_INFO_FILTER_CONFIG = [
-    { key: "showHeight", label: "Height" },
-    { key: "showHeightCode", label: "Height Code" },
     { key: "showAntennaCode", label: "Antenna Code" },
     { key: "showAntennaSerial", label: "Antenna Serial" },
+    { key: "showAntennaRadome", label: "Antenna Radome" },
+    { key: "showHeightCode", label: "Height Code" },
+    { key: "showHeight", label: "Height" },
     { key: "showNorth", label: "North" },
     { key: "showEast", label: "East" },
-    { key: "showAntennaRadome", label: "Antenna Radome" },
 ];
 
 type Props = {
+    parentReceiverType: string;
+    parentReceiverSerial: string;
     closeModal: () => void;
     parentDispatch?: React.Dispatch<any>;
 };
 
-const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
+const TraceReceiverModal = ({
+    closeModal,
+    parentDispatch,
+    parentReceiverType,
+    parentReceiverSerial,
+}: Props) => {
     const { token, logout } = useAuth();
     const api = useApi(token, logout);
 
-    const [useRinex, setUseRinex] = useState(true);
-    const [receiverType, setReceiverType] = useState("");
-    const [receiverCode, setReceiverCode] = useState("");
+    const [useRinex, setUseRinex] = useState(false);
+    const [receiverType, setReceiverType] = useState(parentReceiverType);
+    const [receiverCode, setReceiverCode] = useState(parentReceiverSerial);
     const [loading, setLoading] = useState(false);
 
     const [receivers, setReceivers] = useState<ReceiversData[]>([]);
@@ -107,6 +122,11 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
         | undefined
     >(undefined);
 
+    const [params, setParams] = useState<{ limit?: number; offset?: number }>({
+        limit: REGISTERS_PER_PAGE,
+        offset: 0,
+    });
+
     const inputRefReceiverType = useRef<HTMLInputElement>(null);
     const inputRefReceiverCode = useRef<HTMLInputElement>(null);
 
@@ -130,6 +150,12 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
         }
     }, [showMenu]);
 
+    useEffect(() => {
+        if (searched) {
+            fetchTraceData();
+        }
+    }, [useRinex]);
+
     // ============ FUNCIONES DE DATOS ============
     const fetchReceivers = async () => {
         try {
@@ -142,7 +168,7 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
         }
     };
 
-    const fetchTraceData = async () => {
+    const fetchTraceData = async (extraParams?: Record<string, any>) => {
         if (!receiverCode.trim()) {
             setMsg({
                 status: 400,
@@ -160,7 +186,6 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
             return;
         }
         setMsg(undefined);
-
         setSearched(true);
 
         try {
@@ -169,10 +194,12 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
                 ? getTraceReceiverByRinex
                 : getTraceReceiverByStationInfo;
 
+            // pass receiverType as second parameter for both services, they ignore it if not applicable
             const res = (await serviceCall(
                 api,
                 receiverCode,
                 receiverType,
+                extraParams,
             )) as TraceResponse;
 
             if (res?.data && Array.isArray(res.data)) {
@@ -189,6 +216,22 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
         } finally {
             setLoading(false);
         }
+    };
+
+    const handlePage = (page: number) => {
+        if (page < 1) return;
+
+        const newParams = {
+            ...params,
+            limit: REGISTERS_PER_PAGE,
+            offset: REGISTERS_PER_PAGE * (page - 1),
+        };
+
+        setParams(newParams);
+        setActivePage(page);
+
+        // Fetch page using the appropriate endpoint
+        // fetchTraceData(newParams);
     };
 
     // ============ HANDLERS ============
@@ -245,12 +288,29 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
     };
 
     const handleMethodToggle = (checked: boolean) => {
-        setUseRinex(!checked);
+        setUseRinex(checked);
     };
 
     const handleSelectData = (item: TraceData) => {
         if (parentDispatch) {
             const filters = useRinex ? rinexFilters : stationInfoFilters;
+
+            parentDispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "receiver_serial",
+                    inputValue: item.receiver_serial || "",
+                },
+            });
+
+            parentDispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "receiver_code",
+                    inputValue: item.receiver_code || "",
+                },
+            });
+
             if (filters.showAntennaCode) {
                 parentDispatch({
                     type: "change_value",
@@ -361,32 +421,48 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
             const mapped: any = {};
 
             if (useRinex) {
-                if (filters.showHeight)
-                    mapped.antenna_height = item.antenna_offset;
-                if (filters.showHeightCode) mapped.height_code = "DHARP";
+                mapped.station_name =
+                    item.network_code + "." + item.station_code;
+                // mapped.station_code = item.station_code;
+                mapped.date_start = item.observation_s_time;
+                mapped.date_end = item.observation_e_time;
+                mapped.receiver_serial = item.receiver_serial;
+                mapped.receiver_type = item.receiver_type;
                 if (filters.showAntennaCode)
                     mapped.antenna_code = item.antenna_type;
                 if (filters.showAntennaSerial)
                     mapped.antenna_serial = item.antenna_serial;
                 if (filters.showAntennaRadome)
                     mapped.antenna_dome = item.antenna_dome;
-            } else {
+                if (filters.showHeightCode) mapped.height_code = "DHARP";
                 if (filters.showHeight)
-                    mapped.antenna_height = item.antenna_height;
-                if (filters.showHeightCode)
-                    mapped.height_code = item.height_code;
+                    mapped.antenna_height = item.antenna_offset;
+            } else {
+                mapped.station_name =
+                    item.network_code + "." + item.station_code;
+
+                mapped.date_start = item.date_start;
+                mapped.date_end = item.date_end;
+                mapped.receiver_serial = item.receiver_serial;
+                mapped.receiver_type = item.receiver_code;
                 if (filters.showAntennaCode)
                     mapped.antenna_code = item.antenna_code;
                 if (filters.showAntennaSerial)
                     mapped.antenna_serial = item.antenna_serial;
                 if (filters.showAntennaRadome)
                     mapped.antenna_dome = item.radome_code;
+                if (filters.showHeightCode)
+                    mapped.height_code = item.height_code;
+                if (filters.showHeight)
+                    mapped.antenna_height = item.antenna_height;
 
                 if (stationInfoFilters.showNorth)
                     mapped.antenna_north = item.antenna_north;
                 if (stationInfoFilters.showEast)
                     mapped.antenna_east = item.antenna_east;
             }
+
+            mapped._originalData = item;
 
             mapped._originalData = item;
 
@@ -416,22 +492,22 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
     const renderMethodToggle = () => (
         <div className="flex items-center gap-3 mb-3">
             <span
-                className={`text-sm ${useRinex ? "font-semibold" : "text-gray-500"}`}
+                className={`text-sm text-bold ${!useRinex ? "font-semibold" : "text-gray-500"}`}
             >
-                By Rinex
+                By Station Info
             </span>
             <label className="cursor-pointer">
                 <input
                     type="checkbox"
-                    checked={!useRinex}
+                    checked={useRinex}
                     onChange={(e) => handleMethodToggle(e.target.checked)}
                     className="toggle"
                 />
             </label>
             <span
-                className={`text-sm ${!useRinex ? "font-semibold" : "text-gray-500"}`}
+                className={`text-sm text-bold ${useRinex ? "font-semibold" : "text-gray-500"}`}
             >
-                By Station Info
+                By Rinex
             </span>
         </div>
     );
@@ -451,7 +527,9 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
                 onChange={onChange}
                 className="checkbox"
             />
-            <span className="text-xs text-gray-700">{config.label}</span>
+            <span className="text-xs text-bold text-gray-700">
+                {config.label}
+            </span>
         </label>
     );
 
@@ -467,10 +545,10 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
 
         return (
             <div className="bg-base-200 p-3 rounded-lg mb-3">
-                <h4 className="text-sm font-medium mb-2 text-gray-700">
-                    Select data to display:
+                <h4 className="text-sm text-bold font-medium mb-2 text-gray-700">
+                    Select data to copy:
                 </h4>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                <div className="grid grid-cols-4 md:grid-cols-4 gap-2">
                     {config.map((item) => {
                         const isChecked =
                             filters[item.key as keyof typeof filters];
@@ -491,12 +569,12 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
         return (
             <div className="form-control">
                 <label className="label py-0">
-                    <span className="label-text text-xs font-medium">
+                    <span className="label-text text-bold text-xs font-medium">
                         Receiver Type (optional)
                     </span>
                 </label>
                 <div className="relative">
-                    <div className="flex">
+                    <div className="relative">
                         <input
                             id="receiverType"
                             ref={inputRefReceiverType}
@@ -506,34 +584,40 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
                             onChange={handleInputChange}
                             onClick={handleInputChange}
                             placeholder="Enter receiver type"
-                            className="input input-bordered w-full flex-1"
+                            className="input input-bordered w-full pr-10"
                             autoComplete="off"
                         />
-                        <MenuButton
-                            setShowMenu={setShowMenu}
-                            showMenu={showMenu}
-                            typeKey="receiver_type"
-                        />
+                        <div className="absolute inset-y-0 right-0 flex items-center pr-2">
+                            <MenuButton
+                                setShowMenu={setShowMenu}
+                                showMenu={showMenu}
+                                typeKey="receiver_type"
+                            />
+                        </div>
                     </div>
                     {showMenu?.show && showMenu.type === "receiver_type" && (
-                        <Menu>
-                            {menuOptions.map((type, index) => (
-                                <MenuContent
-                                    key={`${type}-${index}`}
-                                    typeKey="receiver_type"
-                                    value={type}
-                                    dispatch={(action: any) => {
-                                        if (action.type === "change_value") {
-                                            handleMenuSelect(
-                                                action.payload.inputValue,
-                                                action.payload.inputName,
-                                            );
-                                        }
-                                    }}
-                                    setShowMenu={setShowMenu}
-                                />
-                            ))}
-                        </Menu>
+                        <div className="absolute left-0 top-full z-50 w-full">
+                            <Menu>
+                                {menuOptions.map((type, index) => (
+                                    <MenuContent
+                                        key={`${type}-${index}`}
+                                        typeKey="receiver_type"
+                                        value={type}
+                                        dispatch={(action: any) => {
+                                            if (
+                                                action.type === "change_value"
+                                            ) {
+                                                handleMenuSelect(
+                                                    action.payload.inputValue,
+                                                    action.payload.inputName,
+                                                );
+                                            }
+                                        }}
+                                        setShowMenu={setShowMenu}
+                                    />
+                                ))}
+                            </Menu>
+                        </div>
                     )}
                 </div>
             </div>
@@ -548,7 +632,7 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
         return (
             <div className="form-control">
                 <label className="label py-0">
-                    <span className="label-text text-xs font-medium">
+                    <span className="label-text text-xs font-medium text-bold">
                         Receiver Serial *
                     </span>
                 </label>
@@ -605,7 +689,7 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
             return null;
         }
 
-        if (!hasData && searched) {
+        if (!hasData && searched && !loading) {
             return (
                 <div className="mt-4 text-center">
                     <div className="divider text-sm font-semibold">Results</div>
@@ -661,7 +745,9 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
                             pages={pages}
                             pagesToShow={2}
                             activePage={activePage}
-                            handlePage={setActivePage}
+                            handlePage={(page) => {
+                                handlePage(page);
+                            }}
                         />
                     </div>
                 )}
@@ -687,12 +773,11 @@ const TraceReceiverModal = ({ closeModal, parentDispatch }: Props) => {
                 <div className="card bg-base-100 shadow-sm">
                     <div className="card-body p-4">
                         {renderMethodToggle()}
-                        {renderFilters()}
-
                         <div className="grid grid-cols-2 gap-3 mt-2">
                             {renderReceiverTypeInput()}
                             {renderReceiverCodeInput()}
                         </div>
+                        {renderFilters()}
 
                         {renderActionButton()}
                     </div>

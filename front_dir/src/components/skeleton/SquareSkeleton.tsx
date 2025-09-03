@@ -4,7 +4,7 @@ interface SquareSkeletonProps {
 
 const SquareSkeleton = ({ mainSize }: SquareSkeletonProps) => {
     return (
-        <div className="flex w-full">
+        <div className="flex w-full justify-center">
             <div
                 className={`skeleton ml-4 self-center w-11/12`}
                 style={{

@@ -7,12 +7,22 @@ import { Modal, FileDetails, FileResultCard, Alert } from "@componentsReact";
 import Pako from "pako";
 import ExifReader from "exifreader";
 
-
 import { useAuth, useApi } from "@hooks";
 
-import { postStationsImagesService, patchStationImagesDescription, getStationImageByIdService } from "@services";
+import {
+    postStationsImagesService,
+    patchStationImagesDescription,
+    getStationImageByIdService,
+} from "@services";
 
-import { Errors, FileErrors, FilesErrorResponse, StationData, PatchDescriptionImageResponse, StationImagesData } from "@types";
+import {
+    Errors,
+    FileErrors,
+    FilesErrorResponse,
+    StationData,
+    PatchDescriptionImageResponse,
+    StationImagesData,
+} from "@types";
 
 type Photo = {
     id: number;
@@ -30,7 +40,7 @@ interface Props {
             | undefined
         >
     >;
-    photo? : Photo;
+    photo?: Photo;
     edit?: boolean;
 }
 
@@ -38,7 +48,13 @@ interface OutletContext {
     station: StationData;
 }
 
-const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: Props) => {
+const StationPhotoModal = ({
+    modalType,
+    reFetch,
+    setStateModal,
+    photo,
+    edit,
+}: Props) => {
     const { token, logout } = useAuth();
     const api = useApi(token, logout);
 
@@ -118,7 +134,6 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
 
         setFiles(newFiles);
     };
-
 
     const [success, setSuccess] = useState<boolean>(false);
 
@@ -226,15 +241,19 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
     };
 
     const updatePhotoDescription = async () => {
-        try{
-            if(globalDescription !== undefined){
+        try {
+            if (globalDescription !== undefined) {
                 const body = {
                     description: globalDescription,
                 };
-                if(typeof(photo?.id) === "number"){
-                    
-                    const res = await patchStationImagesDescription<PatchDescriptionImageResponse>(api, body, photo?.id);
-                    if (res.statusCode !== 200 ) {
+                if (typeof photo?.id === "number") {
+                    const res =
+                        await patchStationImagesDescription<PatchDescriptionImageResponse>(
+                            api,
+                            body,
+                            photo?.id,
+                        );
+                    if (res.statusCode !== 200) {
                         setMsg({
                             status: 400,
                             errors: {
@@ -249,18 +268,16 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
                             },
                             msg: "Files were not uploaded successfully",
                         });
-                    } else{
+                    } else {
                         setMsg({
                             status: 200,
                             msg: "Photo description updated successfully",
                         });
                         setSuccess(true);
-                    } 
-                    
+                    }
                 }
             }
-        }
-        catch(err){
+        } catch (err) {
             console.error(err);
             setMsg({
                 status: 400,
@@ -276,18 +293,14 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
                 },
                 msg: "Files were not uploaded successfully",
             });
-            
         }
-
-
-    }
+    };
 
     const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-        if(modalType === "edit") {
+        if (modalType === "edit") {
             e.preventDefault();
             updatePhotoDescription();
-        }
-        else{
+        } else {
             e.preventDefault();
             addPhoto();
         }
@@ -372,12 +385,12 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
     }, [files, fileResults, hasErrorMessage, hasSuccessMessage]);
 
     useEffect(() => {
-        if(edit && photo){
+        if (edit && photo) {
             setGlobalDescription(photo.description);
         }
     }, [photo]);
 
-    const getPreviewImage = (id: string) =>{
+    const getPreviewImage = (id: string) => {
         const file = files.find((f) => String(f.id) === id)?.file;
         let preview = "";
         if (file) {
@@ -385,13 +398,15 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
         }
 
         return preview;
-    }
+    };
 
     const getOriginalPhoto = async () => {
         try {
             setLoading(true);
 
-            const res = await getStationImageByIdService<StationImagesData>(api, photo?.id ?? 0,
+            const res = await getStationImageByIdService<StationImagesData>(
+                api,
+                photo?.id ?? 0,
             );
 
             if (res.actual_image) {
@@ -407,7 +422,9 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
     const [originalPhoto, setOriginalPhoto] = useState<string>("");
 
     useEffect(() => {
-        getOriginalPhoto();
+        if (modalType === "edit") {
+            getOriginalPhoto();
+        }
     }, [photo]);
 
     return (
@@ -426,57 +443,65 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
             <form className="form-control space-y-4" onSubmit={handleSubmit}>
                 <div className="form-control space-y-2">
                     <div className="form-control space-y-2">
-                        {!edit ?
-                        <input
-                            type="file"
-                            id="file-input"
-                            multiple={true}
-                            title={"File"}
-                            className={` file-input file-input-bordered w-full `}
-                            accept="image/*"
-                            onChange={(e) => {
-                                defaultValues();
+                        {!edit ? (
+                            <input
+                                type="file"
+                                id="file-input"
+                                multiple={true}
+                                title={"File"}
+                                className={` file-input file-input-bordered w-full `}
+                                accept="image/*"
+                                onChange={(e) => {
+                                    defaultValues();
 
-                                const files = e.target.files;
-                                if(files && files.length > 30){
-                                    setMsg({
-                                        status: 400,
-                                        errors: {
-                                            errors: [
-                                                {
-                                                    code: "400",
-                                                    attr: "files",
-                                                    detail: "You can only upload a maximum of 30 files",
-                                                },
-                                            ],
-                                            type: "error",
-                                        },
-                                        msg: "You can only upload a maximum of 30 files",
-                                    });
-                                }
-                                else{
-                                    if (files && files.length > 0) {
-                                        Array.from(files).forEach(() => {
-                                            handleChangePhoto(e.target);
+                                    const files = e.target.files;
+                                    if (files && files.length > 30) {
+                                        setMsg({
+                                            status: 400,
+                                            errors: {
+                                                errors: [
+                                                    {
+                                                        code: "400",
+                                                        attr: "files",
+                                                        detail: "You can only upload a maximum of 30 files",
+                                                    },
+                                                ],
+                                                type: "error",
+                                            },
+                                            msg: "You can only upload a maximum of 30 files",
                                         });
-                                    } else if (files && files.length === 0) {
-                                        setFiles([]);
-                                        setGlobalDescription("");
-                                    }    
-                                }
-                                
-                            }}
-                        />:
-                        <img src={"data:image/png;base64," + originalPhoto} alt={photo?.name}  className={` 
-                            object-center object-cover w-full h-full `}/>
-                        }
+                                    } else {
+                                        if (files && files.length > 0) {
+                                            Array.from(files).forEach(() => {
+                                                handleChangePhoto(e.target);
+                                            });
+                                        } else if (
+                                            files &&
+                                            files.length === 0
+                                        ) {
+                                            setFiles([]);
+                                            setGlobalDescription("");
+                                        }
+                                    }
+                                }}
+                            />
+                        ) : (
+                            <img
+                                src={"data:image/png;base64," + originalPhoto}
+                                alt={photo?.name}
+                                className={` 
+                            object-center object-cover w-full h-full `}
+                            />
+                        )}
                         <label
                             className={`w-full input input-bordered flex items-center gap-2 `}
                             title={"Description"}
                         >
                             <div className="label">
                                 <span className="font-bold">
-                                    {edit? "PHOTO DESCRIPTION" : "GLOBAL DESCRIPTION"}
+                                    {edit
+                                        ? "PHOTO DESCRIPTION"
+                                        : "GLOBAL DESCRIPTION"}
                                 </span>
                             </div>
                             <input
@@ -521,7 +546,9 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
                                                 }}
                                                 fileResults={fileResults}
                                                 setFiles={setFiles}
-                                                image={getPreviewImage(String(f.id))}
+                                                image={getPreviewImage(
+                                                    String(f.id),
+                                                )}
                                             />
                                         ))}
                                     </div>
@@ -556,7 +583,14 @@ const StationPhotoModal = ({ modalType, reFetch, setStateModal, photo ,edit }: P
                     <button
                         type="submit"
                         className="btn btn-success w-5/12"
-                        disabled={(( loading || success || progressBar) && edit) || ((files.length === 0 || loading || success || progressBar) && !edit)}
+                        disabled={
+                            ((loading || success || progressBar) && edit) ||
+                            ((files.length === 0 ||
+                                loading ||
+                                success ||
+                                progressBar) &&
+                                !edit)
+                        }
                     >
                         Submit
                     </button>

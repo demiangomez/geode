@@ -5,7 +5,7 @@ interface MenuContentProps {
     value: string;
     multiple?: boolean;
     multipleSelected?: any | undefined;
-    alterValue?: string;
+    alterValue?: any;
     typeKey: string;
     disabled?: boolean;
     alterFunction?: () => void;
@@ -13,7 +13,7 @@ interface MenuContentProps {
         React.SetStateAction<string[] | undefined>
     >;
     dispatch?: (value: FormReducerAction) => void;
-    alterFunctionWithValue?: (value: string) => void;
+    alterFunctionWithValue?: (value: any) => void;
     uniqueId?: string | number; // Nuevo prop para identificador único
     setShowMenu: React.Dispatch<
         React.SetStateAction<
@@ -42,6 +42,7 @@ const MenuContent = ({
 }: MenuContentProps) => {
     const handleClick = () => {
         const newValue = alterValue ? alterValue : value;
+
         if (alterFunctionWithValue) {
             alterFunctionWithValue(newValue);
             // Solo cerrar el menú si no es modo múltiple

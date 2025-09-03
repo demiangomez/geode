@@ -4,8 +4,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from drf_standardized_errors.handler import ExceptionHandler
 from rest_framework.exceptions import APIException
-from  django.db.utils import DataError as DatabaseDataErrorException
+from django.db.utils import DataError as DatabaseDataErrorException
 from django.core.exceptions import SuspiciousOperation
+from rest_framework.exceptions import PermissionDenied
+
 
 class CustomIntegrityErrorExceptionHandler(APIException):
     """
@@ -18,10 +20,12 @@ class CustomIntegrityErrorExceptionHandler(APIException):
     default_code = 'IntegrityError occurred in db.'
     default_detail = 'IntegrityError occurred in db.'
 
+
 class CustomDataErrorExceptionHandler(APIException):
     status_code = 400
     default_code = 'DataError occurred in db.'
     default_detail = 'DataError occurred in db.'
+
 
 class CustomValidationErrorExceptionHandler(APIException):
     status_code = 400
@@ -34,10 +38,16 @@ class CustomServerErrorExceptionHandler(APIException):
     default_code = 'ServerError occurred.'
     default_detail = 'ServerError occurred.'
 
+
 class SuspiciousOperationExceptionHandler(APIException):
     status_code = 400
     default_code = 'ValidationError occurred.'
     default_detail = 'ValidationError occurred.'
+
+
+class PermissionDeniedOnGetHandler(PermissionDenied):
+    default_detail = 'You do not have permission to view this content.'
+
 
 class CustomExceptionHandler(ExceptionHandler):
     """
@@ -51,5 +61,7 @@ class CustomExceptionHandler(ExceptionHandler):
             return CustomDataErrorExceptionHandler(str(exc))
         elif issubclass(type(exc), SuspiciousOperation):
             return SuspiciousOperationExceptionHandler(str(exc))
+        elif isinstance(exc, PermissionDenied) and self.context and self.context.get('request') and self.context.get('request').method == 'GET':
+            return PermissionDeniedOnGetHandler()
         else:
             return super().convert_known_exceptions(exc)

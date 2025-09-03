@@ -65,7 +65,7 @@ const Sources = () => {
 
     const titles =
         sourcesStations.length > 0
-            ? ["try_order", "server", "path",  "format"]
+            ? ["try_order", "server", "path", "format"]
             : [];
 
     const getSourcesServers = async () => {
@@ -135,25 +135,23 @@ const Sources = () => {
         });
     };
 
-    const getDefaultFormat = (serverId: number) =>{
-        const server = sourcesServers?.find((sv) => sv.server_id === serverId)
-        if(server){
-            return server.format
+    const getDefaultFormat = (serverId: number) => {
+        const server = sourcesServers?.find((sv) => sv.server_id === serverId);
+        if (server) {
+            return server.format;
+        } else {
+            return "";
         }
-        else{
-            return ""
-        }
-    }
+    };
 
-    const getDefaultPath = (serverId: number) =>{
-        const server = sourcesServers?.find((sv) => sv.server_id === serverId)
-        if(server){
-            return server.path
+    const getDefaultPath = (serverId: number) => {
+        const server = sourcesServers?.find((sv) => sv.server_id === serverId);
+        if (server) {
+            return server.path;
+        } else {
+            return "";
         }
-        else{
-            return ""
-        }
-    }
+    };
 
     useMemo(() => {
         if (sourcesStations && sourcesServers && sourcesFormats) {
@@ -165,11 +163,15 @@ const Sources = () => {
                 const serverData = server
                     ? server.fqdn + " " + server.protocol
                     : "N/A";
-                const format = sourceStation.format && sourceStation.format !== "" ? sourceStation.format : ("* " + getDefaultFormat(sourceStation.server_id));
+                const format =
+                    sourceStation.format && sourceStation.format !== ""
+                        ? sourceStation.format
+                        : "* " + getDefaultFormat(sourceStation.server_id);
                 const path =
-                    typeof sourceStation.path === "string" && sourceStation.path !== ""
+                    typeof sourceStation.path === "string" &&
+                    sourceStation.path !== ""
                         ? sourceStation.path
-                        : ("* " + getDefaultPath(sourceStation.server_id)) ;
+                        : "* " + getDefaultPath(sourceStation.server_id);
                 const auxNewData = [
                     sourceStation.try_order.toString(),
                     serverData,
@@ -206,17 +208,25 @@ const Sources = () => {
                         secondAddButtonTitle="Swap Try Order"
                         secondModalTitle="Change Try Order"
                     >
-                        <p className="text-sm italic text-gray-600 mb-2">Server default values are marked with "*",</p>
-                        <Table
-                            table="sources"
-                            titles={titles ?? []}
-                            body={data.length > 0 ? data : undefined}
-                            loading={loading}
-                            onClickFunction={handleEdit}
-                            deleteRegister={false}
-                            state={sourcesStations}
-                            setState={setSourceStation}
-                        />
+                        <p className="text-sm italic text-gray-600 mb-2">
+                            Server default values are marked with "*",
+                        </p>
+                        {data.length > 0 ? (
+                            <Table
+                                table="sources"
+                                titles={titles ?? []}
+                                body={data}
+                                loading={loading}
+                                onClickFunction={handleEdit}
+                                deleteRegister={false}
+                                state={sourcesStations}
+                                setState={setSourceStation}
+                            />
+                        ) : (
+                            <div className="text-center text-neutral text-2xl font-bold w-full rounded-md bg-neutral-content p-6">
+                                There are no Sources registered
+                            </div>
+                        )}
                     </TableCard>
                 </CardContainer>
             </div>

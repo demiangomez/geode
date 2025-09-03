@@ -54,6 +54,7 @@ export interface GetParams {
     offset?: number;
     limit?: number;
     monument_id?: number;
+    campaign?: number;
 }
 
 export interface MyMapContainerProps {
@@ -421,6 +422,7 @@ export interface CampaignsData {
     end_date: string;
     default_people: number[];
     statusCode: number;
+    default_people_id?: number;
 }
 
 export interface ExtendedUsersData extends UsersData {
@@ -444,7 +446,7 @@ type UsersData = Omit<User, "role"> & {
     id: number | null;
     clustering_distance?: string | null;
     role: { id: number; name: string };
-    person?: People;
+    person?: People | null;
 };
 
 export interface Role {
@@ -647,7 +649,7 @@ export interface People {
     phone: string;
     address: string;
     photo_actual_file: string;
-    user?: number | string;
+    user?: number | string | null;
     institution?: string;
     position?: string;
     user_name: string;
@@ -939,6 +941,9 @@ export interface TraceData {
     antenna_north?: float;
     antenna_east?: float;
     height_code?: string;
+    receiver_code?: string;
+    date_start?: string;
+    date_end?: string;
 }
 
 // Tipo para la respuesta de la API
@@ -955,6 +960,10 @@ export interface RinexFilters {
     showAntennaCode: boolean;
     showAntennaSerial: boolean;
     showAntennaRadome: boolean;
+    showReceiverCode: boolean;
+    showReceiverType: boolean;
+    showObservationStartTime: boolean;
+    showObservationEndTime: boolean;
 }
 
 export interface StationInfoFilters {
@@ -965,4 +974,8 @@ export interface StationInfoFilters {
     showNorth: boolean;
     showEast: boolean;
     showAntennaRadome: boolean;
+    showReceiverCode: boolean;
+    showReceiverSerial: boolean;
+    showDateStart: boolean;
+    showDateEnd: boolean;
 }

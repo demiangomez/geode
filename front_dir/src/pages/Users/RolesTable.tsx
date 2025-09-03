@@ -43,8 +43,8 @@ const RolesTable = () => {
                 roleParams,
             );
             setRoles(res.data);
-            if(bParams.limit)
-            setRolesPages(Math.ceil(res.total_count / bParams.limit));
+            if (bParams.limit)
+                setRolesPages(Math.ceil(res.total_count / bParams.limit));
         } catch (err) {
             console.error(err);
         }
@@ -111,6 +111,7 @@ const RolesTable = () => {
             addButtonTitle="+ Role"
             modalTitle={"AddRole"}
             setModals={setModals}
+            size="606"
         >
             <Table
                 titles={body && body.length > 0 ? titles : []}

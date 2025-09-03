@@ -136,9 +136,12 @@ const StationTypesModal = ({
             const imageBase64 =
                 (StationType?.actual_image as string) ?? undefined;
 
-            const imageFile = imageBase64
-                ? base64ToFile(imageBase64, "image.jpg", "image/jpeg")
-                : formState.actual_image;
+            const imageFile =
+                typeof formState.actual_image === "string"
+                    ? imageBase64
+                        ? base64ToFile(imageBase64, "image.jpg", "image/jpeg")
+                        : formState.actual_image
+                    : formState.actual_image;
 
             formData.append("name", formState.name);
             formData.append("icon", imageFile);

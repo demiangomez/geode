@@ -52,7 +52,7 @@ const EventsTable = ({
                     <tr>
                         {titles.length === 0 && !loading && (
                             <th className="text-center text-neutral text-2xl">
-                                There is no Events to show
+                                There are no Events to show
                             </th>
                         )}
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -40,17 +40,16 @@ const Nav = () => {
         | undefined
     >(undefined);
 
+    const [isDroped, setIsDroped] = useState<boolean>(false);
+
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
     const createStation = () => {
         setModals({
             show: true,
             title: "station",
             type: "add",
         });
-    };
-
-    const closeDrowpDown = () => {
-        document.activeElement instanceof HTMLElement &&
-            document.activeElement.blur();
     };
 
     const serverHealthCheck = async () => {
@@ -74,6 +73,25 @@ const Nav = () => {
             console.error(err);
         }
     };
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (
+                dropdownRef.current &&
+                !dropdownRef.current.contains(event.target as Node)
+            ) {
+                setIsDroped(false);
+            }
+        }
+        if (isDroped) {
+            document.addEventListener("mousedown", handleClickOutside);
+        } else {
+            document.removeEventListener("mousedown", handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [isDroped]);
 
     useEffect(() => {
         modals?.show && showModal(modals.title);
@@ -148,12 +166,13 @@ const Nav = () => {
                     >
                         <ServerStackIcon className="size-8" />
                     </Link>
-                    <div className="dropdown dropdown-end">
+                    <div className="" ref={dropdownRef}>
                         <div
                             tabIndex={0}
                             role="button"
                             className="btn btn-ghost btn-circle avatar"
                             title="User"
+                            onClick={() => setIsDroped((prev) => !prev)}
                         >
                             {!userPhoto ? (
                                 <UserCircleIcon className="size-8" />
@@ -165,47 +184,60 @@ const Nav = () => {
                                 />
                             )}
                         </div>
-                        <ul
-                            tabIndex={0}
-                            className="menu menu-sm dropdown-content mt-3 z-[10000000000000000] space-y-1 p-2 shadow bg-gray-800 border-[1px] border-gray-600 rounded-box w-52"
-                        >
-                            <div className=" border-b-[1px] border-gray-600 flex justify-center">
-                                <span className="mb-2">
-                                    <strong>{userName?.toUpperCase()}</strong>
-                                </span>
-                            </div>
-                            <li className="">
-                                <Link
-                                    className="hover:bg-slate-600 flex justify-start focus:text-primary"
-                                    to={"/users"}
-                                    onClick={() => closeDrowpDown()}
-                                >
-                                    <UserGroupIcon className="size-6" />
-                                    <span className="ml-[40px]">Users</span>
-                                </Link>
-                            </li>
-                            <li className="">
-                                <Link
-                                    className="hover:bg-slate-600 flex justify-start focus:text-primary"
-                                    to={"/settings"}
-                                    onClick={() => closeDrowpDown()}
-                                >
-                                    <Cog6ToothIcon className="size-6" />
-                                    <span className="ml-[40px]">Settings</span>
-                                </Link>
-                            </li>
-                            <li className="">
-                                <a
-                                    className="hover:bg-slate-600 flex w-full justify-start"
-                                    onClick={() => {
-                                        logout(true);
-                                    }}
-                                >
-                                    <ArrowRightEndOnRectangleIcon className="size-6" />
-                                    <span className="ml-[40px]">Logout</span>
-                                </a>
-                            </li>
-                        </ul>
+
+                        {isDroped && (
+                            <ul
+                                tabIndex={0}
+                                className="menu menu-sm mt-3 absolute right-1 top-[70px] z-[10000000000000000] space-y-1 p-2 shadow bg-gray-800 border-[1px] border-gray-600 rounded-box w-52"
+                            >
+                                <div className=" border-b-[1px] border-gray-600 flex justify-center">
+                                    <span className="mb-2">
+                                        <strong>
+                                            {userName?.toUpperCase()}
+                                        </strong>
+                                    </span>
+                                </div>
+                                <li className="">
+                                    <Link
+                                        className="hover:bg-slate-600 flex justify-start focus:text-primary"
+                                        to={"/users"}
+                                        onClick={() =>
+                                            setIsDroped((prev) => !prev)
+                                        }
+                                    >
+                                        <UserGroupIcon className="size-6" />
+                                        <span className="ml-[40px]">Users</span>
+                                    </Link>
+                                </li>
+                                <li className="">
+                                    <Link
+                                        className="hover:bg-slate-600 flex justify-start focus:text-primary"
+                                        to={"/settings"}
+                                        onClick={() =>
+                                            setIsDroped((prev) => !prev)
+                                        }
+                                    >
+                                        <Cog6ToothIcon className="size-6" />
+                                        <span className="ml-[40px]">
+                                            Settings
+                                        </span>
+                                    </Link>
+                                </li>
+                                <li className="">
+                                    <a
+                                        className="hover:bg-slate-600 flex w-full justify-start"
+                                        onClick={() => {
+                                            logout(true);
+                                        }}
+                                    >
+                                        <ArrowRightEndOnRectangleIcon className="size-6" />
+                                        <span className="ml-[40px]">
+                                            Logout
+                                        </span>
+                                    </a>
+                                </li>
+                            </ul>
+                        )}
                     </div>
                 </div>
             </div>

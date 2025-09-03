@@ -3,7 +3,9 @@ type Props = {
     tittle?: string;
     disabled?: boolean;
     suffixValue?: string;
+    suffixStyles?: object;
     classContainer?: string;
+    classInput?: string;
     value: number;
     minValue: number;
     maxValue: number;
@@ -15,7 +17,9 @@ const Slider = ({
     tittle,
     disabled,
     suffixValue,
+    suffixStyles,
     classContainer,
+    classInput,
     value,
     minValue,
     maxValue,
@@ -27,7 +31,7 @@ const Slider = ({
     return (
         <div className={classContainer}>
             {tittle && <span className="font-bold p-2 w-fit">{tittle}</span>}
-            <div className="flex gap-1 p-2 w-full col-span-2">
+            <div className="flex gap-1 p-2 w-full col-span-2 items-center">
                 <input
                     type="range"
                     min={minValue}
@@ -35,11 +39,11 @@ const Slider = ({
                     name={name ?? ""}
                     value={valueToShow}
                     onChange={(e) => onChange(e)}
-                    className={`range range-secondary`}
+                    className={`range ${classInput ?? "range - secondary"}`}
                     disabled={disabled}
                 />
                 {suffixValue && (
-                    <span className="min-w-[6rem] text-right font-bold">
+                    <span style={suffixStyles} className="text-right font-bold">
                         {value + " " + suffixValue}
                     </span>
                 )}

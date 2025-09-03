@@ -101,7 +101,7 @@ const StationPeopleModal = ({
         address: "",
         phone: "",
         photo_actual_file: "",
-        user: "",
+        user: null,
         institution: "",
         position: "",
     });
@@ -198,6 +198,10 @@ const StationPeopleModal = ({
                 formData.delete("photo");
             }
 
+            if (formState.user === "") {
+                formData.append("user", "");
+            }
+
             const res = await patchPeopleService<
                 ExtendedPeople | ErrorResponse
             >(api, Number(Person?.id), formData);
@@ -247,15 +251,18 @@ const StationPeopleModal = ({
         }
     };
 
-    //
-
     const handleCloseModal = () => {
         setPerson?.(undefined);
         reFetch();
     };
 
-    const handleChange = (e: HTMLInputElement | HTMLSelectElement) => {
-        const { name, value } = e;
+    const handleChange = (
+        e:
+            | HTMLInputElement
+            | HTMLSelectElement
+            | { target: { name: string; value: string } },
+    ) => {
+        const { name, value } = "target" in e ? e.target : e;
 
         dispatch({
             type: "change_value",
@@ -341,7 +348,10 @@ const StationPeopleModal = ({
                     {modalType?.charAt(0).toUpperCase() + modalType?.slice(1)}
                 </h3>
             </div>
-            <form className="form-control space-y-4" onSubmit={handleSubmit}>
+            <form
+                className="form-control space-y-4"
+                onSubmit={(e) => handleSubmit(e)}
+            >
                 <div className="form-control space-y-2">
                     {Object.keys(formState || {}).map((key, index) => {
                         const errorBadge = msg?.errors?.errors?.find(
@@ -470,19 +480,17 @@ const StationPeopleModal = ({
                                             )}
                                             {key === "user" && (
                                                 <MenuButton
-                                                    setShowMenu={() =>
-                                                        setShowMenu((prev) =>
-                                                            prev?.show &&
-                                                            prev.type === key
-                                                                ? {
-                                                                      type: key,
-                                                                      show: false,
-                                                                  }
-                                                                : {
-                                                                      type: key,
-                                                                      show: true,
-                                                                  },
-                                                        )
+                                                    setShowMenu={setShowMenu}
+                                                    onMenuClick={() =>
+                                                        handleChange({
+                                                            target: {
+                                                                name: key,
+                                                                value:
+                                                                    formState[
+                                                                        key as keyof typeof formState
+                                                                    ] ?? "",
+                                                            },
+                                                        })
                                                     }
                                                     showMenu={showMenu}
                                                     typeKey={key}
@@ -560,7 +568,6 @@ const StationPeopleModal = ({
                     </button>
                 </div>
             </form>
-
             {modals && modals?.title === "ConfirmDelete" && (
                 <ConfirmDeleteModal
                     msg={msg}

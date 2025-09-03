@@ -1,9 +1,9 @@
 import { Scroller } from "@componentsReact";
 import { StationVisitsData, StationMetadataServiceData } from "@types";
 import { getRandomColor, possibleColors } from "@utils";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 
-interface VisitsScrollerProps {
+interface RoutesScrollerProps {
     map?: L.Map | null;
     visits: StationVisitsData[];
     changeKml: VisitsStates[];
@@ -21,7 +21,7 @@ interface VisitsStates {
     color: string;
 }
 
-const VisitsScroller = ({
+const RoutesScroller = ({
     map,
     visits,
     changeKml,
@@ -31,7 +31,7 @@ const VisitsScroller = ({
     stationMeta,
     showScroller,
     setShowScroller,
-}: VisitsScrollerProps) => {
+}: RoutesScrollerProps) => {
     const getColor = (visit: StationVisitsData) => {
         const visitColor = changeKml.find(
             (visitBool) => visitBool.visitId === visit.id,
@@ -51,6 +51,10 @@ const VisitsScroller = ({
         return finalNumber;
     };
 
+    //--------------------------------------------------------useState--------------------------------------------------------
+
+    const [isAllSelected, setIsAllSelected] = useState<boolean>(false);
+
     //--------------------------------------------------------UseEffect--------------------------------------------------------
     useEffect(() => {
         if (changeKml.length === 0) {
@@ -63,14 +67,27 @@ const VisitsScroller = ({
                         checked: false,
                         color: getRandomColor(adjustIndex(index)),
                     };
-
                     newChangeKml.push(newKml);
                 });
 
                 setChangeKml(newChangeKml);
             }
         }
-    }, [showScroller]);
+    }, [showScroller, changeKml.length, setChangeKml, visits]);
+
+    useEffect(() => {
+        if (
+            changeKml.length > 0 &&
+            changeKml.every((visitBool) => visitBool.checked) &&
+            (stationMeta.navigation_filename ? changeMeta : true) //Si hay un file el changeMeta dice si esta checkeado, si no hay no lo considera
+        ) {
+            setIsAllSelected(true);
+        }
+
+        if (visits.length === 0) {
+            setIsAllSelected(changeMeta);
+        }
+    }, [changeKml, changeMeta]);
 
     //--------------------------------------------------------Return--------------------------------------------------------
     return (
@@ -95,14 +112,7 @@ const VisitsScroller = ({
                         <input
                             type="checkbox"
                             className="checkbox checkbox-sm"
-                            checked={
-                                (changeKml.length > 0 &&
-                                    changeKml.every(
-                                        (visitBool) => visitBool.checked,
-                                    ) &&
-                                    changeMeta) ||
-                                (changeKml.length === 0 && changeMeta)
-                            }
+                            checked={isAllSelected}
                             onChange={(e) => {
                                 if (changeKml.length !== 0) {
                                     setChangeMeta(e.target.checked);
@@ -257,4 +267,4 @@ const VisitsScroller = ({
     );
 };
 
-export default React.memo(VisitsScroller);
+export default React.memo(RoutesScroller);

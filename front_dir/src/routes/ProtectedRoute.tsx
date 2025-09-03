@@ -11,7 +11,11 @@ export const ProtectedRoute = () => {
     const { token } = useAuth();
 
     const {
-        state: { status: userFetchStatus, method: userFetchMethod },
+        state: {
+            status: userFetchStatus,
+            method: userFetchMethod,
+            msg: userMsg,
+        },
     } = useUser();
 
     let msg = null;
@@ -20,21 +24,7 @@ export const ProtectedRoute = () => {
         userFetchStatus === "unAuthorized" &&
         apiMethods.includes(userFetchMethod)
     ) {
-        if (userFetchMethod !== "get") {
-            msg = (
-                <Toast
-                    error={true}
-                    msg="You do not have permission to perform this action."
-                />
-            );
-        } else {
-            msg = (
-                <Toast
-                    error={true}
-                    msg="You are not authorized to see some information."
-                />
-            );
-        }
+        msg = <Toast error={true} msg={userMsg} />;
     }
     return token ? (
         <Layout>

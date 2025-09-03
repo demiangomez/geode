@@ -5,7 +5,6 @@ import { People } from "@types";
 import { useEffect, useState } from "react";
 import Modal from "../Modal";
 import Pagination from "@components/Pagination";
-
 interface Props {
     Person: People | undefined;
     reFetch: () => void;
@@ -251,9 +250,7 @@ const ViewPersonRelations = ({ Person, reFetch, setStateModal }: Props) => {
                                                         </td>
                                                         <td>
                                                             <span className="text-sm">
-                                                                {new Date(
-                                                                    visit.date,
-                                                                ).toLocaleDateString()}
+                                                                {visit.date}
                                                             </span>
                                                         </td>
                                                     </tr>

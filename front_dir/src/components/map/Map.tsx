@@ -1,4 +1,4 @@
-import L, { LatLngExpression, MarkerCluster } from "leaflet";
+import L, { latLng, LatLngExpression, MarkerCluster } from "leaflet";
 
 import * as toGeoJSON from "@tmcw/togeojson";
 import JSZip from "jszip";
@@ -15,9 +15,9 @@ import {
     ZoomControl,
 } from "react-leaflet";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
-import { MapVector, PopupChildren } from "@componentsReact";
+import { MapVector, PopupChildren, Slider } from "@componentsReact";
 
 import { useLocalStorage, useAuth, useApi } from "@hooks";
 
@@ -37,11 +37,6 @@ import {
 
 import { isStationFiltered, chosenIcon } from "@utils";
 import { getStationTypesService, getStationStatusService } from "@services";
-
-//Para el major 4
-import "leaflet/dist/leaflet.css";
-import "leaflet-velocity/dist/leaflet-velocity.css";
-import "leaflet-velocity";
 
 interface MapProps {
     handleEarthquakeState: (earthquake: EarthquakeData) => void;
@@ -77,7 +72,8 @@ interface MapProps {
     >;
     setMainParams?: React.Dispatch<React.SetStateAction<GetParams>>;
     setShowScroller: React.Dispatch<React.SetStateAction<boolean>>;
-    vectorMagnitude?: number;
+    vectorMagnitude: number;
+    setVectorMagnitude: React.Dispatch<React.SetStateAction<number>>;
 }
 
 export const ChangeView = ({
@@ -97,33 +93,50 @@ export const ChangeView = ({
 };
 
 //Component for adding kml render to leaflet map from kml in base64 format
+// En el componente LoadKmzFromBase64
+
+// Corrige primero la definición del componente:
 const LoadKmzFromBase64 = ({
     base64Data,
-    shouldFitBounds = true,
+    shouldFitBounds = false,
+    earthQuakeChosen,
 }: {
     base64Data: string;
     shouldFitBounds?: boolean;
+    earthQuakeChosen?: EarthquakeData;
 }) => {
     const map = useMap();
 
-    //--------------------------------------------------Funciones--------------------------------------------------
     const removeOldKmls = () => {
         map.eachLayer((layer) => {
-            // Verifica si es una capa creada por omnivore
-            if (!(layer instanceof L.TileLayer)) {
+            if (
+                !(layer instanceof L.TileLayer) &&
+                !(layer instanceof L.Marker)
+                // && !(layer instanceof L.FeatureGroup) //no Remueve instancias de los cluster
+            ) {
                 map.removeLayer(layer);
             }
         });
     };
-    //--------------------------------------------------UseEffect--------------------------------------------------
+
     useEffect(() => {
         const loadKmzOrKmlFile = async () => {
+            removeOldKmls();
             if (!base64Data) return;
 
-            removeOldKmls();
+            // Guarda el estado actual de la vista
+            const savedPosition = localStorage.getItem("lastPosition");
+
+            const finalPosition = savedPosition
+                ?.split(",")
+                .map((pos) => parseFloat(pos)) as [number, number];
+
+            const currentCenter = latLng(...finalPosition) || map.getCenter();
+            const currentZoom =
+                Number(localStorage.getItem("lastZoomLevel")) || map.getZoom();
 
             try {
-                // const updatedBase64Data = removeMarkersFromKml(base64Data);
+                // Decodificar base64
                 const binaryString = atob(base64Data);
                 const len = binaryString.length;
                 const bytes = new Uint8Array(len);
@@ -148,58 +161,110 @@ const LoadKmzFromBase64 = ({
                                           feature.properties["stroke-opacity"],
                                       fillColor:
                                           feature.properties["fill-color"],
-                                      //   fillOpacity:
-                                      //       feature.properties["fill-opacity"],
                                   }
                                 : {};
                         },
                         pointToLayer: (feature, latlng) => {
-                            if (feature.properties) {
-                                const iconUrl =
-                                    feature.properties.icon ||
-                                    "https://maps.google.com/mapfiles/kml/shapes/star.png";
-                                const iconScale =
-                                    feature.properties["icon-scale"] || 1;
-                                const iconOpacity =
-                                    feature.properties["icon-opacity"] || 1;
+                            // if (feature.properties && shouldFitBounds) {
+                            const iconUrl =
+                                feature.properties.icon ||
+                                "https://maps.google.com/mapfiles/kml/shapes/star.png";
+                            const iconScale =
+                                feature.properties["icon-scale"] || 1;
+                            const iconOpacity =
+                                feature.properties["icon-opacity"] || 1;
 
-                                const baseSize = 32;
-                                const scaledSize = Math.round(
-                                    baseSize * iconScale,
-                                );
+                            const baseSize = 32;
+                            const scaledSize = Math.round(baseSize * iconScale);
 
-                                const customIcon = L.icon({
-                                    iconUrl: iconUrl,
-                                    iconSize: [scaledSize, scaledSize],
-                                    iconAnchor: [
-                                        scaledSize / 2,
-                                        scaledSize / 2,
-                                    ],
-                                    className: "light-red-icon",
-                                });
+                            const customIcon = L.icon({
+                                iconUrl: iconUrl,
+                                iconSize: [scaledSize, scaledSize],
+                                iconAnchor: [scaledSize / 2, scaledSize / 2],
+                                className: "light-red-icon",
+                            });
 
-                                const marker = L.marker(latlng, {
-                                    icon: customIcon,
-                                    opacity: iconOpacity,
-                                });
+                            const marker = L.marker(latlng, {
+                                icon: customIcon,
+                                opacity: iconOpacity,
+                            });
 
-                                marker.bindPopup(
-                                    feature.properties.description,
-                                );
+                            marker.bindPopup(feature.properties.description);
+                            if (shouldFitBounds) {
                                 setTimeout(() => marker.openPopup(), 100);
-
-                                return marker;
                             }
-                            return L.marker(latlng);
+
+                            return marker;
+                            // } else {
+                            //     return L.marker(latlng);
+                            // }
                         },
                     });
-                    if (shouldFitBounds) {
-                        map.fitBounds(geoJsonLayer.getBounds());
-                        map.zoomOut(1);
-                    }
+
+                    // Añade la capa al mapa primero
                     geoJsonLayer.addTo(map);
+
+                    // Centra el mapa en el terremoto si es la primera carga
+                    if (shouldFitBounds) {
+                        if (earthQuakeChosen?.lat && earthQuakeChosen?.lon) {
+                            try {
+                                const bounds = geoJsonLayer.getBounds();
+                                if (bounds.isValid()) {
+                                    setTimeout(() => {
+                                        map.fitBounds(bounds, {
+                                            padding: [50, 50],
+                                            maxZoom: 8,
+                                            animate: false,
+                                        });
+                                        // Solo si los bounds están muy lejos, centra en el epicentro
+                                        const center = bounds.getCenter();
+                                        const distanceFromEQ = map.distance(
+                                            [
+                                                earthQuakeChosen.lat,
+                                                earthQuakeChosen.lon,
+                                            ],
+                                            [center.lat, center.lng],
+                                        );
+                                        if (distanceFromEQ > 500000) {
+                                            map.setView(
+                                                [
+                                                    earthQuakeChosen.lat,
+                                                    earthQuakeChosen.lon,
+                                                ],
+                                                8,
+                                            );
+                                        }
+                                    }, 300);
+                                } else {
+                                    // Solo como fallback si no hay bounds válidos
+                                    map.setView(
+                                        [
+                                            earthQuakeChosen.lat,
+                                            earthQuakeChosen.lon,
+                                        ],
+                                        currentZoom,
+                                    );
+                                }
+                            } catch (error) {
+                                console.error(
+                                    "Error al ajustar bounds:",
+                                    error,
+                                );
+                                map.setView(
+                                    [
+                                        earthQuakeChosen.lat,
+                                        earthQuakeChosen.lon,
+                                    ],
+                                    currentZoom,
+                                );
+                            }
+                        }
+                    } else {
+                        map.setView(currentCenter, currentZoom);
+                    }
                 };
 
+                // Procesar KMZ/KML
                 try {
                     // Intenta como KMZ
                     const zip = await JSZip.loadAsync(arrayBuffer);
@@ -222,14 +287,16 @@ const LoadKmzFromBase64 = ({
                 }
             } catch (error) {
                 console.error("Error decoding base64 file:", error);
-            } finally {
-                const pos = map.getCenter();
-                map.setView([pos.lat + 0.001, pos.lng + 0.001]);
+
+                // Fallback a coordenadas del terremoto en caso de error
+                if (!shouldFitBounds) {
+                    map.setView(currentCenter, currentZoom);
+                }
             }
         };
 
         loadKmzOrKmlFile();
-    }, [base64Data, map]);
+    }, [base64Data, map, earthQuakeChosen]);
 
     return null;
 };
@@ -253,7 +320,8 @@ const MapMarkers = ({
     handleEarthquakeState,
     setForceSyncScrollerMap,
     toggleCoseismicVector,
-    // vectorMagnitude,
+    vectorMagnitude,
+    setVectorMagnitude,
 }: MapProps) => {
     //---------------------------------------------------------UseAuth-------------------------------------------------------------
     const { token, logout, user } = useAuth();
@@ -271,6 +339,11 @@ const MapMarkers = ({
     );
 
     const [, setLastPosition] = useLocalStorage("lastPosition", "[0,0]");
+
+    const [, setLastMagnitudeVector] = useLocalStorage(
+        "lastMagnitudeVector",
+        "1",
+    );
 
     //-------------------------------------------------------------------------------UseStates--------------------------------------------------------------------------------------
     const [forceRenderMarker, setForceRenderMarker] = useState(0);
@@ -295,13 +368,17 @@ const MapMarkers = ({
         [],
     );
 
-    const [isFirstKmlLoad, setIsFirstKmlLoad] = useState<boolean>(true);
+    const [isFirstKmlLoad, setIsFirstKmlLoad] = useState<boolean>(false);
 
     //-------------------------------------------------------------------------------UseEffects--------------------------------------------------------------------------------------
     //Modify setview when refreshing the page
     useEffect(() => {
         if (posToFly) {
-            map.setView(posToFly, 2);
+            map.setView(
+                posToFly,
+                Number(localStorage.getItem("lastZoomLevel")) ??
+                    map.getMinZoom(),
+            );
         }
     }, [posToFly]);
 
@@ -313,31 +390,27 @@ const MapMarkers = ({
     }, [filters, filterState, mapState]);
 
     //Used for re rendering well when coming back to station mode from earthquake mode
-    useEffect(() => {
-        if (!mapState && markersByBounds && markersByBounds.length > 0) {
-            const zoom = map.getZoom();
-            const pos = map.getCenter();
-
-            map.setZoom(2);
-
-            setTimeout(() => {
-                map.setZoom(6);
-            }, 500);
-
-            setTimeout(() => {
-                map.setZoom(10);
-            }, 1200);
-
-            setTimeout(() => {
-                map.setZoom(4);
-            }, 1800);
-
-            setTimeout(() => {
-                map.setZoom(zoom);
-                map.setView(pos);
-            }, 2900);
-        }
-    }, [mapState]);
+    // POSIBLE RAZON DEL BUG DEL ISSUE #227
+    // useEffect(() => {
+    //     if (!mapState && markersByBounds && markersByBounds.length > 0) {
+    //         const pos = map.getCenter();
+    //         const zoom = map.getZoom();
+    //         map.setZoom(map.getMinZoom());
+    //         setTimeout(() => {
+    //             map.setZoom(6);
+    //         }, 500);
+    //         setTimeout(() => {
+    //             map.setZoom(10);
+    //         }, 1200);
+    //         setTimeout(() => {
+    //             map.setZoom(4);
+    //         }, 1800);
+    //         setTimeout(() => {
+    //             map.setView(pos);
+    //             map.setZoom(zoom);
+    //         }, 2900);
+    //     }
+    // }, [mapState]);
 
     // Updates markers when map moves
     useEffect(() => {
@@ -407,10 +480,18 @@ const MapMarkers = ({
 
     // Forces map and marker renders when you get earthquake affected stations
     useEffect(() => {
+        if (!earthquakeAffectedStations) {
+            removeOldKmls();
+        }
         if (earthquakes.length > 0) {
             setForceRenderMarker((prev) => prev + 1);
         }
     }, [earthquakeAffectedStations]);
+
+    useEffect(() => {
+        // Force re-render markers but don't reset isFirstKmlLoad
+        setForceRenderMarker((prev) => prev + 1);
+    }, [toggleStateEarthquakeMask]);
 
     useEffect(() => {
         removeOldKmls();
@@ -427,7 +508,7 @@ const MapMarkers = ({
 
     useEffect(() => {
         overlappedStationsByScale();
-    }, [user]);
+    }, [user, toggleStateEarthquakeMask, earthquakeAffectedStations]);
 
     useEffect(() => {
         if (
@@ -498,15 +579,20 @@ const MapMarkers = ({
 
     useEffect(() => {
         if (earthQuakeChosen) {
-            setIsFirstKmlLoad(true);
+            const storageEarthquake: EarthquakeData = JSON.parse(
+                localStorage.getItem("earthquakeChosen") || "{}",
+            );
+
+            storageEarthquake.api_id !== earthQuakeChosen.api_id &&
+                setIsFirstKmlLoad(true);
         }
     }, [earthQuakeChosen]);
 
     useEffect(() => {
-        if (earthQuakeChosen && earthquakeAffectedStations) {
+        if (earthQuakeChosen && earthquakeAffectedStations && isFirstKmlLoad) {
             setIsFirstKmlLoad(false);
         }
-    }, [toggleStateEarthquakeMask]);
+    }, [earthquakeAffectedStations, earthQuakeChosen, isFirstKmlLoad]);
 
     //-------------------------------------------------------------------------------Funciones--------------------------------------------------------------------------------------
     const areStationsOverlapped = (
@@ -545,7 +631,30 @@ const MapMarkers = ({
         }
     };
 
+    const getAffectedStations = () => {
+        if (!earthquakeAffectedStations && earthQuakeChosen) return [];
+        const affectedList = toggleStateEarthquakeMask
+            ? earthquakeAffectedStations?.affected_stations_including_postseismic
+            : earthquakeAffectedStations?.affected_stations_without_postseismic;
+
+        // Devuelve los objetos StationData de las estaciones afectadas
+        return (
+            stations?.filter((station) =>
+                affectedList?.some(
+                    (affected) =>
+                        affected.network_code === station.network_code &&
+                        affected.station_code === station.station_code,
+                ),
+            ) ?? []
+        );
+    };
+
     const overlappedStationsByScale = () => {
+        const affectedStations = getAffectedStations();
+
+        if (mapState && (!affectedStations || affectedStations.length === 0))
+            return;
+
         if (!stations || stations.length === 0) return;
 
         // Use spatial binning to reduce number of comparisons
@@ -553,7 +662,12 @@ const MapMarkers = ({
         const binSize = 0.01; // Adjust bin size based on your data distribution
 
         // Assign stations to spatial bins
-        stations.forEach((station) => {
+        (mapState
+            ? earthQuakeChosen
+                ? affectedStations
+                : []
+            : stations
+        ).forEach((station) => {
             if (!station.lat || !station.lon) return;
 
             // Create bin keys based on coordinates rounded to binSize
@@ -817,7 +931,7 @@ const MapMarkers = ({
         if (isDangerousPopup) {
             map.setMinZoom(10);
         } else if (!isDangerousPopup) {
-            map.setMinZoom(2);
+            map.setMinZoom(3);
         }
     }, [isDangerousPopup]);
 
@@ -876,9 +990,7 @@ const MapMarkers = ({
                 </MarkerClusterGroup>
             );
         });
-    }, [overlappedClusters, map]);
-
-    // const [magnitude, setMagnitude] = useState<number>(100000);
+    }, [overlappedClusters, map, types, statuses]);
 
     return (
         <>
@@ -892,6 +1004,7 @@ const MapMarkers = ({
                             : earthquakeAffectedStations.kml_without_postseismic
                     }
                     shouldFitBounds={isFirstKmlLoad}
+                    earthQuakeChosen={earthQuakeChosen}
                 />
             ) : null}
             {mapState &&
@@ -902,7 +1015,6 @@ const MapMarkers = ({
                 )?.map((s: StationAffectedInfo, index: number) => {
                     const station = findStation(s);
 
-                    //REEMPLAZAR
                     const displacement =
                         earthquakeAffectedStations.coseismic_displacements.find(
                             (d) =>
@@ -912,7 +1024,7 @@ const MapMarkers = ({
 
                     const uniqueKey = `affected-${station?.network_code}-${station?.station_code}-${index}-${forceRenderMarker}`;
                     return station && station.lat && station.lon ? (
-                        <>
+                        <Fragment key={uniqueKey}>
                             <Marker
                                 icon={chosenIcon(
                                     station as StationData,
@@ -943,20 +1055,20 @@ const MapMarkers = ({
                                     />
                                 </Popup>
                             </Marker>
-                            {!toggleStateEarthquakeMask &&
+                            {toggleCoseismicVector &&
                             earthQuakeChosen !== undefined &&
-                            toggleCoseismicVector &&
                             displacement ? (
                                 <MapVector
+                                    key={`vector-${uniqueKey}`}
                                     origin={station}
                                     displacement={{
                                         north: displacement.n,
                                         east: displacement.e,
                                     }}
-                                    magnitude={100000}
+                                    magnitude={vectorMagnitude ?? 1}
                                 />
                             ) : null}
-                        </>
+                        </Fragment>
                     ) : null;
                 })}
 
@@ -1071,28 +1183,37 @@ const MapMarkers = ({
                         }
                     })}
 
-            {/* {!toggleStateEarthquakeMask &&
-            earthQuakeChosen !== undefined &&
-            toggleCoseismicVector ? (
+            {toggleCoseismicVector && earthQuakeChosen !== undefined ? (
                 <div
                     style={{
                         position: "absolute",
-                        right: "0",
-                        top: "100px",
+                        right: "50px",
+                        bottom: "25px",
                         zIndex: 1000,
                         width: "300px",
+                        pointerEvents: "auto",
                     }}
+                    onMouseMove={(e) => e.stopPropagation()}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    onTouchMove={(e) => e.stopPropagation()}
+                    onTouchEnd={(e) => e.stopPropagation()}
+                    onDragStart={(e) => e.preventDefault()}
                 >
                     <Slider
                         classContainer="bg-zinc-50 rounded-md  p-2"
-                        tittle="Vector Fiel Scale"
-                        minValue={100000}
-                        maxValue={200000}
-                        value={magnitude}
-                        onChange={(e) => console.log(e.target.value)}
+                        tittle="Vector Field Scale"
+                        minValue={1}
+                        maxValue={20}
+                        value={vectorMagnitude}
+                        suffixStyles={{ width: "1rem" }}
+                        suffixValue={" "}
+                        onChange={(e) => {
+                            setVectorMagnitude(Number(e.target.value));
+                            setLastMagnitudeVector(e.target.value);
+                        }}
                     />
                 </div>
-            ) : null} */}
+            ) : null}
         </>
     );
 };
@@ -1120,6 +1241,8 @@ const Map = ({
     setShowScroller,
     toggleStateEarthquakeMask,
     toggleCoseismicVector,
+    vectorMagnitude,
+    setVectorMagnitude,
 }: MapProps) => {
     //---------------------------------------------------------------------------UseStates--------------------------------------------------------------------------------------
 
@@ -1127,7 +1250,6 @@ const Map = ({
         center: [0, 0],
         zoom: 4,
         scrollWheelZoom: true,
-        minZoom: 2,
     });
 
     const [forceRender, setForceRender] = useState(0);
@@ -1137,12 +1259,13 @@ const Map = ({
         if (earthquakes.length > 0) {
             setForceRender((prev) => prev + 1);
         }
-    }, [earthquakes, toggleStateEarthquakeMask]);
+    }, [earthquakes]);
 
     useEffect(() => {
         const savedZoomLevel = localStorage.getItem("lastZoomLevel");
 
         const savedPosition = localStorage.getItem("lastPosition");
+        const saveMagnitudeVector = localStorage.getItem("lastMagnitudeVector");
 
         const pos: LatLngExpression = initialCenter
             ? initialCenter
@@ -1163,6 +1286,8 @@ const Map = ({
             center: pos,
         }));
 
+        setVectorMagnitude(Number(saveMagnitudeVector));
+
         setShowScroller(false);
     }, [mapState]);
 
@@ -1175,7 +1300,7 @@ const Map = ({
                 maxBoundsViscosity={1.0}
                 worldCopyJump={false}
                 zoomControl={false}
-                minZoom={1}
+                minZoom={3}
                 className="w-full h-[92vh]"
             >
                 <TileLayer
@@ -1189,7 +1314,6 @@ const Map = ({
                             ? "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
                             : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     }
-                    minZoom={1}
                 />
                 <ZoomControl position="bottomright" />
                 <ChangeView center={mapProps.center} zoom={mapProps.zoom} />
@@ -1218,6 +1342,8 @@ const Map = ({
                     setForceSyncScrollerMap={setForceSyncScrollerMap}
                     showEarthquakeList={showEarthquakeList}
                     setShowScroller={setShowScroller}
+                    vectorMagnitude={vectorMagnitude}
+                    setVectorMagnitude={setVectorMagnitude}
                 />
                 <ScaleControl
                     metric={true}

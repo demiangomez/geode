@@ -997,7 +997,7 @@ class User(AbstractUser):
     phone = models.CharField(max_length=15, blank=True)
     address = models.CharField(max_length=100, blank=True)
     photo = models.ImageField(upload_to='user_photos/', blank=True)
-    clustering_distance = models.IntegerField(null=True)
+    clustering_distance = models.IntegerField(default=10)
 
     REQUIRED_FIELDS = ["role"]
 

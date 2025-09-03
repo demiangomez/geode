@@ -1,19 +1,21 @@
 import { StationVisitsData } from "@types";
 import { Link } from "react-router-dom";
 import React, { Fragment } from "react";
+import Spinner from "@components/Spinner";
 
 interface VisitsCampaignTableProps {
     visits: StationVisitsData[];
     campsToShow: string[];
+    loading: boolean;
 }
 const VisitsCampaignTable = ({
     visits,
     campsToShow,
+    loading,
 }: VisitsCampaignTableProps) => {
     const [groupedVisits, setGroupedVisits] = React.useState<
         { date: string; visits: StationVisitsData[] }[] | undefined
     >(undefined);
-
 
     const groupVisits = () => {
         const grouped: { date: string; visits: StationVisitsData[] }[] = [];
@@ -25,7 +27,7 @@ const VisitsCampaignTable = ({
                 };
                 const date = new Date(visits[i].date);
                 const currentVisitDate = new Date(
-                    date.getTime() + date.getTimezoneOffset() * 60000
+                    date.getTime() + date.getTimezoneOffset() * 60000,
                 ).toLocaleDateString("es-ES", {
                     month: "numeric",
                     day: "numeric",
@@ -178,6 +180,18 @@ const VisitsCampaignTable = ({
                     ))}
                 </tbody>
             </table>
+            {loading && (
+                <div className="inset-0 flex justify-center my-4 items-center">
+                    <Spinner size="lg" />
+                </div>
+            )}
+            {visits.length === 0 && !loading ? (
+                <div className="flex flex-grow rounded-md mt-2 flex-col justify-start items-center bg-neutral-content">
+                    <span className="m-4 font-bold text-2xl">
+                        No visits found for this campaign
+                    </span>
+                </div>
+            ) : null}
         </div>
     );
 };

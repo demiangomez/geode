@@ -211,8 +211,11 @@ const AddPeopleModal = ({ people, visit, reFetch, setStateModal }: Props) => {
                                                     .includes(part),
                                         ),
                                     );
-
                                     setMatchingPeople(match);
+                                    setShowMenu({ show: true, type: "name" });
+                                }}
+                                onClick={() => {
+                                    setShowMenu({ show: true, type: "name" });
                                 }}
                                 className="grow"
                                 autoComplete="off"
@@ -226,7 +229,6 @@ const AddPeopleModal = ({ people, visit, reFetch, setStateModal }: Props) => {
                                         : ""}
                                 </span>
                             )}
-
                             <MenuButton
                                 setShowMenu={setShowMenu}
                                 showMenu={showMenu}

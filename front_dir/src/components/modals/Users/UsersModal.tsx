@@ -511,7 +511,7 @@ const EditUsersModal = ({
                                                         </span>
                                                     </div>
                                                     <input
-                                                        type={`${key === "password" && !seePwd ? "password" : "text"}`}
+                                                        type={`${key === "password" && (modalType !== "edit" ? !seePwd : !seePwd || !checks.password) ? "password" : "text"}`}
                                                         name={key}
                                                         value={
                                                             formState[
@@ -542,7 +542,12 @@ const EditUsersModal = ({
                                                         }
                                                     />
                                                     {key === "password" ? (
-                                                        seePwd ? (
+                                                        (
+                                                            modalType !== "edit"
+                                                                ? seePwd
+                                                                : seePwd &&
+                                                                  checks.password
+                                                        ) ? (
                                                             <EyeSlashIcon
                                                                 className="size-6 cursor-pointer"
                                                                 onClick={() =>

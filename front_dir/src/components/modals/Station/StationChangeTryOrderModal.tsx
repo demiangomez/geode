@@ -2,82 +2,94 @@ import { ArrowRightIcon } from "@heroicons/react/24/outline";
 import { Errors, SourcesServerData, SourcesStationsData } from "@types";
 import { Alert, Modal, Spinner } from "components";
 import { useState } from "react";
-import { swapTryOrdenService } from "@services"
+import { swapTryOrdenService } from "@services";
 import { ErrorResponse } from "react-router-dom";
 import { AxiosInstance } from "axios";
 
-interface StationChangeTryOrderModalProps{
-    sourcesStations: SourcesStationsData[],
-    sourcesServers: SourcesServerData[] | undefined,
-    handleCloseModal: () => void,
-    api: AxiosInstance,
-    refetch: () => void,
+interface StationChangeTryOrderModalProps {
+    sourcesStations: SourcesStationsData[];
+    sourcesServers: SourcesServerData[] | undefined;
+    handleCloseModal: () => void;
+    api: AxiosInstance;
+    refetch: () => void;
 }
 
-const StationChangeTryOrderModal = ({sourcesStations, sourcesServers, handleCloseModal, api, refetch}: StationChangeTryOrderModalProps) => {
-    
+const StationChangeTryOrderModal = ({
+    sourcesStations,
+    sourcesServers,
+    handleCloseModal,
+    api,
+    refetch,
+}: StationChangeTryOrderModalProps) => {
     const [from, setFrom] = useState<number | undefined>(undefined);
-    
+
     const [to, setTo] = useState<number | undefined>(undefined);
-    
+
     const [loading, setLoading] = useState<boolean>(false);
 
     const [successText, setSuccessText] = useState<boolean>(false);
 
-    const handleSubmit = (e: any) =>{
+    const handleSubmit = (e: any) => {
         e.preventDefault();
-        if(from && to){
-            swapTryOrderService()
+        if (from && to) {
+            swapTryOrderService();
         }
-    } 
+    };
 
-    const swapTryOrderService = async () =>{
-        try{
-            setLoading(true)
-            await swapTryOrdenService<ErrorResponse>(api, {from: from as number, to:to as number})
-        }   
-        catch(error){
-            console.error(error)
-        }
-        finally{
-            setLoading(false)
+    const swapTryOrderService = async () => {
+        try {
+            setLoading(true);
+            await swapTryOrdenService<ErrorResponse>(api, {
+                from: from as number,
+                to: to as number,
+            });
+        } catch (error) {
+            console.error(error);
+        } finally {
+            setLoading(false);
             setSuccessText(true);
         }
-    }
+    };
 
-    const matchServer = (serverId: number) =>{
-        const server = sourcesServers?.find((sv) => sv.server_id === serverId)
-        if(server){
-            
-            return `${server.fqdn} ${server.protocol}`
+    const matchServer = (serverId: number) => {
+        const server = sourcesServers?.find((sv) => sv.server_id === serverId);
+        if (server) {
+            return `${server.fqdn} ${server.protocol}`;
+        } else {
+            return "";
         }
-        else{
-            return ""
-        }
-    }
+    };
 
-    const getDefaultFormat = (serverId: number) =>{
-        const server = sourcesServers?.find((sv) => sv.server_id === serverId)
-        if(server){
-            return server.format
+    const getDefaultFormat = (serverId: number) => {
+        const server = sourcesServers?.find((sv) => sv.server_id === serverId);
+        if (server) {
+            return server.format;
+        } else {
+            return "";
         }
-        else{
-            return ""
-        }
-    }
+    };
 
-    const getDefaultPath = (serverId: number) =>{
-        const server = sourcesServers?.find((sv) => sv.server_id === serverId)
-        if(server){
-            return server.path
+    const getDefaultPath = (serverId: number) => {
+        const server = sourcesServers?.find((sv) => sv.server_id === serverId);
+        if (server) {
+            return server.path;
+        } else {
+            return "";
         }
-        else{
-            return ""
-        }
-    }
+    };
 
-    return (  
-        <Modal  close = {false} size="lg" handleCloseModal={() =>{handleCloseModal(); setTo(undefined); setFrom(undefined); successText && refetch();}} modalId="Change Try Order">
+    return (
+        <Modal
+            close={false}
+            size="lg"
+            handleCloseModal={() => {
+                handleCloseModal();
+                setTo(undefined);
+                setFrom(undefined);
+                successText && refetch();
+            }}
+            modalId="Change Try Order"
+        >
             <div
                 className={
                     successText
@@ -134,10 +146,20 @@ const StationChangeTryOrderModal = ({sourcesStations, sourcesServers, handleClos
                                                     {matchServer(s.server_id)}
                                                 </label>
                                                 <label className="text-lg text-pretty w-full overflow-auto whitespace-normal break-all text-center">
-                                                    {s.path && s.path !== "" ? s.path : ("*" + getDefaultPath(s.server_id))}
-                                                </label>    
+                                                    {s.path && s.path !== ""
+                                                        ? s.path
+                                                        : "*" +
+                                                          getDefaultPath(
+                                                              s.server_id,
+                                                          )}
+                                                </label>
                                                 <label className="text-lg text-pretty">
-                                                    {s.format && s.format !== "" ? s.format  : ("*" + getDefaultFormat(s.server_id)) }
+                                                    {s.format && s.format !== ""
+                                                        ? s.format
+                                                        : "*" +
+                                                          getDefaultFormat(
+                                                              s.server_id,
+                                                          )}
                                                 </label>
                                             </div>
                                         </div>
@@ -150,48 +172,90 @@ const StationChangeTryOrderModal = ({sourcesStations, sourcesServers, handleClos
                             <div className="max-h-[20vh] flex flex-col gap-2 overflow-y-auto">
                                 {sourcesStations?.map((s, index) => (
                                     <div
-                                    key={index}
-                                    className="flex justify-center items-center gap-4 p-2 mb-1 hover:bg-gray-400 rounded-md bg-gray-300"
-                                >
-                                    <input
-                                        className="checkbox checkbox-lg"
-                                        type="checkbox"
-                                        name="person"
-                                        value={s.api_id}
-                                        checked={to === s.api_id}
-                                        onChange={() =>
-                                            to === s.api_id
-                                                ? setTo(undefined)
-                                                : setTo(s.api_id)
-                                        }
-                                    />
-                                    <div className="flex flex-row justify-start items-center w-full gap-2">
-                                        <div className="flex flex-row gap-2 justify-start items-center">
-                                            <label className="text-3xl w-1/4 font-bold text-center">
-                                                {s.try_order}
-                                            </label>
-                                        </div>
-                                        <div className="flex flex-col justify-center items-center w-full">
-                                            <label
-                                                title={s.server_id.toString()}
-                                                className="flex justify-center items-center text-2xl w-full text-pretty"
-                                            >
-                                                {matchServer(s.server_id)}
-                                            </label>
-                                            <label className="text-lg text-pretty w-full overflow-auto whitespace-normal break-all text-center">
-                                                {s.path && s.path !== "" ? s.path : ("*" + getDefaultPath(s.server_id))}
-                                            </label>    
-                                            <label className="text-lg text-pretty">
-                                                {s.format && s.format !== "" ? s.format  : ("*" + getDefaultFormat(s.server_id))}
-                                            </label>
+                                        key={index}
+                                        className="flex justify-center items-center gap-4 p-2 mb-1 hover:bg-gray-400 rounded-md bg-gray-300"
+                                    >
+                                        <input
+                                            className="checkbox checkbox-lg"
+                                            type="checkbox"
+                                            name="person"
+                                            value={s.api_id}
+                                            checked={to === s.api_id}
+                                            onChange={() =>
+                                                to === s.api_id
+                                                    ? setTo(undefined)
+                                                    : setTo(s.api_id)
+                                            }
+                                        />
+                                        <div className="flex flex-row justify-start items-center w-full gap-2">
+                                            <div className="flex flex-row gap-2 justify-start items-center">
+                                                <label className="text-3xl w-1/4 font-bold text-center">
+                                                    {s.try_order}
+                                                </label>
+                                            </div>
+                                            <div className="flex flex-col justify-center items-center w-full">
+                                                <label
+                                                    title={s.server_id.toString()}
+                                                    className="flex justify-center items-center text-2xl w-full text-pretty"
+                                                >
+                                                    {matchServer(s.server_id)}
+                                                </label>
+                                                <label className="text-lg text-pretty w-full overflow-auto whitespace-normal break-all text-center">
+                                                    {s.path && s.path !== ""
+                                                        ? s.path
+                                                        : "*" +
+                                                          getDefaultPath(
+                                                              s.server_id,
+                                                          )}
+                                                </label>
+                                                <label className="text-lg text-pretty">
+                                                    {s.format && s.format !== ""
+                                                        ? s.format
+                                                        : "*" +
+                                                          getDefaultFormat(
+                                                              s.server_id,
+                                                          )}
+                                                </label>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
                                 ))}
                             </div>
                         </div>
                     </div>
                     <div className="flex justify-center flex-col w-full items-center gap-1">
+                        {successText ? (
+                            <div className="w-full p-4">
+                                <Alert
+                                    msg={{
+                                        status: 200,
+                                        msg: "Swap successfully done!",
+                                    }}
+                                />
+                            </div>
+                        ) : to === from &&
+                          to !== undefined &&
+                          from !== undefined &&
+                          !successText ? (
+                            <div className="w-full p-4">
+                                <Alert
+                                    msg={{
+                                        status: 400,
+                                        msg: "Swap same source station order is not possible!",
+                                        errors: {
+                                            errors: [
+                                                {
+                                                    code: "400",
+                                                    detail: "",
+                                                    attr: "merge",
+                                                },
+                                            ],
+                                            type: "MergeError",
+                                        } as Errors,
+                                    }}
+                                />
+                            </div>
+                        ) : null}
                         <button
                             disabled={
                                 !(to && from) || to === from || successText
@@ -211,41 +275,9 @@ const StationChangeTryOrderModal = ({sourcesStations, sourcesServers, handleClos
                         </button>
                     </div>
                 </form>
-                {successText ? (
-                    <div className="w-full p-4">
-                        <Alert
-                            msg={{
-                                status: 200,
-                                msg: "!Swap successfully done!",
-                            }}
-                        />
-                    </div>
-                ) : to === from &&
-                  to !== undefined &&
-                  from !== undefined &&
-                  !successText ? (
-                    <div className="w-full p-4">
-                        <Alert
-                            msg={{
-                                status: 400,
-                                msg: "Swap same source station order is not possible!",
-                                errors: {
-                                    errors: [
-                                        {
-                                            code: "400",
-                                            detail: "",
-                                            attr: "merge",
-                                        },
-                                    ],
-                                    type: "MergeError",
-                                } as Errors,
-                            }}
-                        />
-                    </div>
-                ) : null}
             </div>
         </Modal>
     );
-}
- 
+};
+
 export default StationChangeTryOrderModal;

@@ -124,6 +124,7 @@ const UsersTable = () => {
             modalTitle="EditUsers"
             addButton={true}
             setModals={setModals}
+            size="1034px"
         >
             <Table
                 titles={body && body.length > 0 ? titles : []}

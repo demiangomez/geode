@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
-import { useAuth, useApi } from "../../hooks/";
-import { mergePeopleService } from "@services";
-import { People, Errors } from "@types";
+
 import { Spinner, Modal, Alert } from "@componentsReact";
-import { ArrowRightIcon } from "@heroicons/react/24/outline";
+
+import { mergePeopleService } from "@services";
+
+import {
+    ArrowRightIcon,
+    MagnifyingGlassIcon,
+} from "@heroicons/react/24/outline";
+
+import { useAuth, useApi } from "@hooks";
+
+import { People, Errors } from "@types";
 
 interface MergePeopleModalProps {
     setStateModal: React.Dispatch<
@@ -16,17 +24,54 @@ interface MergePeopleModalProps {
     body: People[] | undefined;
 }
 
+type ErrorMerge = {
+    type: string;
+    errors: Errors;
+};
+
+type MergeSucces = {
+    statusCode: number;
+    message: string;
+};
+
 const MergePeopleModal = ({
     setStateModal,
     handleCloseModal,
     body,
 }: MergePeopleModalProps) => {
-    const [loading, setLoading] = useState<boolean>(false);
+    const searchPlaceholder = "Search by Name, Last Name...";
 
-    const [successText, setSuccessText] = useState<boolean>(false);
+    const [loading, setLoading] = useState<boolean>(false);
 
     const [people, setPeople] = useState<
         { id: string; name: string }[] | undefined
+    >(undefined);
+
+    const [searchFrom, setSearchFrom] = useState<
+        { id: string; name: string }[] | undefined
+    >(people);
+
+    const [searchTo, setSearchTo] = useState<
+        { id: string; name: string }[] | undefined
+    >(people);
+
+    const searchPeople = (search: string, type: string) => {
+        const valueSearched = people?.filter((p) =>
+            p.name.toLowerCase().includes(search.toLowerCase()),
+        );
+
+        switch (type) {
+            case "From":
+                setSearchFrom(valueSearched);
+                break;
+            case "To":
+                setSearchTo(valueSearched);
+                break;
+        }
+    };
+
+    const [msg, setMsg] = useState<
+        { status: number; msg: string; errors?: Errors } | undefined
     >(undefined);
 
     const [from, setFrom] = useState<string | number | undefined>(undefined);
@@ -38,34 +83,45 @@ const MergePeopleModal = ({
     const getFullName = (name: string, surname: string) => {
         return `${name} ${surname}`;
     };
-
     const findPerson = (id: string | number) => {
-        return body?.find((person) => person && person.id === id);
+        return body?.find((person) => person && person.id === Number(id));
     };
 
     const mergePeople = async () => {
         try {
             setLoading(true);
-            if (from !== undefined && to !== undefined) {
-                if (from && to) {
-                    const fromPerson = findPerson(from);
-                    const toPerson = findPerson(to);
-                    if (fromPerson !== undefined && toPerson !== undefined) {
-                        await mergePeopleService(api, {
-                            from: fromPerson?.id,
-                            to: toPerson?.id,
-                        });
-                    }
+            if (
+                typeof from === "string" &&
+                typeof to === "string" &&
+                from !== to &&
+                findPerson(from) &&
+                findPerson(to)
+            ) {
+                const res = await mergePeopleService<ErrorMerge | MergeSucces>(
+                    api,
+                    {
+                        from: Number(from),
+                        to: Number(to),
+                    },
+                );
+
+                if ("message" in res) {
+                    setMsg({
+                        status: res.statusCode,
+                        msg: res.message,
+                    });
+                } else {
+                    setMsg({
+                        status: 500,
+                        msg: "There was a server error",
+                        errors: res.errors,
+                    });
                 }
             }
         } catch (err) {
             console.error(err);
         } finally {
             setLoading(false);
-            setSuccessText(true);
-            setTimeout(() => {
-                handleCloseModal();
-            }, 2000);
         }
     };
 
@@ -91,6 +147,27 @@ const MergePeopleModal = ({
         }
     }, [body]);
 
+    useEffect(() => {
+        if (Number(from) === Number(to)) {
+            setMsg({
+                status: 400,
+                msg: "¡Merge same person is not possible!",
+                errors: {
+                    errors: [
+                        {
+                            code: "400",
+                            detail: "",
+                            attr: "merge",
+                        },
+                    ],
+                    type: "MergeError",
+                },
+            });
+        } else {
+            setMsg(undefined);
+        }
+    }, [from, to]);
+
     return (
         <Modal
             close={false}
@@ -101,15 +178,7 @@ const MergePeopleModal = ({
             noPadding={true}
         >
             {" "}
-            <div
-                className={
-                    successText
-                        ? "flex flex-col items-start justify-between max-h-[56vh] min-w-[40vw] gap-0"
-                        : from == to && from !== undefined && to !== undefined
-                          ? "flex flex-col items-start justify-between max-h-[56vh] min-w-[40vw] gap-0"
-                          : "flex flex-col items-start justify-start max-h-[56vh] min-w-[40vw] gap-0 pb-4"
-                }
-            >
+            <div>
                 <div className="w-full border-b-2 border-gray-300 pb-6 pl-8 pt-6">
                     <h1 className="text-2xl font-bold">Merge People</h1>
                 </div>
@@ -123,11 +192,34 @@ const MergePeopleModal = ({
                     >
                         <div className="flex justify-start flex-row items-center border-b-2 mt-4 border-gray-300 w-full pb-6">
                             <div className="flex flex-col gap-6 w-full max-w-[500px] pl-6">
-                                <h2 className="text-xl font-semibold">
-                                    Merge From:
-                                </h2>
-                                <div className="max-h-[20vh] overflow-y-auto">
-                                    {people?.map((person) => (
+                                <div className="flex flex-col gap-2 items-center justify-center p-3">
+                                    <h2 className="text-xl font-semibold">
+                                        Merge From:
+                                    </h2>
+                                    <div className="relative w-full">
+                                        <input
+                                            type="text"
+                                            placeholder={searchPlaceholder}
+                                            className="input input-bordered w-full pr-10"
+                                            onChange={(e) =>
+                                                searchPeople(
+                                                    e.target.value,
+                                                    "From",
+                                                )
+                                            }
+                                        />
+                                        <MagnifyingGlassIcon
+                                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                                            width={16}
+                                            height={16}
+                                        />
+                                    </div>
+                                </div>
+                                <div className="h-[20vh] overflow-y-auto">
+                                    {(searchFrom && searchFrom.length > 0
+                                        ? searchFrom
+                                        : people
+                                    )?.map((person) => (
                                         <div
                                             key={person.id}
                                             className="flex flex-row gap-4 p-2 mb-1 hover:bg-gray-200 rounded-md"
@@ -152,11 +244,35 @@ const MergePeopleModal = ({
                                 </div>
                             </div>
                             <div className="flex flex-col gap-6 w-full max-w-[500px] pl-6">
-                                <h2 className="text-xl font-semibold">
-                                    Merge To:
-                                </h2>
-                                <div className="max-h-[20vh] overflow-y-auto">
-                                    {people?.map((person) => (
+                                <div className="flex flex-col gap-2 items-center justify-center p-3">
+                                    <h2 className="text-xl font-semibold">
+                                        Merge To:
+                                    </h2>
+                                    <div className="relative w-full">
+                                        <input
+                                            type="text"
+                                            placeholder={searchPlaceholder}
+                                            className="input input-bordered w-full pr-10"
+                                            onChange={(e) =>
+                                                searchPeople(
+                                                    e.target.value,
+                                                    "To",
+                                                )
+                                            }
+                                        />
+                                        <MagnifyingGlassIcon
+                                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400"
+                                            width={16}
+                                            height={16}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="h-[20vh] overflow-y-auto">
+                                    {(searchTo && searchTo.length > 0
+                                        ? searchTo
+                                        : people
+                                    )?.map((person) => (
                                         <div
                                             key={person.id}
                                             className="flex flex-row justify-start items-center gap-4 p-2 mb-1 hover:bg-gray-200 rounded-md"
@@ -181,10 +297,18 @@ const MergePeopleModal = ({
                                 </div>
                             </div>
                         </div>
-                        <div className="flex justify-center flex-col w-full items-center gap-1">
+                        {msg && (
+                            <div className="w-full px-4">
+                                <Alert msg={msg} />
+                            </div>
+                        )}
+
+                        <div className="flex justify-center flex-col w-full items-center gap-1 mb-4">
                             <button
                                 disabled={
-                                    !(to && from) || to === from || successText
+                                    !(to && from) ||
+                                    to === from ||
+                                    (msg && "message" in msg)
                                 }
                                 className="btn btn-neutral w-32"
                                 type="submit"
@@ -202,38 +326,6 @@ const MergePeopleModal = ({
                         </div>
                     </form>
                 }
-                {successText ? (
-                    <div className="w-full p-4">
-                        <Alert
-                            msg={{
-                                status: 200,
-                                msg: "!Merge successfully done!",
-                            }}
-                        />
-                    </div>
-                ) : to === from &&
-                  to !== undefined &&
-                  from !== undefined &&
-                  !successText ? (
-                    <div className="w-full p-4">
-                        <Alert
-                            msg={{
-                                status: 400,
-                                msg: "¡Merge same person is not possible!",
-                                errors: {
-                                    errors: [
-                                        {
-                                            code: "400",
-                                            detail: "",
-                                            attr: "merge",
-                                        },
-                                    ],
-                                    type: "MergeError",
-                                } as Errors,
-                            }}
-                        />
-                    </div>
-                ) : null}
             </div>
         </Modal>
     );

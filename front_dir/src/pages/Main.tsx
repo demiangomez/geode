@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { LatLngExpression } from "leaflet";
 import { ChevronLeftIcon } from "@heroicons/react/24/outline";
@@ -60,6 +60,8 @@ const MainPage = () => {
     const abortAffectedStationsRef = useRef<AbortController | null>(null);
 
     //---------------------------------------------------------UseState-------------------------------------------------------------
+    const [vectorMagnitude, setVectorMagnitude] = useState<number>(1);
+
     const [forceSyncScrollerMap, setForceSyncScrollerMap] = useState(0);
 
     const [earthQuakeAffectedParams, setEarthQuakeAffectedParams] = useState<
@@ -86,8 +88,6 @@ const MainPage = () => {
     const [earthquakes, setEarthquakes] = useState<
         EarthquakeData[] | undefined
     >(undefined);
-
-    const [loading2, setLoading2] = useState<boolean>(false);
 
     const [station, setStation] = useState<StationData | undefined>(undefined);
 
@@ -188,7 +188,7 @@ const MainPage = () => {
 
     //---------------------------------------------------------Funciones-------------------------------------------------------------
 
-    const getStations = async () => {
+    const getStations = useCallback(async () => {
         setSpinner(true);
 
         // Cancel the previous request if it exists
@@ -233,9 +233,9 @@ const MainPage = () => {
         } finally {
             setSpinner(false);
         }
-    };
+    }, [api, params, locationState]);
 
-    const getInitialStations = async () => {
+    const getInitialStations = useCallback(async () => {
         try {
             setLoading(true);
             const result = await getStationsService<StationServiceData>(
@@ -250,9 +250,9 @@ const MainPage = () => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [api, params]);
 
-    const getAffectedStations = async () => {
+    const getAffectedStations = useCallback(async () => {
         setEarthquakeSpinner(true);
 
         if (abortAffectedStationsRef.current) {
@@ -289,9 +289,9 @@ const MainPage = () => {
                 setEarthquakeSpinner(false);
             }
         }
-    };
+    }, [api, earthQuakeAffectedParams]);
 
-    const getEarthquakes = async () => {
+    const getEarthquakes = useCallback(async () => {
         setEarthquakeSpinner(true);
 
         try {
@@ -315,7 +315,7 @@ const MainPage = () => {
         } finally {
             !chosenEarthquake ? setEarthquakeSpinner(false) : null;
         }
-    };
+    }, [api, earthQuakeParams, formstate, chosenEarthquake]);
 
     const isEmpty = (s: string | undefined) => {
         return s === "" || s === null || s === undefined;
@@ -458,15 +458,20 @@ const MainPage = () => {
             chosenEarthquake?.api_id !== earthquake.api_id ||
             chosenEarthquake === undefined
         ) {
+            const storedEarthquakeChosen = JSON.parse(
+                localStorage.getItem("earthquakeChosen") ?? "{}",
+            );
             setEarthQuakeAffectedParams(earthquake.api_id);
 
             setChosenEarthquake(earthquake);
+            setToggleEarthquakeMask(storedEarthquakeChosen.ui_toggle_mask);
         } else if (chosenEarthquake?.api_id === earthquake.api_id) {
             setChosenEarthquake(undefined);
 
             localStorage.removeItem("earthquakeChosen");
 
             setEarthQuakeAffectedParams(undefined);
+            setToggleEarthquakeMask(false);
         }
     };
 
@@ -507,9 +512,29 @@ const MainPage = () => {
     useEffect(() => {
         if (chosenEarthquake !== undefined) {
             setEarthQuakeAffectedParams(chosenEarthquake.api_id);
-            setEarthquakeChosenStorage(JSON.stringify(chosenEarthquake));
+            try {
+                const stored = localStorage.getItem("earthquakeChosen");
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed?.api_id === chosenEarthquake.api_id) {
+                        const merged = { ...chosenEarthquake, ...parsed };
+                        setEarthquakeChosenStorage(JSON.stringify(merged));
+                    } else {
+                        setEarthquakeChosenStorage(
+                            JSON.stringify(chosenEarthquake),
+                        );
+                    }
+                } else {
+                    setEarthquakeChosenStorage(
+                        JSON.stringify(chosenEarthquake),
+                    );
+                }
+            } catch (err) {
+                console.error("Failed to update earthquakeChosen storage", err);
+                setEarthquakeChosenStorage(JSON.stringify(chosenEarthquake));
+            }
             if (mapState) {
-                setPosToFly([chosenEarthquake.lat, chosenEarthquake.lon]);
+                // setPosToFly([chosenEarthquake.lat, chosenEarthquake.lon]);
             }
         }
         if (chosenEarthquake === undefined && mapState === false) {
@@ -521,7 +546,7 @@ const MainPage = () => {
     }, [chosenEarthquake]);
 
     useEffect(() => {
-        getAffectedStations();
+        earthQuakeAffectedParams && getAffectedStations();
     }, [earthQuakeAffectedParams]);
 
     useEffect(() => {
@@ -640,19 +665,21 @@ const MainPage = () => {
 
     useEffect(() => {
         setMapStateStorage(mapState.toString());
-        if (!mapState && markersByBounds && markersByBounds.length > 0) {
-            setLoading2(true);
 
-            setTimeout(() => {
-                setLoading2(false);
-            }, 2900);
-        }
+        //FAL 190825- ACA HABIA UN LOADING PARA ESPERAR LOS ZOOMS EN TIMEOUTS QUE ESTABA EN EL MAP
+
+        // if (!mapState && markersByBounds && markersByBounds.length > 0) {
+        //     setLoading2(true);
+
+        //     setTimeout(() => {
+        //         setLoading2(false);
+        //     }, 2900);
+        // }
     }, [mapState]);
 
     //---------------------------------------------------------UseEscape-------------------------------------------------------------
 
     useEscape(exitEarthquakes);
-
     //---------------------------------------------------------Return-------------------------------------------------------------
 
     return (
@@ -673,17 +700,6 @@ const MainPage = () => {
                 />
             ) : (
                 <>
-                    {loading2 && (
-                        <MapSkeleton
-                            styles={{
-                                backgroundColor: "rgb(202, 202, 202)",
-                                zIndex: 1000000000000000,
-                                width: "100vw",
-                                position: "absolute",
-                                height: "92vh",
-                            }}
-                        />
-                    )}
                     <MainScroller
                         altData={{
                             dataFiltered: stationsByFilters(stations || []),
@@ -714,6 +730,8 @@ const MainPage = () => {
                         earthquakeAffectedStations={earthQuakeAffectedStations}
                         setToggleEarthquakeMask={setToggleEarthquakeMask}
                         setToggleCoseismicVector={setToggleCoseismicVector}
+                        vectorMagnitude={vectorMagnitude}
+                        setVectorMagnitude={setVectorMagnitude}
                     />
                     {earthquakeModal &&
                         earthquakeModal.title === "earthquake" && (
@@ -806,6 +824,8 @@ const MainPage = () => {
                                 toggleStateEarthquakeMask
                             }
                             toggleCoseismicVector={toggleCoseismicVector}
+                            vectorMagnitude={vectorMagnitude}
+                            setVectorMagnitude={setVectorMagnitude}
                         />
 
                         {list && (

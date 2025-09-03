@@ -1,6 +1,7 @@
 export type UserState = {
     status: "unAuthorized" | "init";
     method: string;
+    msg?: string;
 };
 
 export const initialState: UserState = {
@@ -12,6 +13,7 @@ export type Action =
     | {
           type: "UNAUTHORIZE";
           method: string;
+          msg: string;
       }
     | {
           type: "INIT";
@@ -34,6 +36,7 @@ export const useUserInfo = (state: UserState, action: Action): UserState => {
                 ...state,
                 status: "unAuthorized",
                 method: action.method,
+                msg: action.msg,
             };
         }
         default: {

@@ -22,7 +22,9 @@ import {
 
 interface Props {
     campaign: CampaignsData | undefined;
-    setCampaign: React.Dispatch<React.SetStateAction<CampaignsData | undefined>>;
+    setCampaign: React.Dispatch<
+        React.SetStateAction<CampaignsData | undefined>
+    >;
     setStateModal: React.Dispatch<
         React.SetStateAction<
             | { show: boolean; title: string; type: "add" | "edit" | "none" }
@@ -31,7 +33,11 @@ interface Props {
     >;
 }
 
-const StationSelectModal = ({ campaign, setCampaign ,setStateModal }: Props) => {
+const StationSelectModal = ({
+    campaign,
+    setCampaign,
+    setStateModal,
+}: Props) => {
     const { token, logout } = useAuth();
     const api = useApi(token, logout);
 
@@ -121,10 +127,10 @@ const StationSelectModal = ({ campaign, setCampaign ,setStateModal }: Props) => 
     const inputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-        if(showMenu){
+        if (showMenu) {
             inputRef.current?.focus();
         }
-    },[showMenu])
+    }, [showMenu]);
 
     return (
         <Modal

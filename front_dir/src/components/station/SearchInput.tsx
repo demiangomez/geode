@@ -72,7 +72,7 @@ const SearchInput = ({ stations, params, setParams }: SearchInputProps) => {
         getNetworks();
 
         const handleClickOutside = (event: MouseEvent) => {
-            const searchInput = document.getElementById('search-station');
+            const searchInput = document.getElementById("search-station");
             if (
                 dropdownRef.current &&
                 !dropdownRef.current.contains(event.target as Node) &&
@@ -88,12 +88,12 @@ const SearchInput = ({ stations, params, setParams }: SearchInputProps) => {
             }
         };
 
-        const searchInput = document.getElementById('search-station');
-        searchInput?.addEventListener('click', handleSearchInputClick);
+        const searchInput = document.getElementById("search-station");
+        searchInput?.addEventListener("click", handleSearchInputClick);
         document.addEventListener("mousedown", handleClickOutside);
 
         return () => {
-            searchInput?.removeEventListener('click', handleSearchInputClick);
+            searchInput?.removeEventListener("click", handleSearchInputClick);
             document.removeEventListener("mousedown", handleClickOutside);
         };
     }, [params.station_code]);
@@ -146,7 +146,7 @@ const SearchInput = ({ stations, params, setParams }: SearchInputProps) => {
                 );
 
                 // return;
-            } 
+            }
         }
     };
 
@@ -179,7 +179,6 @@ const SearchInput = ({ stations, params, setParams }: SearchInputProps) => {
                 ...params,
                 station_code: searchInput,
             });
-
             const filteredStations =
                 searchInput.length !== 0
                     ? stations?.filter((station) =>

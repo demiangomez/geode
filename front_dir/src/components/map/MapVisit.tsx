@@ -148,13 +148,13 @@ const MapVisit = ({ base64Data, station, statuses, types }: MapProps) => {
         <div className="z-10 pt-6 flex justify-center">
             <MapContainer
                 {...mapProps}
-                minZoom={1}
+                minZoom={3}
                 className="w-[55vw] h-[30vh] xl:w-[40vw] lg:w-[30vw] md:w-[30vw] sm:w-[20vw]"
             >
                 <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    minZoom={1}
+                    minZoom={3}
                 />
                 <Marker
                     icon={chosenIcon(station as StationData, types, statuses)}

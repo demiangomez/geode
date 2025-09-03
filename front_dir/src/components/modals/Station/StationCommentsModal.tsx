@@ -86,7 +86,7 @@ const StationCommentsModal = ({
                 </li>
             ) : (
                 <div className="text-center text-neutral text-xl font-bold w-full rounded-md bg-neutral-content p-6 mb-2">
-                    There is no Comments
+                    There are no Comments
                 </div>
             )}
 
@@ -125,7 +125,7 @@ const StationCommentsModal = ({
                 })
             ) : (
                 <div className="text-center text-neutral text-xl font-bold w-full rounded-md bg-neutral-content p-6 mb-2">
-                    There is no Comments
+                    There are no Comments
                 </div>
             )}
         </Modal>

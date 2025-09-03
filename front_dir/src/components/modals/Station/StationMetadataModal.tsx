@@ -436,6 +436,71 @@ const StationMetadataModal = ({
         }
     };
 
+    function lla2ecef(llaArr: number[]): { x: number; y: number; z: number } {
+        const [lat, lon, alt] = llaArr;
+
+        // Convertir a radianes
+        const rad_lat = (lat * Math.PI) / 180;
+        const rad_lon = (lon * Math.PI) / 180;
+
+        // Parámetros WGS84
+        const a = 6378137.0;
+        const finv = 298.257223563;
+        const f = 1 / finv;
+        const e2 = 1 - (1 - f) * (1 - f);
+
+        const v = a / Math.sqrt(1 - e2 * Math.pow(Math.sin(rad_lat), 2));
+
+        const x = (v + alt) * Math.cos(rad_lat) * Math.cos(rad_lon);
+        const y = (v + alt) * Math.cos(rad_lat) * Math.sin(rad_lon);
+        const z = (v * (1 - e2) + alt) * Math.sin(rad_lat);
+
+        // Redondear a 8 decimales
+        return {
+            x: parseFloat(x.toFixed(3)),
+            y: parseFloat(y.toFixed(3)),
+            z: parseFloat(z.toFixed(3)),
+        };
+    }
+
+    function ecef2lla(ecefArr: number[]): {
+        lat: number;
+        lon: number;
+        alt: number;
+    } {
+        const [x, y, z] = ecefArr;
+
+        // Parámetros WGS84
+        const a = 6378137; // Semieje mayor (m)
+        const e = 8.1819190842622e-2; // Excentricidad
+
+        const asq = Math.pow(a, 2);
+        const esq = Math.pow(e, 2);
+
+        const b = Math.sqrt(asq * (1 - esq));
+        const bsq = Math.pow(b, 2);
+
+        const ep = Math.sqrt((asq - bsq) / bsq);
+        const p = Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2));
+        const th = Math.atan2(a * z, b * p);
+
+        const lon = Math.atan2(y, x);
+        const lat = Math.atan2(
+            z + Math.pow(ep, 2) * b * Math.pow(Math.sin(th), 3),
+            p - esq * a * Math.pow(Math.cos(th), 3),
+        );
+
+        const N = a / Math.sqrt(1 - esq * Math.pow(Math.sin(lat), 2));
+        const alt = p / Math.cos(lat) - N;
+
+        // Convertir a grados y redondear a 8 decimales
+        return {
+            lat: parseFloat(((lat * 180) / Math.PI).toFixed(8)),
+            lon: parseFloat(((lon * 180) / Math.PI).toFixed(8)),
+            alt: parseFloat(alt.toFixed(3)),
+        };
+    }
+
     useEffect(() => {
         if (stationMeta && station) {
             getStationInfo();
@@ -548,7 +613,6 @@ const StationMetadataModal = ({
     }, [stationType, monumentType, stationStatus, stationData, stationMeta]);
 
     const { formState, dispatch } = useFormReducer(formattedData);
-
     useEffect(() => {
         dispatch({
             type: "set",
@@ -581,7 +645,9 @@ const StationMetadataModal = ({
     }, [stationMeta, monumentType, formState.stationMeta.monument_type]);
 
     const handleChange = (
-        e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+        e:
+            | React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+            | { target: { name: string; value: string } },
     ) => {
         const { value, name } = e.target;
         dispatch({
@@ -591,6 +657,119 @@ const StationMetadataModal = ({
                 inputValue: value,
             },
         });
+
+        //Conversion de lat, lon, heigth a x,y,z
+        if (
+            name === "station.lat" ||
+            name === "station.lon" ||
+            name === "station.height"
+        ) {
+            let lat =
+                formState.station.lat === ""
+                    ? NaN
+                    : Number(formState.station.lat);
+            let lon =
+                formState.station.lon === ""
+                    ? NaN
+                    : Number(formState.station.lon);
+            let height =
+                formState.station.height === ""
+                    ? NaN
+                    : Number(formState.station.height);
+
+            //Si alguno es vacio setealo con Nan
+            switch (name) {
+                case "station.lat":
+                    lat = value !== "" ? Number(value) : NaN;
+                    break;
+                case "station.lon":
+                    lon = value !== "" ? Number(value) : NaN;
+                    break;
+                case "station.height":
+                    height = value !== "" ? Number(value) : NaN;
+                    break;
+            }
+
+            const { x, y, z } = lla2ecef([lat, lon, height]);
+            dispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "station.auto_x",
+                    inputValue: x.toString(),
+                },
+            });
+            dispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "station.auto_y",
+                    inputValue: y.toString(),
+                },
+            });
+            dispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "station.auto_z",
+                    inputValue: z.toString(),
+                },
+            });
+        }
+
+        //Conversion de x,y,z a lat, lon, heigth
+        if (
+            name === "station.auto_x" ||
+            name === "station.auto_y" ||
+            name === "station.auto_z"
+        ) {
+            let x =
+                formState.station.auto_x === ""
+                    ? NaN
+                    : Number(formState.station.auto_x);
+            let y =
+                formState.station.auto_y === ""
+                    ? NaN
+                    : Number(formState.station.auto_y);
+            let z =
+                formState.station.auto_z === ""
+                    ? NaN
+                    : Number(formState.station.auto_z);
+
+            //Si alguno es vacio setealo con Nan
+            switch (name) {
+                case "station.auto_x":
+                    x = value !== "" ? Number(value) : NaN;
+                    break;
+                case "station.auto_y":
+                    y = value !== "" ? Number(value) : NaN;
+                    break;
+                case "station.auto_z":
+                    z = value !== "" ? Number(value) : NaN;
+                    break;
+            }
+
+            const { lat, lon, alt } = ecef2lla([x, y, z]);
+            dispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "station.lat",
+                    inputValue: lat.toString(),
+                },
+            });
+            dispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "station.lon",
+                    inputValue: lon.toString(),
+                },
+            });
+            dispatch({
+                type: "change_value",
+                payload: {
+                    inputName: "station.height",
+                    inputValue: alt.toString(),
+                },
+            });
+        }
+
         if (name === "stationMeta.monument_type") {
             const match = monumentType?.filter((mt) =>
                 mt.name.toLowerCase().includes(value.toLowerCase()),
@@ -746,6 +925,8 @@ const StationMetadataModal = ({
         "Receiver Version",
         "Radome Code",
     ];
+
+    const inputsWithSelectKey = ["station_type", "monument_type", "status"];
 
     const inputRefType = useRef<HTMLInputElement>(null);
 
@@ -905,6 +1086,24 @@ const StationMetadataModal = ({
                                                                                 e,
                                                                             )
                                                                         }
+                                                                        onClick={() => {
+                                                                            if (
+                                                                                inputsWithSelectKey.includes(
+                                                                                    key,
+                                                                                )
+                                                                            ) {
+                                                                                setShowMenu(
+                                                                                    {
+                                                                                        type: key,
+                                                                                        show: true,
+                                                                                    },
+                                                                                );
+                                                                            } else {
+                                                                                setShowMenu(
+                                                                                    undefined,
+                                                                                );
+                                                                            }
+                                                                        }}
                                                                     />
                                                                     {errorBadge ? (
                                                                         <span className="badge badge-error self-start -mt-2">
@@ -930,6 +1129,21 @@ const StationMetadataModal = ({
                                                                         <MenuButton
                                                                             setShowMenu={
                                                                                 setShowMenu
+                                                                            }
+                                                                            onMenuClick={() =>
+                                                                                handleChange(
+                                                                                    {
+                                                                                        target: {
+                                                                                            name:
+                                                                                                "stationMeta." +
+                                                                                                key,
+                                                                                            value: formState
+                                                                                                .stationMeta[
+                                                                                                key as keyof typeof formState.stationMeta
+                                                                                            ],
+                                                                                        },
+                                                                                    },
+                                                                                )
                                                                             }
                                                                             showMenu={
                                                                                 showMenu

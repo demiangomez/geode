@@ -7,6 +7,7 @@ import {
     MenuContent,
     Modal,
     Spinner,
+    StationPeopleModal,
 } from "@componentsReact";
 
 import { useApi, useAuth, useFormReducer } from "@hooks";
@@ -33,7 +34,11 @@ import {
     postStationVisitService,
 } from "@services";
 
-import { PlusCircleIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import {
+    PlusCircleIcon,
+    UserPlusIcon,
+    XMarkIcon,
+} from "@heroicons/react/24/outline";
 import QuillText from "@components/map/QuillText";
 
 interface Props {
@@ -117,6 +122,18 @@ const AddVisitModal = ({
     const deleteUserSelectById = (id: number) => {
         const result = peopleSelected.filter((p) => p.id !== id);
         setPeopleSelected(result);
+    };
+
+    const inputRefCampaign = useRef<HTMLInputElement>(null);
+
+    const inputRefPeople = useRef<HTMLInputElement>(null);
+
+    const selectRef = (key: string) => {
+        return key === "campaign"
+            ? inputRefCampaign
+            : key === "people"
+              ? inputRefPeople
+              : null;
     };
 
     const formattedState = {
@@ -347,13 +364,6 @@ const AddVisitModal = ({
         getPeople();
     }, []);
 
-    useEffect(() => {
-        dispatch({
-            type: "set",
-            payload: formattedState,
-        });
-    }, [station, campaignB]);
-
     const handleCloseModal = () => {
         reFetch();
     };
@@ -364,20 +374,15 @@ const AddVisitModal = ({
     };
 
     useEffect(() => {
+        dispatch({
+            type: "set",
+            payload: formattedState,
+        });
+    }, [station, campaignB]);
+
+    useEffect(() => {
         modals?.show && showModal(modals.title);
     }, [modals]);
-
-    const inputRefCampaign = useRef<HTMLInputElement>(null);
-
-    const inputRefPeople = useRef<HTMLInputElement>(null);
-
-    const selectRef = (key: string) => {
-        return key === "campaign"
-            ? inputRefCampaign
-            : key === "people"
-              ? inputRefPeople
-              : null;
-    };
 
     useEffect(() => {
         if (showMenu) {
@@ -415,7 +420,7 @@ const AddVisitModal = ({
                 setPeopleSelected(selectedPeople);
             }
         }
-    }, [formState.campaign]);
+    }, [formState, campaigns, people]);
 
     return (
         <Modal
@@ -619,6 +624,28 @@ const AddVisitModal = ({
                                                         showMenu={showMenu}
                                                         typeKey={key}
                                                     />
+                                                )}
+
+                                                {key === "people" && (
+                                                    <button
+                                                        className="btn btn-ghost btn-circle tooltip tooltip-bottom"
+                                                        data-tip="Create People"
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setModals &&
+                                                                setModals({
+                                                                    show: true,
+                                                                    title: "EditPerson",
+                                                                    type: "add",
+                                                                });
+                                                        }}
+                                                    >
+                                                        <UserPlusIcon
+                                                            strokeWidth={1.5}
+                                                            stroke="currentColor"
+                                                            className="w-8 h-8 justify-self-center"
+                                                        />
+                                                    </button>
                                                 )}
                                             </label>
                                         </div>
@@ -1026,6 +1053,16 @@ const AddVisitModal = ({
                             ? getVisitImagesById()
                             : getFiles();
                     }}
+                />
+            )}
+            {modals && modals?.title === "EditPerson" && (
+                <StationPeopleModal
+                    Person={undefined}
+                    modalType={modals.type}
+                    setStateModal={setModals}
+                    // setPerson={setPerson}
+                    people={people}
+                    reFetch={() => getPeople()} // En este caso closeModal es el fetch de visits que hace la pagina.
                 />
             )}
         </Modal>

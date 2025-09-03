@@ -11,7 +11,7 @@ import {
     ZoomControl,
 } from "react-leaflet";
 
-import { PopupChildren, Spinner, VisitsScroller } from "@componentsReact";
+import { PopupChildren, Spinner, RoutesScroller } from "@componentsReact";
 import MarkerClusterGroup from "react-leaflet-markercluster";
 
 import * as toGeoJSON from "@tmcw/togeojson";
@@ -41,7 +41,7 @@ interface VisitsStates {
     color: string;
 }
 
-interface VisitScrollerProps {
+interface RoutesScrollerProps {
     visits: StationVisitsData[];
     changeKml: VisitsStates[];
     changeMeta: boolean;
@@ -51,7 +51,7 @@ interface VisitScrollerProps {
 }
 
 interface MapProps {
-    visitScrollerProps: VisitScrollerProps;
+    routesScrollerProps: RoutesScrollerProps;
     base64Data:
         | {
               visits: StationVisitsData[];
@@ -127,9 +127,14 @@ const LoadKmzFromBase64 = ({
                     });
 
                     if (geoJsonLayer.getBounds().isValid()) {
-                        map.fitBounds(geoJsonLayer.getBounds());
+                        // map.fitBounds(geoJsonLayer.getBounds()); Causa de bug #228
                         geoJsonLayer.setStyle({ color });
                         geoJsonLayer.addTo(map);
+                        // Ajusta el zoom y el centro para mostrar el gráfico
+                        map.fitBounds(geoJsonLayer.getBounds(), {
+                            padding: [50, 50],
+                            maxZoom: 16,
+                        });
                     }
                 };
 
@@ -155,124 +160,8 @@ const LoadKmzFromBase64 = ({
     return null;
 };
 
-const MapEvents = ({
-    setIsMapReady,
-}: {
-    setIsMapReady: (ready: boolean) => void;
-}) => {
-    const map = useMap();
-    const tilesLoading = useRef(new Set<string>());
-
-    useEffect(() => {
-        const handleTileEvent = (e: any, isLoadStart: boolean) => {
-            if (isLoadStart) {
-                tilesLoading.current.add(e.tile.src);
-                setIsMapReady(false);
-            } else {
-                tilesLoading.current.delete(e.tile.src);
-                if (tilesLoading.current.size === 0) {
-                    setIsMapReady(true);
-                }
-            }
-        };
-
-        const handleZoomStart = () => {
-            setIsMapReady(false);
-            tilesLoading.current.clear();
-        };
-
-        map.eachLayer((layer) => {
-            if (layer instanceof L.TileLayer) {
-                layer.on("tileloadstart", (e) => handleTileEvent(e, true));
-                layer.on("tileload", (e) => handleTileEvent(e, false));
-            }
-        });
-
-        map.on("zoomstart", handleZoomStart);
-
-        return () => {
-            map.eachLayer((layer) => {
-                if (layer instanceof L.TileLayer) {
-                    layer.off("tileloadstart");
-                    layer.off("tileload");
-                }
-            });
-            map.off("zoomstart");
-        };
-    }, [map, setIsMapReady]);
-
-    return null;
-};
-
-const NearbyStationsControl = ({
-    showNearbyStations,
-    nearbyRadius,
-    setShowNearbyStations,
-    setNearbyRadius,
-}: {
-    showNearbyStations: boolean;
-    nearbyRadius: number;
-    setShowNearbyStations: React.Dispatch<React.SetStateAction<boolean>>;
-    setNearbyRadius: React.Dispatch<React.SetStateAction<number>>;
-}) => {
-    const map = useMap();
-
-    return (
-        <div className="leaflet-top leaflet-left" style={{ zIndex: 1000 }}>
-            <div className="leaflet-control leaflet-bar bg-white p-3 rounded-md shadow-lg mt-2.5 ml-2.5 min-w-[240px]">
-                <div className="flex items-center gap-2 mb-3">
-                    <input
-                        type="checkbox"
-                        id="nearby-stations-checkbox"
-                        checked={showNearbyStations}
-                        onChange={(e) =>
-                            setShowNearbyStations(e.target.checked)
-                        }
-                        className="checkbox checkbox-sm"
-                    />
-                    <label
-                        htmlFor="nearby-stations-checkbox"
-                        className="text-sm font-semibold cursor-pointer text-gray-700 select-none"
-                    >
-                        Show Nearby Stations
-                    </label>
-                </div>
-
-                {showNearbyStations && (
-                    <div
-                        className="space-y-2"
-                        onMouseEnter={() => {
-                            map?.dragging.disable();
-                            map?.scrollWheelZoom.disable();
-                        }}
-                        onMouseLeave={() => {
-                            map?.dragging.enable();
-                            map?.scrollWheelZoom.enable();
-                        }}
-                    >
-                        <label className="block text-sm font-medium text-gray-700">
-                            Radius: {nearbyRadius} km
-                        </label>
-                        <input
-                            type="range"
-                            className="range range-xs range-neutral w-full"
-                            value={nearbyRadius}
-                            onChange={(e) =>
-                                setNearbyRadius(parseInt(e.target.value))
-                            }
-                            step="10"
-                            min="100"
-                            max="200"
-                        />
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
-
 const MapStation = ({
-    visitScrollerProps,
+    routesScrollerProps,
     base64Data,
     loadPdf,
     loadedPdfData,
@@ -321,12 +210,12 @@ const MapStation = ({
     // Helper Functions
     const getColor = useCallback(
         (visit: StationVisitsData) => {
-            const visitColor = visitScrollerProps.changeKml.find(
+            const visitColor = routesScrollerProps.changeKml.find(
                 (visitBool) => visitBool.visitId === visit.id,
             );
             return visitColor?.color || "black";
         },
-        [visitScrollerProps.changeKml],
+        [routesScrollerProps.changeKml],
     );
 
     const captureImage = useCallback(
@@ -383,56 +272,159 @@ const MapStation = ({
     );
 
     const findOverlappedNearbyStations = useCallback(() => {
-        if (!nearbyStations || nearbyStations.length === 0) return;
+        if (!nearbyStations || nearbyStations.length === 0) {
+            setOverlappedNearbyStations([]);
+            return;
+        }
 
+        // Usar spatial binning como en el mapa principal para eficiencia
+        const spatialBins: Record<string, StationData[]> = {};
+        const binSize = 0.01;
+
+        // Asignar estaciones a bins espaciales
+        nearbyStations.forEach((station) => {
+            if (!station.lat || !station.lon) return;
+
+            const binX = Math.floor(station.lat / binSize);
+            const binY = Math.floor(station.lon / binSize);
+            const binKey = `${binX}:${binY}`;
+
+            if (!spatialBins[binKey]) spatialBins[binKey] = [];
+            spatialBins[binKey].push(station);
+        });
+
+        // Procesar cada bin y bins vecinos
         const overlappingPairs: StationData[] = [];
-        for (let i = 0; i < nearbyStations.length; i++) {
-            for (let j = i + 1; j < nearbyStations.length; j++) {
-                if (
-                    areStationsOverlapped(nearbyStations[i], nearbyStations[j])
-                ) {
-                    overlappingPairs.push(nearbyStations[i], nearbyStations[j]);
+
+        Object.entries(spatialBins).forEach(([binKey, binStations]) => {
+            // Verificar estaciones dentro del mismo bin
+            for (let i = 0; i < binStations.length; i++) {
+                for (let j = i + 1; j < binStations.length; j++) {
+                    if (areStationsOverlapped(binStations[i], binStations[j])) {
+                        overlappingPairs.push(binStations[i], binStations[j]);
+                    }
                 }
             }
-        }
-        setOverlappedNearbyStations(
-            overlappingPairs.length > 0 ? overlappingPairs : [],
-        );
+
+            // Obtener coordenadas del bin
+            const [binX, binY] = binKey.split(":").map(Number);
+
+            // Verificar bins vecinos (8-conectados)
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                    if (dx === 0 && dy === 0) continue; // Saltar bin actual
+
+                    const neighborKey = `${binX + dx}:${binY + dy}`;
+                    const neighborBin = spatialBins[neighborKey];
+
+                    if (neighborBin) {
+                        // Verificar estaciones entre bin actual y bin vecino
+                        for (const stationA of binStations) {
+                            for (const stationB of neighborBin) {
+                                if (areStationsOverlapped(stationA, stationB)) {
+                                    overlappingPairs.push(stationA, stationB);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        //  DEBUGGING
+        // console.log(
+        //     "Overlapped nearby stations found:",
+        //     overlappingPairs.length,
+        //     "out of",
+        //     nearbyStations.length,
+        // );
+
+        setOverlappedNearbyStations(overlappingPairs);
     }, [nearbyStations, areStationsOverlapped]);
 
     const createNearbyClusters = useCallback(() => {
-        if (!overlappedNearbyStations || overlappedNearbyStations.length === 0)
+        if (
+            !overlappedNearbyStations ||
+            overlappedNearbyStations.length === 0
+        ) {
+            setOverlappedNearbyClusters([]);
             return;
-
-        const clusters: StationData[][] = [];
-        const processed = new Set<number>();
-
-        for (let i = 0; i < overlappedNearbyStations.length; i++) {
-            if (processed.has(i)) continue;
-
-            const cluster: StationData[] = [overlappedNearbyStations[i]];
-            processed.add(i);
-
-            for (let j = i + 1; j < overlappedNearbyStations.length; j++) {
-                if (processed.has(j)) continue;
-                if (
-                    areStationsOverlapped(
-                        overlappedNearbyStations[i],
-                        overlappedNearbyStations[j],
-                    )
-                ) {
-                    cluster.push(overlappedNearbyStations[j]);
-                    processed.add(j);
-                }
-            }
-
-            if (cluster.length > 1) {
-                clusters.push(cluster);
-            }
         }
 
+        // // Usar el mismo algoritmo que en Map.tsx
+        // const stationsWithOverlapArray = [
+        //     ...new Set(
+        //         overlappedNearbyStations.map((station) => station.api_id),
+        //     ),
+        // ]
+        //     .map((id) =>
+        //         overlappedNearbyStations.find(
+        //             (station) => station.api_id === id,
+        //         ),
+        //     )
+        //     .filter((station) => station !== undefined);
+
+        let auxExistsSimilar = false;
+        const clusters: StationData[][] = [];
+
+        for (let i = 0; i < overlappedNearbyStations.length; i += 1) {
+            auxExistsSimilar = false;
+            const auxClusterIndexes: number[] = overlappedNearbyStations
+                .map((station, index) =>
+                    station.api_id === overlappedNearbyStations[i].api_id
+                        ? index
+                        : -1,
+                )
+                .filter((index) => index !== -1);
+
+            const auxCluster: StationData[] = auxClusterIndexes.map((index) =>
+                index % 2 === 0
+                    ? overlappedNearbyStations[index + 1]
+                    : overlappedNearbyStations[index - 1],
+            );
+            auxCluster.push(overlappedNearbyStations[i]);
+
+            if (clusters.length > 0) {
+                for (let j = 0; j < clusters.length; j++) {
+                    const existSimilar = clusters[j].some((station) =>
+                        auxCluster.some(
+                            (auxStation) =>
+                                station.api_id === auxStation.api_id,
+                        ),
+                    );
+                    if (existSimilar) {
+                        auxExistsSimilar = true;
+                        const similarClusterDifferences = auxCluster.filter(
+                            (auxStation) =>
+                                !clusters[j].some(
+                                    (station) =>
+                                        station.api_id === auxStation.api_id,
+                                ),
+                        );
+                        if (similarClusterDifferences.length > 0) {
+                            clusters[j].push(...similarClusterDifferences);
+                        }
+                        break;
+                    }
+                }
+                if (auxExistsSimilar === false) {
+                    clusters.push(auxCluster);
+                }
+                continue;
+            }
+            clusters.push(auxCluster);
+        }
+
+        //  DEBUGGING
+        // console.log(
+        //     "Clusters created with main algorithm:",
+        //     clusters.length,
+        //     "Total stations in clusters:",
+        //     clusters.reduce((sum, cluster) => sum + cluster.length, 0),
+        // );
+
         setOverlappedNearbyClusters(clusters);
-    }, [overlappedNearbyStations, areStationsOverlapped]);
+    }, [overlappedNearbyStations]);
 
     const fetchNearbyStations = useCallback(async () => {
         if (!station || !showNearbyStations) {
@@ -516,6 +508,124 @@ const MapStation = ({
         [],
     );
 
+    // Childrens
+
+    const MapEvents = ({
+        setIsMapReady,
+    }: {
+        setIsMapReady: (ready: boolean) => void;
+    }) => {
+        const map = useMap();
+        const tilesLoading = useRef(new Set<string>());
+
+        useEffect(() => {
+            const handleTileEvent = (e: any, isLoadStart: boolean) => {
+                if (isLoadStart) {
+                    tilesLoading.current.add(e.tile.src);
+                    setIsMapReady(false);
+                } else {
+                    tilesLoading.current.delete(e.tile.src);
+                    if (tilesLoading.current.size === 0) {
+                        setIsMapReady(true);
+                    }
+                }
+            };
+
+            const handleZoomStart = () => {
+                setIsMapReady(false);
+                tilesLoading.current.clear();
+            };
+
+            map.eachLayer((layer) => {
+                if (layer instanceof L.TileLayer) {
+                    layer.on("tileloadstart", (e) => handleTileEvent(e, true));
+                    layer.on("tileload", (e) => handleTileEvent(e, false));
+                }
+            });
+
+            map.on("zoomstart", handleZoomStart);
+
+            return () => {
+                map.eachLayer((layer) => {
+                    if (layer instanceof L.TileLayer) {
+                        layer.off("tileloadstart");
+                        layer.off("tileload");
+                    }
+                });
+                map.off("zoomstart");
+            };
+        }, [map, setIsMapReady]);
+
+        return null;
+    };
+
+    const NearbyStationsControl = ({
+        showNearbyStations,
+        nearbyRadius,
+        setShowNearbyStations,
+        setNearbyRadius,
+    }: {
+        showNearbyStations: boolean;
+        nearbyRadius: number;
+        setShowNearbyStations: React.Dispatch<React.SetStateAction<boolean>>;
+        setNearbyRadius: React.Dispatch<React.SetStateAction<number>>;
+    }) => {
+        const map = useMap();
+
+        return (
+            <div className="leaflet-top leaflet-left" style={{ zIndex: 1000 }}>
+                <div className="leaflet-control leaflet-bar bg-white p-3 rounded-md shadow-lg mt-2.5 ml-2.5 min-w-[200px]">
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            id="nearby-stations-checkbox"
+                            checked={showNearbyStations}
+                            onChange={(e) =>
+                                setShowNearbyStations(e.target.checked)
+                            }
+                            className="checkbox checkbox-sm"
+                        />
+                        <label
+                            htmlFor="nearby-stations-checkbox"
+                            className="text-sm font-semibold cursor-pointer text-gray-700 select-none"
+                        >
+                            Show Nearby Stations
+                        </label>
+                    </div>
+
+                    {showNearbyStations && (
+                        <div
+                            className="space-y-2"
+                            onMouseEnter={() => {
+                                map?.dragging.disable();
+                                map?.scrollWheelZoom.disable();
+                            }}
+                            onMouseLeave={() => {
+                                map?.dragging.enable();
+                                map?.scrollWheelZoom.enable();
+                            }}
+                        >
+                            <label className="block text-sm font-medium text-gray-700 mt-2">
+                                Radius: {nearbyRadius} km
+                            </label>
+                            <input
+                                type="range"
+                                className="range range-xs range-neutral w-full"
+                                value={nearbyRadius}
+                                onChange={(e) =>
+                                    setNearbyRadius(parseInt(e.target.value))
+                                }
+                                step="10"
+                                min="100"
+                                max="200"
+                            />
+                        </div>
+                    )}
+                </div>
+            </div>
+        );
+    };
+
     // Effects
     useEffect(() => {
         if (isMapReady && loadPdf && mapRef.current) {
@@ -592,6 +702,8 @@ const MapStation = ({
     }, [getStationStatuses, getStationTypes]);
 
     useEffect(() => {
+        setOverlappedNearbyStations([]);
+        setOverlappedNearbyClusters([]);
         fetchNearbyStations();
     }, [showNearbyStations, nearbyRadius, station, fetchNearbyStations]);
 
@@ -631,36 +743,41 @@ const MapStation = ({
                         }, 500);
                     }
                 }}
-                minZoom={1}
+                minZoom={3}
                 zoomControl={false}
             >
-                <ZoomControl position="bottomright" />
                 <MapEvents setIsMapReady={setIsMapReady} />
-                <NearbyStationsControl
-                    showNearbyStations={showNearbyStations}
-                    nearbyRadius={nearbyRadius}
-                    setShowNearbyStations={setShowNearbyStations}
-                    setNearbyRadius={setNearbyRadius}
-                />
 
                 <TileLayer
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    minZoom={1}
+                    minZoom={3}
                 />
 
                 {!loadPdf && (
-                    <VisitsScroller
-                        map={mapRef.current}
-                        showScroller={showScroller}
-                        visits={visitScrollerProps.visits}
-                        changeKml={visitScrollerProps.changeKml}
-                        changeMeta={visitScrollerProps.changeMeta}
-                        stationMeta={visitScrollerProps.stationMeta}
-                        setChangeKml={visitScrollerProps.setChangeKml}
-                        setChangeMeta={visitScrollerProps.setChangeMeta}
-                        setShowScroller={setShowScroller}
-                    />
+                    <>
+                        <RoutesScroller
+                            map={mapRef.current}
+                            showScroller={showScroller}
+                            visits={routesScrollerProps.visits.filter(
+                                (visit) => !!visit.navigation_actual_file,
+                            )}
+                            changeKml={routesScrollerProps.changeKml}
+                            changeMeta={routesScrollerProps.changeMeta}
+                            stationMeta={routesScrollerProps.stationMeta}
+                            setChangeKml={routesScrollerProps.setChangeKml}
+                            setChangeMeta={routesScrollerProps.setChangeMeta}
+                            setShowScroller={setShowScroller}
+                        />
+                        <NearbyStationsControl
+                            showNearbyStations={showNearbyStations}
+                            nearbyRadius={nearbyRadius}
+                            setShowNearbyStations={setShowNearbyStations}
+                            setNearbyRadius={setNearbyRadius}
+                        />
+
+                        <ZoomControl position="bottomright" />
+                    </>
                 )}
 
                 <ChangeView
@@ -670,37 +787,39 @@ const MapStation = ({
 
                 {/* Nearby station clusters */}
                 {showNearbyStations &&
-                    overlappedNearbyClusters.map((cluster, index) => (
-                        <MarkerClusterGroup
-                            key={`nearby-cluster-${index}`}
-                            iconCreateFunction={
-                                anyHasProblems(cluster)
-                                    ? createClusterWithProblem
-                                    : createClusterWithNoProblem
-                            }
-                        >
-                            {cluster.map((nearbyStation) => (
-                                <Marker
-                                    key={`nearby-${nearbyStation.api_id}`}
-                                    position={[
-                                        nearbyStation.lat,
-                                        nearbyStation.lon,
-                                    ]}
-                                    icon={chosenIcon(
-                                        nearbyStation,
-                                        types,
-                                        statuses,
-                                    )}
-                                >
-                                    <Popup maxWidth={600} minWidth={400}>
-                                        <PopupChildren
-                                            station={nearbyStation}
-                                        />
-                                    </Popup>
-                                </Marker>
-                            ))}
-                        </MarkerClusterGroup>
-                    ))}
+                    overlappedNearbyClusters.map((cluster, index) => {
+                        return (
+                            <MarkerClusterGroup
+                                key={`nearby-cluster-${index}`}
+                                iconCreateFunction={
+                                    anyHasProblems(cluster)
+                                        ? createClusterWithProblem
+                                        : createClusterWithNoProblem
+                                }
+                            >
+                                {cluster.map((nearbyStation) => (
+                                    <Marker
+                                        key={`nearby-${nearbyStation.api_id}`}
+                                        position={[
+                                            nearbyStation.lat,
+                                            nearbyStation.lon,
+                                        ]}
+                                        icon={chosenIcon(
+                                            nearbyStation,
+                                            types,
+                                            statuses,
+                                        )}
+                                    >
+                                        <Popup maxWidth={600} minWidth={400}>
+                                            <PopupChildren
+                                                station={nearbyStation}
+                                            />
+                                        </Popup>
+                                    </Marker>
+                                ))}
+                            </MarkerClusterGroup>
+                        );
+                    })}
 
                 {/* Individual nearby stations */}
                 {showNearbyStations &&
@@ -735,10 +854,10 @@ const MapStation = ({
                         ))}
 
                 {/* KML/KMZ layers */}
-                {base64Data &&
+                {(base64Data || base64Data !== "") &&
                     (typeof base64Data !== "string" ? (
                         <>
-                            {base64Data.visits
+                            {base64Data?.visits
                                 .filter(
                                     (visit) =>
                                         visit?.navigation_actual_file &&
@@ -757,8 +876,8 @@ const MapStation = ({
                                         color={getColor(visit)}
                                     />
                                 ))}
-                            {base64Data.stationMeta?.navigation_actual_file &&
-                                base64Data.changeMeta && (
+                            {base64Data?.stationMeta?.navigation_actual_file &&
+                                base64Data?.changeMeta && (
                                     <LoadKmzFromBase64
                                         base64Data={
                                             base64Data.stationMeta
@@ -786,11 +905,18 @@ const MapStation = ({
                     position={mapProps.center ?? [0, 0]}
                     ref={markerRef}
                 >
-                    {!loadPdf && station && (
-                        <Popup maxWidth={600} minWidth={400}>
-                            <PopupChildren station={station} />
-                        </Popup>
-                    )}
+                    {!loadPdf &&
+                        station &&
+                        //Si no tiene un file el metadata
+                        !base64Data &&
+                        //Si no tiene un file ninguna visitapost_seismic_data
+                        !routesScrollerProps.visits.some(
+                            (visit) => !!visit.navigation_actual_file,
+                        ) && (
+                            <Popup maxWidth={600} minWidth={400}>
+                                <PopupChildren station={station} />
+                            </Popup>
+                        )}
                 </Marker>
             </MapContainer>
         </div>

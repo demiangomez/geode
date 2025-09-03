@@ -140,8 +140,13 @@ const StationPersonModal = ({
         reFetch();
     };
 
-    const handleChange = (e: HTMLInputElement | HTMLSelectElement) => {
-        const { name, value } = e;
+    const handleChange = (
+        e:
+            | HTMLInputElement
+            | HTMLSelectElement
+            | { target: { name: string; value: string } },
+    ) => {
+        const { name, value } = "target" in e ? e.target : e;
 
         dispatch({
             type: "change_value",
@@ -300,6 +305,16 @@ const StationPersonModal = ({
                                             {keysToMenu.includes(key) && (
                                                 <MenuButton
                                                     setShowMenu={setShowMenu}
+                                                    onMenuClick={() =>
+                                                        handleChange({
+                                                            target: {
+                                                                name: key,
+                                                                value: formState[
+                                                                    key as keyof typeof formState
+                                                                ],
+                                                            },
+                                                        })
+                                                    }
                                                     showMenu={showMenu}
                                                     typeKey={key}
                                                 />

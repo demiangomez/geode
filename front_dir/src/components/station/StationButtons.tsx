@@ -91,7 +91,7 @@ const StationButtons = ({ functions, constants }: Props) => {
             : station;
 
     return (
-        <div className="flex items-center justify-start min-w-[100px] gap-0 absolute -right-[140px] top-3">
+        <div className="flex items-center justify-start min-w-[100px] gap-0 absolute -right-[145px] top-3">
             {location.pathname === `/${nc}/${sc}` && (
                 <>
                     <PdfContainer

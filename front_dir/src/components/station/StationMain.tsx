@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { MapSkeleton, MapStation, Photo } from "@componentsReact";
+
+import { findFlagUrlByIso3Code } from "country-flags-svg-v2";
 
 import { hasDifferences } from "@utils";
 
@@ -10,7 +12,6 @@ import {
     StationMetadataServiceData,
     StationVisitsData,
 } from "@types";
-import { findFlagUrlByIso3Code } from "country-flags-svg-v2";
 
 interface OutletContext {
     station: StationData;
@@ -70,7 +71,7 @@ const StationMain = () => {
         changeMeta: changeMeta,
     };
 
-    const visitScrollerProps = {
+    const routesScrollerProps = {
         visits: visits ?? [],
         changeKml: changeKml,
         changeMeta: changeMeta,
@@ -78,8 +79,26 @@ const StationMain = () => {
         setChangeMeta: setChangeMeta,
         stationMeta: stationMeta,
     };
-    const iso3 = station?.country_code ?? "ATA";
-    const flag = findFlagUrlByIso3Code(iso3);
+
+    const stationCountry = useMemo(() => {
+        if (!station) return null;
+
+        const iso3 = station?.country_code ?? "ATA";
+        const flag = findFlagUrlByIso3Code(iso3);
+
+        return (
+            <div className="flex w-full justify-center items-center">
+                <img
+                    src={flag}
+                    alt={station.country_code || "ATA"}
+                    className="mr-2 w-[30px] h-[20px]"
+                />
+                <h1 className="text-2xl font-base text-center">
+                    {iso3?.toUpperCase()}
+                </h1>
+            </div>
+        );
+    }, [station]);
 
     useEffect(() => {
         setChangeMeta(
@@ -97,19 +116,7 @@ const StationMain = () => {
 
     return (
         <div>
-            <div className="flex w-full justify-center items-center">
-                {flag && (
-                    <img
-                        className="mr-2 w-[30px] h-[20px]"
-                        src={flag}
-                        alt={station.country_code}
-                    />
-                )}
-
-                <h1 className="text-2xl font-base text-center">
-                    {iso3?.toUpperCase()}
-                </h1>
-            </div>
+            {stationCountry}
             <div className="flex flex-col items-center justify-center space-y-4 px-2 pb-4">
                 <div className="flex w-full space-x-2 relative">
                     {mapFlicker && (
@@ -134,7 +141,7 @@ const StationMain = () => {
                         }
                         loadPdf={loadPdf}
                         loadedPdfData={loadedPdfData}
-                        visitScrollerProps={visitScrollerProps}
+                        routesScrollerProps={routesScrollerProps}
                         setStationLocationScreen={setStationLocationScreen}
                         setStationLocationDetailScreen={
                             setStationLocationDetailScreen

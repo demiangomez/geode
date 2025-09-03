@@ -1,21 +1,17 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { Spinner } from "@componentsReact";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { Spinner, Toast } from "@componentsReact";
 
-// import { ArrowDownTrayIcon, ClipboardIcon } from "@heroicons/react/24/outline";
+import { useAuth, useApi, usePopup } from "@hooks";
+import { ArrowDownTrayIcon, ClipboardIcon } from "@heroicons/react/24/outline";
 
 import { formattedDates } from "@utils";
+import { removeEarthquakesAffectedStationsCache } from "@services";
 
 import {
     EarthquakeData,
     StationsAffectedServiceData,
     ErrorResponse,
 } from "@types";
-import { ArrowDownTrayIcon, ClipboardIcon } from "@heroicons/react/24/outline";
-import { removeEarthquakesAffectedStationsCache } from "@services";
-import { useAuth } from "@hooks/useAuth";
-import useApi from "@hooks/useApi";
-import { Toast } from "@componentsReact";
-
 interface EarthQuakeScrollerProps {
     forceSyncMapScroller: number;
     earthquakes: EarthquakeData[];
@@ -27,6 +23,8 @@ interface EarthQuakeScrollerProps {
     earthquakeAffectedStations: StationsAffectedServiceData | undefined;
     setToggleEarthquakeMask: React.Dispatch<React.SetStateAction<boolean>>;
     setToggleCoseismicVector: React.Dispatch<React.SetStateAction<boolean>>;
+    vectorMagnitude: number;
+    setVectorMagnitude: React.Dispatch<React.SetStateAction<number>>;
 }
 
 const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
@@ -40,9 +38,14 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
     earthquakeAffectedStations,
     setToggleEarthquakeMask,
     setToggleCoseismicVector,
+    vectorMagnitude,
+    setVectorMagnitude,
 }) => {
     const { token, logout } = useAuth();
     const api = useApi(token, logout);
+    const disableDisplacements =
+        earthquakeAffectedStations?.coseismic_displacements &&
+        earthquakeAffectedStations?.coseismic_displacements.length === 0;
     //---------------------------------------------------------UseState-------------------------------------------------------------
     const [forceRenderContainer, setForceRenderContainer] = useState(0);
 
@@ -58,6 +61,12 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
     const [toastMessage, setToastMessage] = useState("");
     const [toastError, setToastError] = useState(false);
 
+    const toastTimerRef = useRef<number | null>(null);
+
+    const { show, showPopup } = usePopup(2000);
+
+    const [copyId, setCopyId] = useState<string | null>(null);
+
     //---------------------------------------------------------Funciones-------------------------------------------------------------
     const isStateTrue = (earthquake: EarthquakeData) => {
         if (earthquakeChosen?.api_id === earthquake.api_id) {
@@ -70,12 +79,72 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
         const isChecked = e.target.checked;
         setToggleState(isChecked);
         setToggleEarthquakeMask(isChecked);
+
+        try {
+            const stored = localStorage.getItem("earthquakeChosen");
+            const parsed = stored ? JSON.parse(stored) : null;
+            if (
+                parsed &&
+                earthquakeChosen &&
+                parsed.api_id === earthquakeChosen.api_id
+            ) {
+                const merged = { ...parsed, ui_toggle_mask: isChecked };
+                localStorage.setItem(
+                    "earthquakeChosen",
+                    JSON.stringify(merged),
+                );
+            } else if (earthquakeChosen) {
+                const merged = {
+                    ...earthquakeChosen,
+                    ui_toggle_mask: isChecked,
+                };
+                localStorage.setItem(
+                    "earthquakeChosen",
+                    JSON.stringify(merged),
+                );
+            }
+        } catch (err) {
+            console.error(
+                "Failed to persist earthquakeChosen toggle mask",
+                err,
+            );
+        }
     };
 
     const handleToggleVector = (e: React.ChangeEvent<HTMLInputElement>) => {
         const isChecked = e.target.checked;
         setToggleVector(isChecked);
         setToggleCoseismicVector(isChecked);
+
+        try {
+            const stored = localStorage.getItem("earthquakeChosen");
+            const parsed = stored ? JSON.parse(stored) : null;
+            if (
+                parsed &&
+                earthquakeChosen &&
+                parsed.api_id === earthquakeChosen.api_id
+            ) {
+                const merged = { ...parsed, ui_toggle_vector: isChecked };
+                localStorage.setItem(
+                    "earthquakeChosen",
+                    JSON.stringify(merged),
+                );
+            } else if (earthquakeChosen) {
+                const merged = {
+                    ...earthquakeChosen,
+                    ui_toggle_vector: isChecked,
+                };
+                localStorage.setItem(
+                    "earthquakeChosen",
+                    JSON.stringify(merged),
+                );
+            }
+        } catch (err) {
+            console.error(
+                "Failed to persist earthquakeChosen toggle vector",
+                err,
+            );
+        }
     };
 
     const downloadFile = (
@@ -121,10 +190,25 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
             }
             setToastError(false);
             setToastVisible(true);
+
+            if (toastTimerRef.current)
+                window.clearTimeout(toastTimerRef.current);
+            toastTimerRef.current = window.setTimeout(() => {
+                setToastVisible(false);
+                toastTimerRef.current = null;
+            }, 1500);
         } catch (error) {
             setToastMessage("Failed to clear earthquake cache.");
             setToastError(true);
             setToastVisible(true);
+
+            if (toastTimerRef.current)
+                window.clearTimeout(toastTimerRef.current);
+            toastTimerRef.current = window.setTimeout(() => {
+                setToastVisible(false);
+                toastTimerRef.current = null;
+            }, 3000);
+
             console.error(error);
         }
     };
@@ -161,6 +245,48 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
     useEffect(() => {
         setSortedEarthquakes(earthquakes);
     }, [earthquakes]);
+
+    useEffect(() => {
+        return () => {
+            if (toastTimerRef.current) {
+                window.clearTimeout(toastTimerRef.current);
+            }
+        };
+    }, []);
+
+    useEffect(() => {
+        try {
+            const stored = localStorage.getItem("earthquakeChosen");
+            const parsed = stored ? JSON.parse(stored) : null;
+            if (
+                parsed &&
+                earthquakeChosen &&
+                parsed.api_id === earthquakeChosen.api_id
+            ) {
+                const mask =
+                    typeof parsed.ui_toggle_mask === "boolean"
+                        ? parsed.ui_toggle_mask
+                        : true;
+                const vector =
+                    typeof parsed.ui_toggle_vector === "boolean"
+                        ? parsed.ui_toggle_vector
+                        : false;
+                setVectorMagnitude(vectorMagnitude);
+                setToggleState(mask);
+                setToggleVector(vector);
+                setToggleEarthquakeMask(mask);
+                setToggleCoseismicVector(vector);
+            } else {
+                setVectorMagnitude(vectorMagnitude);
+                setToggleState(true);
+                setToggleVector(false);
+                setToggleEarthquakeMask(true);
+                setToggleCoseismicVector(false);
+            }
+        } catch (err) {
+            console.error("Failed to restore earthquakeChosen toggles", err);
+        }
+    }, [earthquakeChosen]);
 
     //---------------------------------------------------------Return-------------------------------------------------------------
 
@@ -348,7 +474,7 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
                                                                                     e.stopPropagation();
                                                                                     downloadFile(
                                                                                         earthquakeAffectedStations?.kml_including_postseismic,
-                                                                                        "postseismic_data.kml",
+                                                                                        `${earthquakeChosen?.id}.kml`,
                                                                                         "kml",
                                                                                     );
                                                                                 }}
@@ -371,7 +497,7 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
                                                                                 e.stopPropagation();
                                                                                 downloadFile(
                                                                                     earthquakeAffectedStations?.kml_without_postseismic,
-                                                                                    "coseismic_data.kml",
+                                                                                    `${earthquakeChosen?.id}.kml`,
                                                                                     "kml",
                                                                                 );
                                                                             }}
@@ -391,6 +517,9 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
 
                                                                 <div className="flex items-center justify-end">
                                                                     <input
+                                                                        disabled={
+                                                                            disableDisplacements
+                                                                        }
                                                                         type="checkbox"
                                                                         className={`toggle`}
                                                                         style={{
@@ -435,7 +564,7 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
                                                                                 e.stopPropagation();
                                                                                 downloadFile(
                                                                                     earthquakeAffectedStations?.csv_including_postseismic,
-                                                                                    "postseismic_data.csv",
+                                                                                    `${earthquakeChosen?.id}.csv`,
                                                                                     "csv",
                                                                                 );
                                                                             }}
@@ -443,29 +572,28 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
                                                                             <ArrowDownTrayIcon className="size-6" />
                                                                         </button>
                                                                         <button
-                                                                            className="btn btn-ghost btn-circle"
+                                                                            className={` ${showPopup && copyId === "postseismic" ? "tooltip tooltip-open" : ""} mr-2`}
                                                                             title="Copy Coseismic + Postseismic CSV"
-                                                                            onClick={async (
-                                                                                e,
-                                                                            ) => {
-                                                                                e.stopPropagation();
-                                                                                if (
-                                                                                    earthquakeAffectedStations?.csv_including_postseismic
-                                                                                ) {
-                                                                                    try {
-                                                                                        await navigator.clipboard.writeText(
+                                                                            data-tip="Copied!"
+                                                                        >
+                                                                            <ClipboardIcon
+                                                                                className="size-6 cursor-pointer rounded-md transition-all duration-75 btn-ghost"
+                                                                                onClick={(
+                                                                                    e,
+                                                                                ) => {
+                                                                                    e.stopPropagation();
+                                                                                    if (
+                                                                                        earthquakeAffectedStations?.csv_including_postseismic
+                                                                                    )
+                                                                                        navigator.clipboard.writeText(
                                                                                             earthquakeAffectedStations.csv_including_postseismic,
                                                                                         );
-                                                                                    } catch (err) {
-                                                                                        console.error(
-                                                                                            "Failed to copy:",
-                                                                                            err,
-                                                                                        );
-                                                                                    }
-                                                                                }
-                                                                            }}
-                                                                        >
-                                                                            <ClipboardIcon className="size-6" />
+                                                                                    setCopyId(
+                                                                                        "postseismic",
+                                                                                    );
+                                                                                    show();
+                                                                                }}
+                                                                            />
                                                                         </button>
                                                                     </div>
                                                                 </div>
@@ -485,7 +613,7 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
                                                                                 e.stopPropagation();
                                                                                 downloadFile(
                                                                                     earthquakeAffectedStations?.csv_without_postseismic,
-                                                                                    "coseismic_data.csv",
+                                                                                    `${earthquakeChosen?.id}.csv`,
                                                                                     "csv",
                                                                                 );
                                                                             }}
@@ -493,29 +621,28 @@ const EarthQuakeScroller: React.FC<EarthQuakeScrollerProps> = ({
                                                                             <ArrowDownTrayIcon className="size-6" />
                                                                         </button>
                                                                         <button
-                                                                            className="btn btn-ghost btn-circle"
+                                                                            className={` ${showPopup && copyId === "coseismic" ? "tooltip tooltip-open" : ""} mr-2`}
                                                                             title="Copy Coseismic CSV"
-                                                                            onClick={async (
-                                                                                e,
-                                                                            ) => {
-                                                                                e.stopPropagation();
-                                                                                if (
-                                                                                    earthquakeAffectedStations?.csv_without_postseismic
-                                                                                ) {
-                                                                                    try {
-                                                                                        await navigator.clipboard.writeText(
+                                                                            data-tip="Copied!"
+                                                                        >
+                                                                            <ClipboardIcon
+                                                                                className="size-6 cursor-pointer rounded-md transition-all duration-75 btn-ghost"
+                                                                                onClick={(
+                                                                                    e,
+                                                                                ) => {
+                                                                                    e.stopPropagation();
+                                                                                    if (
+                                                                                        earthquakeAffectedStations?.csv_without_postseismic
+                                                                                    )
+                                                                                        navigator.clipboard.writeText(
                                                                                             earthquakeAffectedStations.csv_without_postseismic,
                                                                                         );
-                                                                                    } catch (err) {
-                                                                                        console.error(
-                                                                                            "Failed to copy:",
-                                                                                            err,
-                                                                                        );
-                                                                                    }
-                                                                                }
-                                                                            }}
-                                                                        >
-                                                                            <ClipboardIcon className="size-6" />
+                                                                                    setCopyId(
+                                                                                        "coseismic",
+                                                                                    );
+                                                                                    show();
+                                                                                }}
+                                                                            />
                                                                         </button>
                                                                     </div>
                                                                 </div>

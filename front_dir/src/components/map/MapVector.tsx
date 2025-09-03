@@ -22,151 +22,125 @@ const MapVector = ({ origin, displacement, magnitude }: Props) => {
     const map = useMap();
     const arrowRef = useRef<L.LayerGroup | null>(null);
 
-    const updateArrow = () => {
+    const arrowStyle = {
+        color: "red",
+        weight: 6,
+        opacity: 0.8,
+        pane: "overlayPane", // Usa un pane con zIndex alto
+    };
+
+    // FUNCIÓN PARA CONVERTIR METROS A GRADOS CON DEFORMACIÓN MERCATOR
+    const metersToDegreesWithMercator = (
+        displacement: Displacement,
+        originLat: number,
+    ): { deltaLat: number; deltaLon: number } => {
+        // Constante: metros por grado de latitud (siempre constante)
+        const METERS_PER_DEGREE_LAT = 111111; // ~111.111 km por grado
+
+        // DEFORMACIÓN MERCATOR: metros por grado de longitud varía con latitud
+        const METERS_PER_DEGREE_LON =
+            METERS_PER_DEGREE_LAT * Math.cos((originLat * Math.PI) / 180);
+
+        return {
+            deltaLat: displacement.north / METERS_PER_DEGREE_LAT,
+            deltaLon: displacement.east / METERS_PER_DEGREE_LON,
+        };
+    };
+
+    useEffect(() => {
         if (arrowRef.current) {
             map.removeLayer(arrowRef.current);
         }
 
-        // ✅ CALCULAR MAGNITUD REAL DEL DESPLAZAMIENTO
-        const realMagnitude = Math.sqrt(
-            displacement.north * displacement.north +
-                displacement.east * displacement.east,
+        // CALCULAR MAGNITUD REAL DEL DESPLAZAMIENTO
+        // const realMagnitude = Math.sqrt(
+        //     displacement.north * displacement.north +
+        //         displacement.east * displacement.east,
+        // );
+
+        // Constante que multiplica la magnitud real (si usamos la real al ser tan chica no se ve)
+        const size = 100000;
+
+        // ESCALADO DEL DESPLAZAMIENTO (convertir PIXEL_SIZE a metros para tamaño fijo)
+        const scaledDisplacement = {
+            north: displacement.north * magnitude * size,
+            east: displacement.east * magnitude * size,
+        };
+
+        // CONVERTIR DESPLAZAMIENTO A GRADOS CON DEFORMACIÓN MERCATOR
+        const deltas = metersToDegreesWithMercator(
+            scaledDisplacement,
+            origin.lat,
         );
 
-        const PIXEL_SIZE =
-            realMagnitude <= 1
-                ? 100
-                : realMagnitude <= 1.5
-                  ? 200
-                  : realMagnitude <= 1.75
-                    ? 250
-                    : realMagnitude <= 2
-                      ? 300
-                      : realMagnitude <= 2.5
-                        ? 400
-                        : realMagnitude <= 3
-                          ? 500
-                          : realMagnitude <= 5
-                            ? 600
-                            : realMagnitude <= 7
-                              ? 400
-                              : realMagnitude <= 9
-                                ? 400
-                                : realMagnitude <= 10
-                                  ? 400
-                                  : 500;
-
-        // ✅ CALCULAR ÁNGULO DEL VECTOR
-        const vectorAngle = Math.atan2(displacement.east, displacement.north);
-
-        // ✅ OBTENER POSICIÓN EN PÍXELES DEL ORIGEN
-        const originPixel = map.latLngToContainerPoint([
-            origin.lat,
-            origin.lon,
-        ]);
-
-        // ✅ CALCULAR POSICIÓN FINAL EN PÍXELES
-        const endPixel = {
-            x: originPixel.x + PIXEL_SIZE * Math.sin(vectorAngle),
-            y: originPixel.y - PIXEL_SIZE * Math.cos(vectorAngle),
+        // CALCULAR PUNTO FINAL CONSIDERANDO PROYECCIÓN
+        const endPosition = {
+            lat: origin.lat + deltas.deltaLat,
+            lon: origin.lon + deltas.deltaLon,
         };
 
-        // ✅ CONVERTIR POSICIÓN FINAL A COORDENADAS
-        const endLatLng = map.containerPointToLatLng([endPixel.x, endPixel.y]);
-        const endPosition = { lat: endLatLng.lat, lon: endLatLng.lng };
+        // CALCULAR ÁNGULO DEL VECTOR
+        const vectorAngle = Math.atan2(deltas.deltaLon, deltas.deltaLat);
 
-        // ✅ CALCULAR LONGITUD DE PUNTA EN PÍXELES
-        const arrowHeadPixelLength = PIXEL_SIZE * 0.1;
+        // CALCULAR LONGITUD DE PUNTA PROPORCIONAL EN GRADOS
+        const vectorLengthInDegrees = Math.sqrt(
+            Math.pow(endPosition.lat - origin.lat, 2) +
+                Math.pow(endPosition.lon - origin.lon, 2),
+        );
 
-        // ✅ CALCULAR PUNTAS EN PÍXELES
-        const leftHeadPixel = {
-            x:
-                endPixel.x -
-                arrowHeadPixelLength * Math.sin(vectorAngle + Math.PI / 6),
-            y:
-                endPixel.y +
-                arrowHeadPixelLength * Math.cos(vectorAngle + Math.PI / 6),
-        };
+        const arrowHeadLength = vectorLengthInDegrees * 0.1;
 
-        const rightHeadPixel = {
-            x:
-                endPixel.x -
-                arrowHeadPixelLength * Math.sin(vectorAngle - Math.PI / 6),
-            y:
-                endPixel.y +
-                arrowHeadPixelLength * Math.cos(vectorAngle - Math.PI / 6),
-        };
+        // CALCULAR PUNTAS EN COORDENADAS GEOGRÁFICAS
+        const leftHead = [
+            endPosition.lat -
+                arrowHeadLength * Math.cos(vectorAngle + Math.PI / 6),
+            endPosition.lon -
+                arrowHeadLength * Math.sin(vectorAngle + Math.PI / 6),
+        ];
 
-        // ✅ CONVERTIR PUNTAS A COORDENADAS
-        const leftHeadLatLng = map.containerPointToLatLng([
-            leftHeadPixel.x,
-            leftHeadPixel.y,
-        ]);
-        const rightHeadLatLng = map.containerPointToLatLng([
-            rightHeadPixel.x,
-            rightHeadPixel.y,
-        ]);
+        const rightHead = [
+            endPosition.lat -
+                arrowHeadLength * Math.cos(vectorAngle - Math.PI / 6),
+            endPosition.lon -
+                arrowHeadLength * Math.sin(vectorAngle - Math.PI / 6),
+        ];
 
-        // ✅ CUERPO DE LA FLECHA
+        // CUERPO DE LA FLECHA
         const mainLine = L.polyline(
             [
                 [origin.lat, origin.lon],
                 [endPosition.lat, endPosition.lon],
             ],
-            {
-                color: "red",
-                weight: Math.max(2, Math.min(6, magnitude / 2)),
-                opacity: 0.8,
-            },
+            arrowStyle,
         );
 
-        // ✅ PUNTA IZQUIERDA
+        // PUNTA IZQUIERDA
         const leftArrow = L.polyline(
             [
-                [leftHeadLatLng.lat, leftHeadLatLng.lng],
+                [leftHead[0], leftHead[1]],
                 [endPosition.lat, endPosition.lon],
             ],
-            {
-                color: "red",
-                weight: Math.max(1, Math.min(4, magnitude / 3)),
-                opacity: 0.8,
-            },
+            arrowStyle,
         );
 
-        // ✅ PUNTA DERECHA
+        // PUNTA DERECHA
         const rightArrow = L.polyline(
             [
-                [rightHeadLatLng.lat, rightHeadLatLng.lng],
+                [rightHead[0], rightHead[1]],
                 [endPosition.lat, endPosition.lon],
             ],
-            {
-                color: "red",
-                weight: Math.max(1, Math.min(4, magnitude / 3)),
-                opacity: 0.8,
-            },
+            arrowStyle,
         );
 
         const group = L.layerGroup([mainLine, leftArrow, rightArrow]).addTo(
             map,
         );
         arrowRef.current = group;
-    };
-
-    useEffect(() => {
-        updateArrow();
 
         return () => {
             if (arrowRef.current) {
                 map.removeLayer(arrowRef.current);
             }
-        };
-    }, [origin, displacement, magnitude, map]);
-
-    useEffect(() => {
-        map.on("zoomend", updateArrow);
-
-        return () => {
-            map.off("zoomend", updateArrow);
         };
     }, [origin, displacement, magnitude, map]);
 

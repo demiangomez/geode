@@ -19497,6 +19497,140 @@ paths:
           description: ''
         '200':
           description: No response body
+  /api/people/has-duplicates/{first_name}/{last_name}:
+    get:
+      operationId: people_has_duplicates_retrieve
+      description: Removes leading and trailing spaces and ignores case when checking
+        for duplicates.
+      parameters:
+      - in: path
+        name: first_name
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: last_name
+        schema:
+          type: string
+        required: true
+      tags:
+      - people
+      security:
+      - jwtAuth: []
+      responses:
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PeopleHasDuplicatesRetrieveErrorResponse400'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse401'
+              examples:
+                AuthenticationFailed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: authentication_failed
+                      detail: Incorrect authentication credentials.
+                      attr: null
+                NotAuthenticated:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_authenticated
+                      detail: Authentication credentials were not provided.
+                      attr: null
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse403'
+              examples:
+                PermissionDenied:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: permission_denied
+                      detail: You do not have permission to perform this action.
+                      attr: null
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse404'
+              examples:
+                NotFound:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_found
+                      detail: Not found.
+                      attr: null
+          description: ''
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse405'
+              examples:
+                MethodNotAllowed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: method_not_allowed
+                      detail: Method "get" not allowed.
+                      attr: null
+          description: ''
+        '406':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse406'
+              examples:
+                NotAcceptable:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_acceptable
+                      detail: Could not satisfy the request Accept header.
+                      attr: null
+          description: ''
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse415'
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: unsupported_media_type
+                      detail: Unsupported media type "application/json" in request.
+                      attr: null
+          description: ''
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse500'
+              examples:
+                APIException:
+                  value:
+                    type: server_error
+                    errors:
+                    - code: error
+                      detail: A server error occurred.
+                      attr: null
+          description: ''
+        '200':
+          description: No response body
   /api/ppp-soln:
     get:
       operationId: ppp_soln_list
@@ -35546,10 +35680,135 @@ paths:
   /api/station/{station_api_id}/insert-station-info-by-file:
     post:
       operationId: station_insert_station_info_by_file_create
-      description: "This endpoint uses PGAMIT module to parse the file. \nIt returns\
-        \ a value with key 'inserted_station_info' containing a list of station info\
-        \ successfully inserted. \nIf at least one station info insert failed, another\
-        \ value with key 'error_message' detailing the error is returned."
+      parameters:
+      - in: path
+        name: station_api_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - station
+      security:
+      - jwtAuth: []
+      responses:
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationInsertStationInfoByFileCreateErrorResponse400'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse401'
+              examples:
+                AuthenticationFailed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: authentication_failed
+                      detail: Incorrect authentication credentials.
+                      attr: null
+                NotAuthenticated:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_authenticated
+                      detail: Authentication credentials were not provided.
+                      attr: null
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse403'
+              examples:
+                PermissionDenied:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: permission_denied
+                      detail: You do not have permission to perform this action.
+                      attr: null
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse404'
+              examples:
+                NotFound:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_found
+                      detail: Not found.
+                      attr: null
+          description: ''
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse405'
+              examples:
+                MethodNotAllowed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: method_not_allowed
+                      detail: Method "get" not allowed.
+                      attr: null
+          description: ''
+        '406':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse406'
+              examples:
+                NotAcceptable:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_acceptable
+                      detail: Could not satisfy the request Accept header.
+                      attr: null
+          description: ''
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse415'
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: unsupported_media_type
+                      detail: Unsupported media type "application/json" in request.
+                      attr: null
+          description: ''
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse500'
+              examples:
+                APIException:
+                  value:
+                    type: server_error
+                    errors:
+                    - code: error
+                      detail: A server error occurred.
+                      attr: null
+          description: ''
+        '200':
+          description: No response body
+  /api/station/{station_api_id}/parse-station-info-by-file:
+    post:
+      operationId: station_parse_station_info_by_file_create
+      description: This endpoint uses PGAMIT module to parse the file. Returns all
+        records present in file but it doesn't insert any of those.
       parameters:
       - in: query
         name: file
@@ -35578,7 +35837,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/StationInsertStationInfoByFileCreateErrorResponse400'
+                $ref: '#/components/schemas/StationParseStationInfoByFileCreateErrorResponse400'
           description: ''
         '401':
           content:
@@ -37314,6 +37573,138 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/StationsGetKmzRetrieveErrorResponse400'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse401'
+              examples:
+                AuthenticationFailed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: authentication_failed
+                      detail: Incorrect authentication credentials.
+                      attr: null
+                NotAuthenticated:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_authenticated
+                      detail: Authentication credentials were not provided.
+                      attr: null
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse403'
+              examples:
+                PermissionDenied:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: permission_denied
+                      detail: You do not have permission to perform this action.
+                      attr: null
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse404'
+              examples:
+                NotFound:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_found
+                      detail: Not found.
+                      attr: null
+          description: ''
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse405'
+              examples:
+                MethodNotAllowed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: method_not_allowed
+                      detail: Method "get" not allowed.
+                      attr: null
+          description: ''
+        '406':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse406'
+              examples:
+                NotAcceptable:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_acceptable
+                      detail: Could not satisfy the request Accept header.
+                      attr: null
+          description: ''
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse415'
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: unsupported_media_type
+                      detail: Unsupported media type "application/json" in request.
+                      attr: null
+          description: ''
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse500'
+              examples:
+                APIException:
+                  value:
+                    type: server_error
+                    errors:
+                    - code: error
+                      detail: A server error occurred.
+                      attr: null
+          description: ''
+        '200':
+          description: No response body
+  /api/stations/{station_api_id}/nearby-stations/{distance_km}:
+    get:
+      operationId: stations_nearby_stations_retrieve
+      parameters:
+      - in: path
+        name: distance_km
+        schema:
+          type: integer
+        required: true
+      - in: path
+        name: station_api_id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - stations
+      security:
+      - jwtAuth: []
+      responses:
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationsNearbyStationsRetrieveErrorResponse400'
           description: ''
         '401':
           content:
@@ -40527,6 +40918,132 @@ paths:
               schema:
                 $ref: '#/components/schemas/User'
           description: ''
+    delete:
+      operationId: users_destroy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - users
+      security:
+      - jwtAuth: []
+      responses:
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersDestroyErrorResponse400'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse401'
+              examples:
+                AuthenticationFailed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: authentication_failed
+                      detail: Incorrect authentication credentials.
+                      attr: null
+                NotAuthenticated:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_authenticated
+                      detail: Authentication credentials were not provided.
+                      attr: null
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse403'
+              examples:
+                PermissionDenied:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: permission_denied
+                      detail: You do not have permission to perform this action.
+                      attr: null
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse404'
+              examples:
+                NotFound:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_found
+                      detail: Not found.
+                      attr: null
+          description: ''
+        '405':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse405'
+              examples:
+                MethodNotAllowed:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: method_not_allowed
+                      detail: Method "get" not allowed.
+                      attr: null
+          description: ''
+        '406':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse406'
+              examples:
+                NotAcceptable:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: not_acceptable
+                      detail: Could not satisfy the request Accept header.
+                      attr: null
+          description: ''
+        '415':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse415'
+              examples:
+                UnsupportedMediaType:
+                  value:
+                    type: client_error
+                    errors:
+                    - code: unsupported_media_type
+                      detail: Unsupported media type "application/json" in request.
+                      attr: null
+          description: ''
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse500'
+              examples:
+                APIException:
+                  value:
+                    type: server_error
+                    errors:
+                    - code: error
+                      detail: A server error occurred.
+                      attr: null
+          description: ''
+        '204':
+          description: No response body
   /api/users/{id}/photo:
     get:
       operationId: users_photo_retrieve
@@ -68673,6 +69190,11 @@ components:
         photo:
           type: string
           format: uri
+        clustering_distance:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
     PatchedVisit:
       type: object
       properties:
@@ -68781,6 +69303,9 @@ components:
         description:
           type: string
           maxLength: 500
+        size:
+          type: string
+          maxLength: 20
         visit:
           type: integer
     PatchedVisitImages:
@@ -69103,10 +69628,12 @@ components:
           enum:
           - does_not_exist
           - incorrect_type
+          - unique
           type: string
           description: |-
             * `does_not_exist` - does_not_exist
             * `incorrect_type` - incorrect_type
+            * `unique` - unique
         detail:
           type: string
       required:
@@ -69126,6 +69653,13 @@ components:
       - errors
       - type
     PeopleDestroyErrorResponse400:
+      oneOf:
+      - $ref: '#/components/schemas/ParseErrorResponse'
+      discriminator:
+        propertyName: type
+        mapping:
+          client_error: '#/components/schemas/ParseErrorResponse'
+    PeopleHasDuplicatesRetrieveErrorResponse400:
       oneOf:
       - $ref: '#/components/schemas/ParseErrorResponse'
       discriminator:
@@ -69485,10 +70019,12 @@ components:
           enum:
           - does_not_exist
           - incorrect_type
+          - unique
           type: string
           description: |-
             * `does_not_exist` - does_not_exist
             * `incorrect_type` - incorrect_type
+            * `unique` - unique
         detail:
           type: string
       required:
@@ -69813,10 +70349,12 @@ components:
           enum:
           - does_not_exist
           - incorrect_type
+          - unique
           type: string
           description: |-
             * `does_not_exist` - does_not_exist
             * `incorrect_type` - incorrect_type
+            * `unique` - unique
         detail:
           type: string
       required:
@@ -82819,13 +83357,53 @@ components:
       required:
       - errors
       - type
+    StationInsertStationInfoByFileCreateError:
+      oneOf:
+      - $ref: '#/components/schemas/StationInsertStationInfoByFileCreateNonFieldErrorsErrorComponent'
+      discriminator:
+        propertyName: attr
+        mapping:
+          non_field_errors: '#/components/schemas/StationInsertStationInfoByFileCreateNonFieldErrorsErrorComponent'
     StationInsertStationInfoByFileCreateErrorResponse400:
       oneOf:
+      - $ref: '#/components/schemas/StationInsertStationInfoByFileCreateValidationError'
       - $ref: '#/components/schemas/ParseErrorResponse'
       discriminator:
         propertyName: type
         mapping:
+          validation_error: '#/components/schemas/StationInsertStationInfoByFileCreateValidationError'
           client_error: '#/components/schemas/ParseErrorResponse'
+    StationInsertStationInfoByFileCreateNonFieldErrorsErrorComponent:
+      type: object
+      properties:
+        attr:
+          enum:
+          - non_field_errors
+          type: string
+          description: '* `non_field_errors` - non_field_errors'
+        code:
+          enum:
+          - invalid
+          type: string
+          description: '* `invalid` - invalid'
+        detail:
+          type: string
+      required:
+      - attr
+      - code
+      - detail
+    StationInsertStationInfoByFileCreateValidationError:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/ValidationErrorEnum'
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/StationInsertStationInfoByFileCreateError'
+      required:
+      - errors
+      - type
     StationMeta:
       type: object
       properties:
@@ -84136,6 +84714,13 @@ components:
       required:
       - errors
       - type
+    StationParseStationInfoByFileCreateErrorResponse400:
+      oneOf:
+      - $ref: '#/components/schemas/ParseErrorResponse'
+      discriminator:
+        propertyName: type
+        mapping:
+          client_error: '#/components/schemas/ParseErrorResponse'
     StationRole:
       type: object
       properties:
@@ -86790,6 +87375,13 @@ components:
       required:
       - errors
       - type
+    StationsNearbyStationsRetrieveErrorResponse400:
+      oneOf:
+      - $ref: '#/components/schemas/ParseErrorResponse'
+      discriminator:
+        propertyName: type
+        mapping:
+          client_error: '#/components/schemas/ParseErrorResponse'
     StationsPartialUpdateAutoXErrorComponent:
       type: object
       properties:
@@ -88580,6 +89172,11 @@ components:
         photo:
           type: string
           format: uri
+        clustering_distance:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+          nullable: true
       required:
       - id
       - password
@@ -88607,6 +89204,32 @@ components:
             * `null` - null
             * `null_characters_not_allowed` - null_characters_not_allowed
             * `surrogate_characters_not_allowed` - surrogate_characters_not_allowed
+        detail:
+          type: string
+      required:
+      - attr
+      - code
+      - detail
+    UsersCreateClusteringDistanceErrorComponent:
+      type: object
+      properties:
+        attr:
+          enum:
+          - clustering_distance
+          type: string
+          description: '* `clustering_distance` - clustering_distance'
+        code:
+          enum:
+          - invalid
+          - max_string_length
+          - max_value
+          - min_value
+          type: string
+          description: |-
+            * `invalid` - invalid
+            * `max_string_length` - max_string_length
+            * `max_value` - max_value
+            * `min_value` - min_value
         detail:
           type: string
       required:
@@ -88654,6 +89277,7 @@ components:
       - $ref: '#/components/schemas/UsersCreatePhoneErrorComponent'
       - $ref: '#/components/schemas/UsersCreateAddressErrorComponent'
       - $ref: '#/components/schemas/UsersCreatePhotoErrorComponent'
+      - $ref: '#/components/schemas/UsersCreateClusteringDistanceErrorComponent'
       discriminator:
         propertyName: attr
         mapping:
@@ -88668,6 +89292,7 @@ components:
           phone: '#/components/schemas/UsersCreatePhoneErrorComponent'
           address: '#/components/schemas/UsersCreateAddressErrorComponent'
           photo: '#/components/schemas/UsersCreatePhotoErrorComponent'
+          clustering_distance: '#/components/schemas/UsersCreateClusteringDistanceErrorComponent'
     UsersCreateErrorResponse400:
       oneOf:
       - $ref: '#/components/schemas/UsersCreateValidationError'
@@ -88936,6 +89561,13 @@ components:
       required:
       - errors
       - type
+    UsersDestroyErrorResponse400:
+      oneOf:
+      - $ref: '#/components/schemas/ParseErrorResponse'
+      discriminator:
+        propertyName: type
+        mapping:
+          client_error: '#/components/schemas/ParseErrorResponse'
     UsersListErrorResponse400:
       oneOf:
       - $ref: '#/components/schemas/ParseErrorResponse'
@@ -88965,6 +89597,32 @@ components:
             * `null` - null
             * `null_characters_not_allowed` - null_characters_not_allowed
             * `surrogate_characters_not_allowed` - surrogate_characters_not_allowed
+        detail:
+          type: string
+      required:
+      - attr
+      - code
+      - detail
+    UsersPartialUpdateClusteringDistanceErrorComponent:
+      type: object
+      properties:
+        attr:
+          enum:
+          - clustering_distance
+          type: string
+          description: '* `clustering_distance` - clustering_distance'
+        code:
+          enum:
+          - invalid
+          - max_string_length
+          - max_value
+          - min_value
+          type: string
+          description: |-
+            * `invalid` - invalid
+            * `max_string_length` - max_string_length
+            * `max_value` - max_value
+            * `min_value` - min_value
         detail:
           type: string
       required:
@@ -89012,6 +89670,7 @@ components:
       - $ref: '#/components/schemas/UsersPartialUpdatePhoneErrorComponent'
       - $ref: '#/components/schemas/UsersPartialUpdateAddressErrorComponent'
       - $ref: '#/components/schemas/UsersPartialUpdatePhotoErrorComponent'
+      - $ref: '#/components/schemas/UsersPartialUpdateClusteringDistanceErrorComponent'
       discriminator:
         propertyName: attr
         mapping:
@@ -89026,6 +89685,7 @@ components:
           phone: '#/components/schemas/UsersPartialUpdatePhoneErrorComponent'
           address: '#/components/schemas/UsersPartialUpdateAddressErrorComponent'
           photo: '#/components/schemas/UsersPartialUpdatePhotoErrorComponent'
+          clustering_distance: '#/components/schemas/UsersPartialUpdateClusteringDistanceErrorComponent'
     UsersPartialUpdateErrorResponse400:
       oneOf:
       - $ref: '#/components/schemas/UsersPartialUpdateValidationError'
@@ -89336,6 +89996,32 @@ components:
       - attr
       - code
       - detail
+    UsersUpdateClusteringDistanceErrorComponent:
+      type: object
+      properties:
+        attr:
+          enum:
+          - clustering_distance
+          type: string
+          description: '* `clustering_distance` - clustering_distance'
+        code:
+          enum:
+          - invalid
+          - max_string_length
+          - max_value
+          - min_value
+          type: string
+          description: |-
+            * `invalid` - invalid
+            * `max_string_length` - max_string_length
+            * `max_value` - max_value
+            * `min_value` - min_value
+        detail:
+          type: string
+      required:
+      - attr
+      - code
+      - detail
     UsersUpdateEmailErrorComponent:
       type: object
       properties:
@@ -89377,6 +90063,7 @@ components:
       - $ref: '#/components/schemas/UsersUpdatePhoneErrorComponent'
       - $ref: '#/components/schemas/UsersUpdateAddressErrorComponent'
       - $ref: '#/components/schemas/UsersUpdatePhotoErrorComponent'
+      - $ref: '#/components/schemas/UsersUpdateClusteringDistanceErrorComponent'
       discriminator:
         propertyName: attr
         mapping:
@@ -89391,6 +90078,7 @@ components:
           phone: '#/components/schemas/UsersUpdatePhoneErrorComponent'
           address: '#/components/schemas/UsersUpdateAddressErrorComponent'
           photo: '#/components/schemas/UsersUpdatePhotoErrorComponent'
+          clustering_distance: '#/components/schemas/UsersUpdateClusteringDistanceErrorComponent'
     UsersUpdateErrorResponse400:
       oneOf:
       - $ref: '#/components/schemas/UsersUpdateValidationError'
@@ -90218,6 +90906,9 @@ components:
         description:
           type: string
           maxLength: 500
+        size:
+          type: string
+          maxLength: 20
         visit:
           type: integer
       required:
@@ -90261,6 +90952,7 @@ components:
       - $ref: '#/components/schemas/VisitGnssDataFilesCreateFileErrorComponent'
       - $ref: '#/components/schemas/VisitGnssDataFilesCreateFilenameErrorComponent'
       - $ref: '#/components/schemas/VisitGnssDataFilesCreateDescriptionErrorComponent'
+      - $ref: '#/components/schemas/VisitGnssDataFilesCreateSizeErrorComponent'
       - $ref: '#/components/schemas/VisitGnssDataFilesCreateVisitErrorComponent'
       discriminator:
         propertyName: attr
@@ -90269,6 +90961,7 @@ components:
           file: '#/components/schemas/VisitGnssDataFilesCreateFileErrorComponent'
           filename: '#/components/schemas/VisitGnssDataFilesCreateFilenameErrorComponent'
           description: '#/components/schemas/VisitGnssDataFilesCreateDescriptionErrorComponent'
+          size: '#/components/schemas/VisitGnssDataFilesCreateSizeErrorComponent'
           visit: '#/components/schemas/VisitGnssDataFilesCreateVisitErrorComponent'
     VisitGnssDataFilesCreateErrorResponse400:
       oneOf:
@@ -90355,6 +91048,34 @@ components:
           description: |-
             * `invalid` - invalid
             * `unique` - unique
+        detail:
+          type: string
+      required:
+      - attr
+      - code
+      - detail
+    VisitGnssDataFilesCreateSizeErrorComponent:
+      type: object
+      properties:
+        attr:
+          enum:
+          - size
+          type: string
+          description: '* `size` - size'
+        code:
+          enum:
+          - invalid
+          - max_length
+          - 'null'
+          - null_characters_not_allowed
+          - surrogate_characters_not_allowed
+          type: string
+          description: |-
+            * `invalid` - invalid
+            * `max_length` - max_length
+            * `null` - null
+            * `null_characters_not_allowed` - null_characters_not_allowed
+            * `surrogate_characters_not_allowed` - surrogate_characters_not_allowed
         detail:
           type: string
       required:
@@ -90508,6 +91229,7 @@ components:
       - $ref: '#/components/schemas/VisitGnssDataFilesPartialUpdateFileErrorComponent'
       - $ref: '#/components/schemas/VisitGnssDataFilesPartialUpdateFilenameErrorComponent'
       - $ref: '#/components/schemas/VisitGnssDataFilesPartialUpdateDescriptionErrorComponent'
+      - $ref: '#/components/schemas/VisitGnssDataFilesPartialUpdateSizeErrorComponent'
       - $ref: '#/components/schemas/VisitGnssDataFilesPartialUpdateVisitErrorComponent'
       discriminator:
         propertyName: attr
@@ -90516,6 +91238,7 @@ components:
           file: '#/components/schemas/VisitGnssDataFilesPartialUpdateFileErrorComponent'
           filename: '#/components/schemas/VisitGnssDataFilesPartialUpdateFilenameErrorComponent'
           description: '#/components/schemas/VisitGnssDataFilesPartialUpdateDescriptionErrorComponent'
+          size: '#/components/schemas/VisitGnssDataFilesPartialUpdateSizeErrorComponent'
           visit: '#/components/schemas/VisitGnssDataFilesPartialUpdateVisitErrorComponent'
     VisitGnssDataFilesPartialUpdateErrorResponse400:
       oneOf:
@@ -90602,6 +91325,34 @@ components:
           description: |-
             * `invalid` - invalid
             * `unique` - unique
+        detail:
+          type: string
+      required:
+      - attr
+      - code
+      - detail
+    VisitGnssDataFilesPartialUpdateSizeErrorComponent:
+      type: object
+      properties:
+        attr:
+          enum:
+          - size
+          type: string
+          description: '* `size` - size'
+        code:
+          enum:
+          - invalid
+          - max_length
+          - 'null'
+          - null_characters_not_allowed
+          - surrogate_characters_not_allowed
+          type: string
+          description: |-
+            * `invalid` - invalid
+            * `max_length` - max_length
+            * `null` - null
+            * `null_characters_not_allowed` - null_characters_not_allowed
+            * `surrogate_characters_not_allowed` - surrogate_characters_not_allowed
         detail:
           type: string
       required:

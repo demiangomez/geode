@@ -59,7 +59,7 @@ const PeopleTable = () => {
             if (bParams.limit) {
                 setPages(Math.ceil(res.total_count / bParams.limit));
             }
-            res.data && res.data.length === 0 && handlePage(1);
+            res.data && res.data?.length === 0 && handlePage(1);
         } catch (err) {
             console.error(err);
         } finally {
@@ -102,7 +102,7 @@ const PeopleTable = () => {
     };
 
     useEffect(() => {
-        if (!allPeople.length) return;
+        if (!allPeople?.length) return;
 
         const searchTerm = filters.search.toLowerCase().trim();
 
@@ -128,7 +128,7 @@ const PeopleTable = () => {
         setFilteredAllPeople(filtered);
 
         if (bParams.limit) {
-            setPages(Math.ceil(filtered.length / bParams.limit));
+            setPages(Math.ceil(filtered?.length / bParams.limit));
         }
 
         setActivePage(1);
@@ -178,7 +178,7 @@ const PeopleTable = () => {
 
     return (
         <TableCard
-            title={"Station People"}
+            title={"People"}
             size={"1150px"}
             addButtonTitle="+ Person"
             modalTitle="EditPerson"
@@ -193,9 +193,9 @@ const PeopleTable = () => {
             searchPlaceholder="Search by Name, Last Name..."
         >
             <Table
-                titles={body && body.length > 0 ? titles : []}
+                titles={body && body?.length > 0 ? titles : []}
                 body={body}
-                table={"people"}
+                table={"PeopleRelations"}
                 loading={loading}
                 dataOnly={false}
                 onClickFunction={() =>
@@ -216,7 +216,7 @@ const PeopleTable = () => {
                     });
                 }}
             />
-            {body && body.length > 0 ? (
+            {body && body?.length > 0 ? (
                 <Pagination
                     pages={pages}
                     pagesToShow={PAGES_TO_SHOW}
@@ -237,7 +237,7 @@ const PeopleTable = () => {
             {modals?.show &&
                 modals.title === "MergePeople" &&
                 body &&
-                body.length > 0 && (
+                body?.length > 0 && (
                     <MergePeopleModal
                         setStateModal={setModals}
                         handleCloseModal={() => setModals(undefined)}

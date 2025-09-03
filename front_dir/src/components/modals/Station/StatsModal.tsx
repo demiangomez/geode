@@ -165,12 +165,14 @@ const EditStatsModal = ({
     const handleChange = (
         e:
             | React.ChangeEvent<HTMLInputElement>
-            | React.MouseEvent<HTMLInputElement, MouseEvent>,
+            | React.MouseEvent<HTMLInputElement, MouseEvent>
+            | { target: { name: string; value: string } },
     ) => {
         // Determina el tipo de evento y obtiene el target correctamente
         const target =
             (e as React.ChangeEvent<HTMLInputElement>).target ??
-            (e as React.MouseEvent<HTMLInputElement>).target;
+            (e as React.MouseEvent<HTMLInputElement>).target ??
+            (e as { target: { name: string; value: string } }).target;
         const { value, name } = target as HTMLInputElement;
 
         if (name === "receiver_code") {
@@ -262,9 +264,7 @@ const EditStatsModal = ({
                         status: res.statusCode,
                         msg: "Station info added successfully",
                     });
-                    // setTimeout(() => {
-                    //     refetchAfterUpdate();
-                    // }, 1000);
+                    reFetch();
                 }
             }
         } catch (err) {
@@ -299,9 +299,7 @@ const EditStatsModal = ({
                         status: res.statusCode,
                         msg: "Station info updated successfully",
                     });
-                    // setTimeout(() => {
-                    //     refetchAfterUpdate();
-                    // }, 1000);
+                    reFetch();
                 }
             }
         } catch (err) {
@@ -325,9 +323,7 @@ const EditStatsModal = ({
                         status: res.statusCode,
                         msg: res.msg,
                     });
-                    // setTimeout(() => {
-                    //     refetchAfterUpdate();
-                    // }, 1000);
+                    reFetch();
                 } else {
                     setMsg({
                         status: res.statusCode,
@@ -388,7 +384,6 @@ const EditStatsModal = ({
 
     const closeModal = () => {
         setStationInfo ? setStationInfo(undefined) : null;
-        reFetch();
 
         STATION_INFO_STATE.network_code = nc ?? "";
         STATION_INFO_STATE.station_code = sc ?? "";
@@ -455,10 +450,10 @@ const EditStatsModal = ({
             handleCloseModal={closeModal}
             setModalState={setStateModal}
         >
-            <div className="flex flex-row">
+            <div>
                 {typeAddition && (
                     <button
-                        className="btn"
+                        className="btn absolute left-6 top-6"
                         onClick={() =>
                             setModals({
                                 show: true,
@@ -602,6 +597,17 @@ const EditStatsModal = ({
                                                           )?.toISOString()
                                                         : null;
 
+                                                    //Si la fecha no es valida setear el picker en null
+                                                    if (dateValue === null) {
+                                                        if (
+                                                            key === "date_start"
+                                                        ) {
+                                                            setStartDate(null);
+                                                        } else {
+                                                            setEndDate(null);
+                                                        }
+                                                    }
+
                                                     dispatch({
                                                         type: "change_value",
                                                         payload: {
@@ -632,11 +638,17 @@ const EditStatsModal = ({
                                                     : ""
                                             }
                                             onClick={(e) => {
-                                                handleChange(e);
-                                                setShowMenu({
-                                                    type: key,
-                                                    show: true,
-                                                });
+                                                if (
+                                                    key === "receiver_code" ||
+                                                    key === "antenna_code" ||
+                                                    key === "height_code"
+                                                ) {
+                                                    handleChange(e);
+                                                    setShowMenu({
+                                                        type: key,
+                                                        show: true,
+                                                    });
+                                                }
                                             }}
                                         />
                                         {inputsToDatePicker.includes(key) &&
@@ -659,6 +671,16 @@ const EditStatsModal = ({
                                             key === "height_code") && (
                                             <MenuButton
                                                 setShowMenu={setShowMenu}
+                                                onMenuClick={() =>
+                                                    handleChange({
+                                                        target: {
+                                                            name: key,
+                                                            value: formState[
+                                                                key
+                                                            ],
+                                                        },
+                                                    })
+                                                }
                                                 showMenu={showMenu}
                                                 typeKey={key}
                                             />
@@ -822,19 +844,23 @@ const EditStatsModal = ({
                             }}
                         />
                     )}
-                    {modals && modals?.title === "TraceReceiverModal" && (
-                        <TraceReceiverModal
-                            closeModal={() => {
-                                setModals({
-                                    show: false,
-                                    title: "",
-                                    type: "none",
-                                });
-                            }}
-                            parentDispatch={dispatch} // Pasamos el dispatch para rellenar el formulario
-                        />
-                    )}
                 </div>
+            </form>
+            <form>
+                {modals && modals?.title === "TraceReceiverModal" && (
+                    <TraceReceiverModal
+                        parentReceiverType={formState.receiver_code ?? ""}
+                        parentReceiverSerial={formState.receiver_serial ?? ""}
+                        closeModal={() => {
+                            setModals({
+                                show: false,
+                                title: "",
+                                type: "none",
+                            });
+                        }}
+                        parentDispatch={dispatch}
+                    />
+                )}
             </form>
         </Modal>
     );

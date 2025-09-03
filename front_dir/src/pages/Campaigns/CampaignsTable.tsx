@@ -11,11 +11,7 @@ import {
 import { useAuth, useApi } from "@hooks";
 
 import { showModal } from "@utils";
-import {
-    getPeopleService,
-    getStationCampaignsService,
-    getStationVisitsService,
-} from "@services";
+import { getPeopleService, getStationCampaignsService } from "@services";
 
 import {
     CampaignsData,
@@ -23,8 +19,6 @@ import {
     GetParams,
     People,
     PeopleServiceData,
-    StationVisitsData,
-    StationVisitsServiceData,
 } from "@types";
 
 const CampaignsTable = () => {
@@ -38,10 +32,6 @@ const CampaignsTable = () => {
 
     const [loading, setLoading] = useState<boolean>(false);
 
-    const [visits, setVisits] = useState<StationVisitsData[] | undefined>(
-        undefined,
-    );
-
     const [people, setPeople] = useState<People[] | undefined>(undefined);
 
     const [campaigns, setCampaigns] = useState<CampaignsData[] | undefined>(
@@ -50,10 +40,6 @@ const CampaignsTable = () => {
     const [campaign, setCampaign] = useState<CampaignsData | undefined>(
         undefined,
     );
-
-    const [campaignVisits, setCampaignVisits] = useState<
-        Record<string, StationVisitsData[]>
-    >({});
 
     const [activePage, setActivePage] = useState<number>(1);
     const [pages, setPages] = useState<number>(0);
@@ -72,7 +58,9 @@ const CampaignsTable = () => {
     const getPeople = async () => {
         try {
             setLoading(true);
-            const res = await getPeopleService<PeopleServiceData>(api, {"without_photo":true});
+            const res = await getPeopleService<PeopleServiceData>(api, {
+                without_photo: true,
+            });
             setPeople(res.data);
         } catch (err) {
             console.error(err);
@@ -81,42 +69,22 @@ const CampaignsTable = () => {
         }
     };
 
-    const getCampaigns = async () => {
+    const getCampaigns = async (paramsToUse = bParams) => {
         try {
             setLoading(true);
             const res = await getStationCampaignsService<CampaignsServiceData>(
                 api,
-                bParams,
+                paramsToUse,
             );
             setCampaigns(res.data);
 
             if (bParams.limit) {
                 setPages(Math.ceil(res.total_count / bParams.limit));
             }
+            return res.data;
         } catch (err) {
             console.error(err);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const getVisits = async () => {
-        try {
-            setLoading(true);
-            const res = await getStationVisitsService<StationVisitsServiceData>(
-                api,
-                {
-                    limit: 0,
-                    offset: 0,
-                    without_actual_files: true,
-                },
-            );
-
-            if (res.statusCode === 200) {
-                setVisits(res.data);
-            }
-        } catch (error) {
-            console.error(error);
+            return [];
         } finally {
             setLoading(false);
         }
@@ -130,6 +98,9 @@ const CampaignsTable = () => {
                 newParams,
             );
             setCampaigns(res.data);
+            if (bParams.limit) {
+                setPages(Math.ceil(res.total_count / bParams.limit));
+            }
         } catch (err) {
             console.error(err);
         } finally {
@@ -159,36 +130,33 @@ const CampaignsTable = () => {
         paginateCampaigns(newParams);
     };
 
-    const reFetch = () => {
-        getCampaigns();
+    const reFetch = async () => {
+        const actualPage = activePage;
+        const paramsToUse = {
+            ...params,
+            limit: REGISTERS_PER_PAGE,
+            offset: REGISTERS_PER_PAGE * (actualPage - 1),
+        };
+        const data = await getCampaigns(paramsToUse);
+
+        if (data.length === 0 && actualPage > 1) {
+            // Si la página actual quedó vacía, ir a la anterior
+            const prevParams = {
+                ...params,
+                limit: REGISTERS_PER_PAGE,
+                offset: REGISTERS_PER_PAGE * (actualPage - 2),
+            };
+            setActivePage(actualPage - 1);
+            await getCampaigns(prevParams);
+        }
     };
 
     useEffect(() => {
-        getVisits();
         getCampaigns();
         getPeople();
     }, []); // eslint-disable-line
 
-    useEffect(() => {
-        if (campaigns && visits) {
-            const newCampaignVisits: Record<string, StationVisitsData[]> = {};
-            campaigns.forEach((campaign) => {
-                newCampaignVisits[campaign.name + "/~/" + campaign.id] =
-                    visits.filter(
-                        (visit) => Number(visit.campaign) === campaign.id,
-                    );
-            });
-
-            setCampaignVisits(newCampaignVisits);
-        }
-    }, [campaigns, visits]);
-
-    const titles = [
-        "Name",
-        "Start Date",
-        "End Date",
-        "Default People",
-    ];
+    const titles = ["Name", "Start Date", "End Date", "Default People"];
 
     const body = useMemo(() => {
         return campaigns?.map((campaign) => {
@@ -206,10 +174,10 @@ const CampaignsTable = () => {
             });
         });
     }, [campaigns, people]);
+
     useEffect(() => {
         modals?.show && showModal(modals.title);
     }, [modals]);
-
 
     return (
         <TableCard
@@ -223,7 +191,6 @@ const CampaignsTable = () => {
             <Table
                 titles={body && body.length > 0 ? titles : []}
                 body={body}
-                alterInfo={campaignVisits}
                 table={"Campaigns"}
                 loading={loading}
                 dataOnly={false}
@@ -268,7 +235,6 @@ const CampaignsTable = () => {
                     setStateModal={setModals}
                     reFetch={() => {
                         reFetch();
-                        setCampaign(undefined);
                     }}
                     people={people}
                 />
@@ -284,14 +250,8 @@ const CampaignsTable = () => {
 
             {modals?.show && modals.title === "Visits" && (
                 <VisitsCampaignModal
-                    visits={
-                        visits && campaign
-                            ? visits.filter(
-                                  (v) => Number(v.campaign) === campaign.id,
-                              )
-                            : []
-                    }
                     campaign={campaign}
+                    campaingId={campaign?.id}
                     setCampaign={setCampaign}
                     setModals={setModals}
                 />

@@ -35,10 +35,20 @@ def endpoint_is_always_allowed(request):
 
     if endpoint_is_user_photo(request) and user_is_requesting_its_photo(request):
         return True
+    elif endpoint_is_get_user_by_id(request) and user_is_requesting_its_data(request):
+        return True
     elif endpoint_is_health_check(request):
         return True
 
     return False
+
+
+def endpoint_is_get_user_by_id(request):
+    return replace_path_params(request.path) == "/api/users/<PATH_PARAM>" and request.method == "GET"
+
+
+def user_is_requesting_its_data(request):
+    return int(get_path_params_from_endpoint(request.path)[0]) == int(request.user.id)
 
 
 def endpoint_is_health_check(request):

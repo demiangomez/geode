@@ -86,8 +86,6 @@ urlpatterns = [
     path('people/<int:pk>', views.PersonDetail.as_view(), name='people_detail'),
     path('people/<int:pk>/relations',
          views.PersonRelations.as_view(), name='people_relations'),
-    path('people/has-duplicates/<str:first_name>/<str:last_name>',
-         views.PersonHasDuplicates.as_view(), name='people_has_duplicates'),
     path('people/<int:pk>/merge-to/<int:person_target_pk>',
          views.MergePerson.as_view(), name='merge_person'),
     path('ppp-soln', views.PppSolnList.as_view(), name='ppp_soln_list'),

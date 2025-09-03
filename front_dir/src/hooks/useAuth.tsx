@@ -10,7 +10,7 @@ import {
 import { Navigate } from "react-router-dom";
 
 import { useLocalStorage } from "@hooks/useLocalStorage";
-import useApi from "@hooks/useApi";
+import { useApi, useUser } from "@hooks";
 
 import { jwtDeserializer } from "@utils";
 import { getUserPhotoService, getUserService } from "@services";
@@ -31,6 +31,7 @@ interface AuthContextProps {
     setRefresh: (refresh: boolean | null) => void;
     setRefreshToken: (token: string | null) => void;
     setUserPhoto: (photo: string | null) => void;
+    getUserData: () => void;
 }
 
 interface AuthProviderProps {
@@ -48,6 +49,7 @@ const AuthContext = createContext<AuthContextProps>({
     logout: () => {},
     getRole: () => {},
     loginRefresh: () => {},
+    getUserData: () => {},
     getUserPhoto: () => {},
     setRefresh: () => {},
     setRefreshToken: () => {},
@@ -55,6 +57,7 @@ const AuthContext = createContext<AuthContextProps>({
 });
 
 export const AuthProvider = ({ children }: AuthProviderProps) => {
+    const { dispatch: userDispatch } = useUser();
     const [token, setToken] = useLocalStorage("gpsToken", null);
     const [refreshToken, setRefreshToken] = useLocalStorage("gpsRefresh", null);
     const [role, setRole] = useLocalStorage("gpsRole", null);
@@ -89,6 +92,13 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setRefreshToken(null);
         setRefresh(null);
         setRole(null);
+        setUserPhoto(null);
+        // Esto es para que al cambiar de usuario se reseteen los permisos
+        userDispatch({
+            type: "INIT",
+            method: "get",
+        });
+
         if (href) <Navigate to="/auth/login" />;
     };
 
@@ -102,6 +112,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         const idUser = jwtDeserializer(token ?? "")?.user_id ?? 0;
         try {
             const bParams: GetParams = { with_people: true };
+
             const res = await getUserService<UsersData>(api, idUser, bParams);
             // Obtener la foto y usar su valor directamente
             let photoData = null;
@@ -189,8 +200,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     }, []);
 
     useEffect(() => {
-        getUserPhoto();
-        getUserData();
+        if (token) {
+            getUserPhoto();
+            getUserData();
+        }
     }, [token]);
 
     const value = useMemo(
@@ -209,6 +222,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
             setRefresh,
             setRefreshToken,
             setUserPhoto,
+            getUserData,
         }),
         [token, refresh, role, userPhoto, user],
     );

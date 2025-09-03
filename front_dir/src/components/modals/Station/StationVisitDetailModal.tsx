@@ -951,7 +951,7 @@ const StationVisitDetailModal = ({
                                             )}
                                         </div>
                                         <div className="w-full grid grid-cols-1 grid-flow-dense">
-                                            <div className="flex flex-col w-full rounded-md bg-neutral-content max-h-[200px] overflow-auto flex-grow">
+                                            <div className="flex flex-col w-full rounded-md bg-neutral-content max-h-[200px] overflow-y-auto flex-grow">
                                                 {visit?.people.length > 0 ? (
                                                     visit?.people.map(
                                                         (p: {
@@ -960,7 +960,7 @@ const StationVisitDetailModal = ({
                                                         }) => {
                                                             return (
                                                                 <div
-                                                                    className={`flex-grow overflow-hidden ${!edit ? "p-2" : ""} last:border-b-0 border-b-2 border-neutral-200`}
+                                                                    className={`${!edit ? "p-2" : ""} last:border-b-0 border-b-2 border-neutral-200`}
                                                                     key={p.id}
                                                                 >
                                                                     <div className="p-1 flex w-full justify-between items-center">
@@ -1291,7 +1291,7 @@ const StationVisitDetailModal = ({
                                     </button>
                                 </div>
                                 <img
-                                    className="cursor-zoom-in size-70 object-contain rounded"
+                                    className="cursor-zoom-in size-70 object-contain rounded justify-self-center"
                                     src={`data:image/*;base64,${images[0].actual_image ?? ""}`}
                                     alt={"photos"}
                                     onMouseEnter={() =>
@@ -1358,7 +1358,7 @@ const StationVisitDetailModal = ({
                                                         </button>
                                                     </div>
                                                     <img
-                                                        className="cursor-zoom-in size-70 object-contain rounded"
+                                                        className="cursor-zoom-in size-70 object-contain rounded justify-self-center"
                                                         src={`data:image/*;base64,${img.actual_image ?? ""}`}
                                                         alt={"photos"}
                                                         onMouseEnter={() =>

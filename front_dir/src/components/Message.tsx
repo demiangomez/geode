@@ -46,7 +46,7 @@ const Message = ({ error, msg }: MessageProps) => {
     return (
         <div
             id="toasty"
-            className={`flex flex-col fixed z-[1000000] right-6 mt-2 ${error ? "border-t-2 border-t-red-500" : "border-t-2 border-t-green-500"} items-center w-full max-w-xs p-4 mb-4 rounded-lg shadow text-gray-400 bg-gray-800 `}
+            className={`flex flex-col fixed z-[1000000] right-6 top-12 mt-10 ${error ? "border-t-2 border-t-red-500" : "border-t-2 border-t-green-500"} items-center w-full max-w-xs p-4 mb-4 rounded-lg shadow text-gray-400 bg-gray-800 `}
             role="alert"
         >
             <div className="flex items-center justify-between w-full space-x-2">

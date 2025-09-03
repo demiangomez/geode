@@ -293,6 +293,55 @@ const StationInfoModal = ({
         paginateStationInfo(newParams);
     };
 
+    const refetchDefault = async () => {
+        // Calcula los parámetros de la página actual
+        const paramsToUse = {
+            ...params,
+            limit: REGISTERS_PER_PAGE,
+            offset: REGISTERS_PER_PAGE * (activePage - 1),
+        };
+
+        const res = await getStationInfoService<StationInfoServiceData>(
+            api,
+            paramsToUse,
+        );
+
+        let allData = res.data;
+        if (rinexStationInfo) {
+            allData = allData.filter((st) =>
+                rinexStationInfo.some((r) => r.api_id === st.api_id),
+            );
+        }
+
+        // Si la página actual quedó vacía, ir a la anterior
+        if (allData.length === 0 && activePage > 1) {
+            const prevParams = {
+                ...params,
+                limit: REGISTERS_PER_PAGE,
+                offset: REGISTERS_PER_PAGE * (activePage - 2), // ESTO ES PORQUE ESTOY EN LA PAG 2, Y QUIERO VER LOS REGISTROS DE LA PAG 1, ENTONCES PARTO DESDE UN OFFSET EN 0
+            };
+            setActivePage(activePage - 1);
+            const prevRes = await getStationInfoService<StationInfoServiceData>(
+                api,
+                prevParams,
+            );
+            let prevData = prevRes.data;
+            if (rinexStationInfo) {
+                prevData = prevData.filter((st) =>
+                    rinexStationInfo.some((r) => r.api_id === st.api_id),
+                );
+            }
+            setStationInfos(prevData);
+        } else {
+            setStationInfos(allData);
+        }
+
+        //Actualizar el total Pages
+        const totalPages = Math.ceil(res.total_count / REGISTERS_PER_PAGE);
+        setPages(totalPages);
+        setTotalCount(res.total_count);
+    };
+
     useEffect(() => {
         if (station && bParams.network_code && bParams.station_code) {
             getStationInfo();
@@ -324,7 +373,6 @@ const StationInfoModal = ({
 
                 <AddStationInfoDropdown />
             </div>
-
             <Table
                 titles={titles}
                 body={tableData}
@@ -341,7 +389,6 @@ const StationInfoModal = ({
                 setState={setStationInfo}
                 state={stationInfos}
             />
-
             {stationInfos && stationInfos?.length > 0 && (
                 <Pagination
                     pages={pages}
@@ -355,10 +402,7 @@ const StationInfoModal = ({
                     stationInfo={stationInfo}
                     typeAddition={typeAddition}
                     modalType={modals.type}
-                    reFetch={() => {
-                        setActivePage(1);
-                        getStationInfo();
-                    }}
+                    reFetch={refetchDefault}
                     setStateModal={setModals}
                     setStationInfo={setStationInfo}
                     setTypeAddition={setTypeAddition}

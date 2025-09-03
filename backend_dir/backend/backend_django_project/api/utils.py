@@ -123,43 +123,6 @@ class StationUtils:
 
         return harpos_parsed
 
-    @staticmethod
-    def validate_that_coordinates_are_provided(data):
-        by_ecef = False
-        by_lat_lon = False
-        if 'lat' not in data or 'lon' not in data or 'height' not in data:
-            if 'auto_x' not in data or 'auto_y' not in data or 'auto_z' not in data:
-                raise exceptions.CustomValidationErrorExceptionHandler(
-                    "fields 'lat', 'lon' and 'height' or ECEF coordinates (fields 'auto_x', 'auto_y', 'auto_z') must be provided")
-            else:
-                by_ecef = True
-        else:
-            by_lat_lon = True
-
-        if by_lat_lon == True:
-            try:
-                if not isinstance(data['lat'], float):
-                    float(data['lat'])
-                if not isinstance(data['lon'], float):
-                    float(data['lon'])
-                if not isinstance(data['height'], float):
-                    float(data['height'])
-            except (ValueError, TypeError):
-                raise exceptions.CustomValidationErrorExceptionHandler(
-                    "fields 'lat', 'lon' and 'height' must be valid floating point numbers")
-
-        if by_ecef == True:
-            try:
-                if not isinstance(data['auto_x'], float):
-                    float(data['auto_x'])
-                if not isinstance(data['auto_y'], float):
-                    float(data['auto_y'])
-                if not isinstance(data['auto_z'], float):
-                    float(data['auto_z'])
-            except (ValueError, TypeError):
-                raise exceptions.CustomValidationErrorExceptionHandler(
-                    "fields 'auto_x', 'auto_y' and 'auto_z' must be valid floating point numbers")
-
 
 class TimeSeriesConfigUtils:
     def _get_required_param(self, request, params, param_name):
@@ -398,27 +361,6 @@ class PersonUtils:
         visits = models.Visits.objects.filter(people=person)
 
         return role_person_station, visits
-
-    @staticmethod
-    def has_duplicates(first_name, last_name):
-        # check if first_name and last_name are not empty strings
-        if not isinstance(first_name, str) or not isinstance(last_name, str):
-            raise exceptions.CustomValidationErrorExceptionHandler(
-                "first_name and last_name must be strings")
-
-        # remove leading and trailing spaces
-        first_name = first_name.strip()
-        last_name = last_name.strip()
-
-        if first_name == "" or last_name == "":
-            raise exceptions.CustomValidationErrorExceptionHandler(
-                "first_name and last_name cannot be empty strings")
-
-        # check if there are duplicates using case-insensitive filtering
-        duplicates = models.Person.objects.filter(
-            first_name__iexact=first_name, last_name__iexact=last_name)
-
-        return duplicates.exists()
 
     @staticmethod
     def merge_person(person_source, person_target):
@@ -687,10 +629,12 @@ class EarthquakeUtils:
         eq_t = pyOkada.EarthquakeTable(cnn, earthquake.id)
 
         affected_stations_only_postseismic = [{"network_code": affected_station["NetworkCode"],
-                                               "station_code": affected_station["StationCode"]} for affected_station in eq_t.p_stations]
+                                               "station_code": affected_station["StationCode"],
+                                               "distance": affected_station["distance"], "azimuth": affected_station["azimuth"]} for affected_station in eq_t.p_stations]
 
         affected_stations_without_postseismic = [{"network_code": affected_station["NetworkCode"],
-                                                  "station_code": affected_station["StationCode"]} for affected_station in eq_t.c_stations]
+                                                  "station_code": affected_station["StationCode"],
+                                                  "distance": affected_station["distance"], "azimuth": affected_station["azimuth"]} for affected_station in eq_t.c_stations]
 
         affected_stations_including_postseismic = affected_stations_without_postseismic + \
             affected_stations_only_postseismic
@@ -708,13 +652,13 @@ class EarthquakeUtils:
         kml_mask_without_postseismic = base64.b64encode(
             kml_mask_without_postseismic.encode('utf-8')).decode('utf-8')
 
-        coseismic_displacements = eq_t.get_coseismic_displacements()
+        coseismic_displacements_dict = {(displacement['NetworkCode'], displacement['StationCode']): displacement for displacement in eq_t.get_coseismic_displacements()}
 
-        return affected_stations_including_postseismic, affected_stations_without_postseismic, kml_mask_including_postseismic, kml_mask_without_postseismic, coseismic_displacements
+        return affected_stations_including_postseismic, affected_stations_without_postseismic, kml_mask_including_postseismic, kml_mask_without_postseismic, coseismic_displacements_dict
 
-    def get_stations_csv_list(earthquake, stations_including_postseismic_reduced, stations_without_postseismic_reduced):
+    def get_stations_csv_list(earthquake, stations_including_postseismic_reduced, stations_without_postseismic_reduced, coseismic_displacements_dict):
         header = ["Network Code", "Station Code", "Latitude",
-                  "Longitude", "Postseismic", "Coseismic", "Observation Availability"]
+                  "Longitude", "Postseismic", "Coseismic", "Observation Availability", "North Displacement", "East Displacement", "Up Displacement", "Distance", "Azimuth"]
 
         earthquake_date = earthquake.date.date()
         day_before_earthquake = earthquake_date - \
@@ -743,6 +687,16 @@ class EarthquakeUtils:
                 ).exists()
 
                 station_data.append(observation_availability)
+                coseismic_displacement = coseismic_displacements_dict.get(
+                    (station['network_code'], station['station_code']))
+                station_data.append(coseismic_displacement.get(
+                    'n', 'N/A') if coseismic_displacement else 'N/A')
+                station_data.append(coseismic_displacement.get(
+                    'e', 'N/A') if coseismic_displacement else 'N/A')
+                station_data.append(coseismic_displacement.get(
+                    'u', 'N/A') if coseismic_displacement else 'N/A')
+                station_data.append(station['distance'])
+                station_data.append(station['azimuth'])
                 csv_content_without_postseismic.append(
                     '|'.join([str(item) for item in station_data]))
 
@@ -774,7 +728,16 @@ class EarthquakeUtils:
                 ).exists()
 
                 station_data.append(observation_availability)
-
+                coseismic_displacement = coseismic_displacements_dict.get(
+                    (station['network_code'], station['station_code']))
+                station_data.append(coseismic_displacement.get(
+                    'n', 'N/A') if coseismic_displacement else 'N/A')
+                station_data.append(coseismic_displacement.get(
+                    'e', 'N/A') if coseismic_displacement else 'N/A')
+                station_data.append(coseismic_displacement.get(
+                    'u', 'N/A') if coseismic_displacement else 'N/A')
+                station_data.append(station['distance'])
+                station_data.append(station['azimuth'])
                 csv_content_including_postseismic.append(
                     '|'.join([str(item) for item in station_data]))
             except models.Stations.DoesNotExist:

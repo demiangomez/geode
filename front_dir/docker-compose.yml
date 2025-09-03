@@ -3,10 +3,12 @@ services:
         build: .
         container_name: gnss-frontend
         restart: always
+        environment:
+            - NGINX_PORT=${NGINX_PORT}
+            - SERVER_NAME=${SERVER_NAME}
         volumes:
             - .env:/app/.env
-            - ./srv/nginx.conf:/etc/nginx/nginx.conf
         ports:
-            - "${APP_PORT}:80"
+            - "${APP_PORT}:${NGINX_PORT}"
         # depends_on:
         #     - backend

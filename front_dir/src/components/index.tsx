@@ -248,7 +248,7 @@ export { default as MapVector } from "./map/MapVector";
 
 export { default as MapVisit } from "./map/MapVisit";
 
-export { default as VisitsScroller } from "./map/VisitsScroller";
+export { default as RoutesScroller } from "./map/RoutesScroller";
 
 export { default as MainScroller } from "./map/MainScroller";
 

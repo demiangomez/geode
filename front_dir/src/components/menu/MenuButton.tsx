@@ -10,11 +10,12 @@ interface MenuButtonProps {
             | undefined
         >
     >;
+    onMenuClick?: () => void
     showMenu: { type: string; show: boolean } | undefined;
     typeKey: string;
 }
 
-const MenuButton = ({ setShowMenu, showMenu, typeKey }: MenuButtonProps) => {
+const MenuButton = ({ setShowMenu, onMenuClick, showMenu, typeKey }: MenuButtonProps) => {
     const [isOpen, setIsOpen] = useState<boolean>();
 
     useEffect(() => {
@@ -22,14 +23,18 @@ const MenuButton = ({ setShowMenu, showMenu, typeKey }: MenuButtonProps) => {
         setIsOpen(toggle);
     }, [showMenu, typeKey]);
 
+
     return (
         <div className="menu">
             <li
                 onClick={() =>
+                {
+                    onMenuClick && onMenuClick()
                     setShowMenu({
                         type: typeKey,
                         show: showMenu?.type === typeKey ? !showMenu.show : true,
                     })
+                }
                 }
             >
                 <details open={isOpen}>
