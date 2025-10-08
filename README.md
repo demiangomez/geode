@@ -4,20 +4,20 @@ This document explains how to deploy the app using Docker Compose. We will use i
 
 ### Prerequirements
 
-1. Docker installed
+1. Docker installed.
 
-### DB Setup
+### Procedure
 
-Skip this part if you are using an existing db
+All configuration files params are explained below.
 
-1. bash command as postgres user: createuser gnss_data_osu;
-2. bash command as postgres user: createdb gnss;
-3. psql command as postgres user at postgres db: alter user gnss_data_osu with password 'password';
-4. bash command as postgres user: psql -d gnss -f DUMP_FILE_PATH > LOG_FILE_PATH 2>&1 &
-5. psql command as postgres user at postgres db: alter database gnss owner to gnss_data_osu;
-6. psql command as postgres user at postgres db: GRANT ALL PRIVILEGES ON DATABASE gnss TO gnss_data_osu;
-7. set postgresql.conf file properly
-8. set pg_hba.conf file properly
+1. Define a conf file named ".env" inside the root folder following '.env.sample'
+2. Define a conf file named "gnss_data.cfg" under 'backend_dir/backend/' following 'backend_dir/backend/conf_example.txt'
+3. Define a conf file named ".env" under 'front_dir/' following 'front_dir/.env.sample'
+4. From the root directory:
+
+```
+   docker compose up --build -d
+```
 
 ### Params Explanation
 
@@ -26,17 +26,22 @@ Skip this part if you are using an existing db
 2. APP_PORT: port where the app will be served.
 3. USER_ID_TO_SAVE_FILES: all the media saved by the app will be owned by this user.    
 4. GROUP_ID_TO_SAVE_FILES: all the media saved by the app will be owned by this group. 
+5. SERVER_NAME: domain name where the app will be served
+6. NGINX_PORT: leave it in "5100"
 
 .env file on front_dir folder
 1. VITE_API_URL: The API URL is the same as the app URL (as the front end and the back end are running on the same machine). For example, if users access the app at https://192.168.18.10:2375/, then that will also be the value for this parameter.
+2. SERVER_NAME: domain name where the app will be served
+3. NGINX_PORT: same as NGINX_PORT in root .env file
+4. APP_PORT: same as APP_PORT in root .env file
 
-### Procedure
-
-1. Define a conf file named ".env" inside the root folder following '.env.sample' (detail on this below)
-2. Define a conf file named "gnss_data.cfg" under 'backend_dir/backend/' following 'backend_dir/backend/conf_example.txt'
-3. Define a conf file named ".env" under 'front_dir/' following 'front_dir/.env.sample'
-4. From the root directory:
-
-```
-   docker compose up --build -d
-```
+gnss_data.cfg on backend_dir/backend/
+[django]
+1. rinex_status_date_span_seconds: Time window (in seconds) to group RINEX records by their observation date.
+2. secret_key: Used by Django for cryptographic signing (can be generated on https://djecrety.ir/)
+3. debug: Enables Django's debug mode with detailed error pages. Should be False in production
+4. max_size_image_mb: Maximum allowed image upload size
+5. max_size_file_mb: Maximum allowed file upload size
+6. https: False
+7. user_id_to_save_files: same as USER_ID_TO_SAVE_FILES in .env file
+8. group_id_to_save_files: same as GROUP_ID_TO_SAVE_FILES in .env file
