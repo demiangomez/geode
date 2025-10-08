@@ -9,11 +9,11 @@ This document explains how to deploy the app using Docker Compose. We will use i
 ### Procedure
 
 All configuration files params are explained below.
-
-1. Define a conf file named ".env" inside the root folder following '.env.sample'
-2. Define a conf file named "gnss_data.cfg" under 'backend_dir/backend/' following 'backend_dir/backend/conf_example.txt'
-3. Define a conf file named ".env" under 'front_dir/' following 'front_dir/.env.sample'
-4. From the root directory:
+1. Create a PostgreSQL database with the schema located on 'backend_dir/backend/db_initial_schema.sql'. DB User set on this app must have all privileges on this DB.
+2. Define a conf file named ".env" inside the root folder following '.env.sample'
+3. Define a conf file named "gnss_data.cfg" under 'backend_dir/backend/' following 'backend_dir/backend/conf_example.txt'
+4. Define a conf file named ".env" under 'front_dir/' following 'front_dir/.env.sample'
+5. From the root directory:
 
 ```
    docker compose up --build -d
@@ -23,11 +23,11 @@ All configuration files params are explained below.
 
 .env file on root folder
 1. MEDIA_FOLDER_HOST_PATH: path to where media (documents, images, etc.) uploaded by the user will be placed.
-2. APP_PORT: port where the app will be served.
+2. APP_PORT: port where the app will be served in the host machine.
 3. USER_ID_TO_SAVE_FILES: all the media saved by the app will be owned by this user.    
 4. GROUP_ID_TO_SAVE_FILES: all the media saved by the app will be owned by this group. 
 5. SERVER_NAME: domain name where the app will be served
-6. NGINX_PORT: leave it in "5100"
+6. NGINX_PORT: port where NGINX will listen to serve the app inside the container.
 
 .env file on front_dir folder
 1. VITE_API_URL: The API URL is the same as the app URL (as the front end and the back end are running on the same machine). For example, if users access the app at https://192.168.18.10:2375/, then that will also be the value for this parameter.
