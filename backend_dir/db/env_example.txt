@@ -1,5 +1,0 @@
-DB_NAME=gnss
-DB_USER=gnss_data_osu
-DB_PASSWORD=password
-DB_HOST=localhost
-DB_PORT=5432
