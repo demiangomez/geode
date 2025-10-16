@@ -227,6 +227,7 @@ const People = () => {
                             }
                             setState={setRolePersonStation}
                             state={rolePersonStations}
+                            dataFetchUrl="api/people"
                         />
                         {modals?.show &&
                         modals.title === "EditStationPerson" ? (

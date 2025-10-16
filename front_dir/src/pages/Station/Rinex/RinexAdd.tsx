@@ -363,6 +363,7 @@ const RinexAdd = ({ stationApiId, handleCloseModal, setModalState }: Props) => {
                     state={records}
                     setState={setRecords}
                     onClickFunction={() => {}}
+                    dataFetchUrl="api/station"
                 />
             )}
 
@@ -378,7 +379,7 @@ const RinexAdd = ({ stationApiId, handleCloseModal, setModalState }: Props) => {
                         records.length === 0
                     }
                 >
-                    Add
+                    Add asd
                     {loading && (
                         <span className="loading loading-spinner loading-sm self-center"></span>
                     )}

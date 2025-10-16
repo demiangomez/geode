@@ -148,6 +148,7 @@ const UsersTable = () => {
                 }}
                 setState={setUser}
                 state={users}
+                dataFetchUrl="api/users"
             />
             {body && body.length > 0 ? (
                 <Pagination

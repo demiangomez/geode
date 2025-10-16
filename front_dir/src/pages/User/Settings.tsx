@@ -20,7 +20,7 @@ const Settings = () => {
 
     return (
         <div className="justify-items-center mt-2">
-            <h3 className="text-3xl font-bold">Settings</h3>
+            <h3 className="text-3xl font-bold text-center">Settings</h3>
             {user ? (
                 <div
                     className={`w-full gap-4 p-4 flex  ${user?.person === null ? "flex-row " : "lg:flex-col "} `}

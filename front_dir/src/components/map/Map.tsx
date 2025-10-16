@@ -112,7 +112,7 @@ const LoadKmzFromBase64 = ({
             if (
                 !(layer instanceof L.TileLayer) &&
                 !(layer instanceof L.Marker)
-                // && !(layer instanceof L.FeatureGroup) //no Remueve instancias de los cluster
+                //  && !(layer instanceof L.FeatureGroup) //no Remueve instancias de los cluster
             ) {
                 map.removeLayer(layer);
             }
@@ -508,7 +508,14 @@ const MapMarkers = ({
 
     useEffect(() => {
         overlappedStationsByScale();
+        updateMarkersByBounds();
     }, [user, toggleStateEarthquakeMask, earthquakeAffectedStations]);
+
+    useEffect(() => {
+        if (overlappedClusters && stationsWithOverlap) {
+            updateMarkersByBounds();
+        }
+    }, [overlappedClusters, stationsWithOverlap]);
 
     useEffect(() => {
         if (
@@ -937,60 +944,108 @@ const MapMarkers = ({
 
     const markerClusters = useMemo(() => {
         if (!map || !overlappedClusters) return null;
-        return overlappedClusters.map((cluster, index) => {
-            return (
-                <MarkerClusterGroup
-                    key={`cluster-${index}`}
-                    iconCreateFunction={
-                        anyHasProblems(cluster)
-                            ? createClusterWithProblem
-                            : createClusterWithNoProblem
+        return overlappedClusters
+            .map((cluster, clusterIndex) => {
+                // filter cluster based on map filters
+                const filteredCluster = cluster.filter((station) => {
+                    const hasFilters =
+                        filters?.stationWithProblems ||
+                        filters?.stationWithoutProblems ||
+                        (Array.isArray(filterState?.statusOption) &&
+                            filterState?.statusOption.length > 0) ||
+                        (Array.isArray(filterState?.typeOption) &&
+                            filterState?.typeOption.length > 0);
+
+                    if (!hasFilters) {
+                        return true; // No hay filtros, mostrar todas
                     }
-                >
-                    {cluster.map((s) => {
-                        const iconGaps = chosenIcon(
-                            s as StationData,
-                            types,
-                            statuses,
-                        );
-                        const pos: LatLngExpression = [s.lat, s.lon];
-                        return (
-                            <Marker
-                                icon={iconGaps}
-                                key={s.api_id}
-                                position={pos}
-                                eventHandlers={{
-                                    click: () => {
-                                        isNearTop(s as StationData);
-                                    },
-                                    popupclose: () => {
-                                        setIsDaangerousPopup(false);
-                                    },
-                                }}
-                            >
-                                <Tooltip>
-                                    <strong className="text-lg">
-                                        {stationTooltip(s as StationData)}
-                                    </strong>
-                                </Tooltip>
-                                <Popup
-                                    maxWidth={600}
-                                    minWidth={400}
-                                    eventHandlers={{}}
+
+                    if (
+                        filters?.stationWithProblems &&
+                        filters?.stationWithoutProblems
+                    ) {
+                        // Ambos filtros activos, no filtrar por problemas
+                    } else if (filters?.stationWithProblems) {
+                        // Solo mostrar estaciones con problemas
+                        if (!(station.has_gaps || !station.has_stationinfo)) {
+                            return false;
+                        }
+                    } else if (filters?.stationWithoutProblems) {
+                        // Solo mostrar estaciones sin problemas
+                        if (station.has_gaps || !station.has_stationinfo) {
+                            return false;
+                        }
+                    }
+
+                    // Aplicar filtros de tipo y estado usando isStationFiltered
+                    if (
+                        (Array.isArray(filterState?.statusOption) &&
+                            filterState?.statusOption.length > 0) ||
+                        (Array.isArray(filterState?.typeOption) &&
+                            filterState?.typeOption.length > 0)
+                    ) {
+                        return isStationFiltered(station, filterState, filters);
+                    }
+
+                    return true;
+                });
+
+                if (filteredCluster.length === 0) return null;
+
+                return (
+                    <MarkerClusterGroup
+                        key={`cluster-${clusterIndex}-${cluster.map((s) => s.api_id).join("-")}`}
+                        iconCreateFunction={
+                            anyHasProblems(filteredCluster)
+                                ? createClusterWithProblem
+                                : createClusterWithNoProblem
+                        }
+                    >
+                        {filteredCluster.map((s, markerIndex) => {
+                            const iconGaps = chosenIcon(
+                                s as StationData,
+                                types,
+                                statuses,
+                            );
+                            const pos: LatLngExpression = [s.lat, s.lon];
+                            return (
+                                <Marker
+                                    icon={iconGaps}
+                                    key={`cluster-${clusterIndex}-marker-${markerIndex}-${s.api_id}`}
+                                    position={pos}
+                                    eventHandlers={{
+                                        click: () => {
+                                            isNearTop(s as StationData);
+                                        },
+                                        popupclose: () => {
+                                            setIsDaangerousPopup(false);
+                                        },
+                                    }}
                                 >
-                                    <PopupChildren
-                                        station={s as StationData}
-                                        fromMain={true}
-                                        mainParams={mainParams}
-                                    />
-                                </Popup>
-                            </Marker>
-                        );
-                    })}
-                </MarkerClusterGroup>
-            );
-        });
-    }, [overlappedClusters, map, types, statuses]);
+                                    <Tooltip>
+                                        <strong className="text-lg">
+                                            {stationTooltip(s as StationData)}
+                                        </strong>
+                                    </Tooltip>
+                                    <Popup
+                                        maxWidth={600}
+                                        minWidth={400}
+                                        eventHandlers={{}}
+                                    >
+                                        <PopupChildren
+                                            station={s as StationData}
+                                            fromMain={true}
+                                            mainParams={mainParams}
+                                        />
+                                    </Popup>
+                                </Marker>
+                            );
+                        })}
+                    </MarkerClusterGroup>
+                );
+            })
+            .filter(Boolean); // Remove null clusters
+    }, [overlappedClusters, map, types, statuses, filters, filterState]);
 
     return (
         <>
@@ -1246,9 +1301,11 @@ const Map = ({
 }: MapProps) => {
     //---------------------------------------------------------------------------UseStates--------------------------------------------------------------------------------------
 
+    const savedZoomLevel = localStorage.getItem("lastZoomLevel");
+
     const [mapProps, setMapProps] = useState<MyMapContainerProps>({
         center: [0, 0],
-        zoom: 4,
+        zoom: Number(savedZoomLevel) || 4,
         scrollWheelZoom: true,
     });
 
@@ -1286,7 +1343,7 @@ const Map = ({
             center: pos,
         }));
 
-        setVectorMagnitude(Number(saveMagnitudeVector));
+        setVectorMagnitude(Number(saveMagnitudeVector) || 1);
 
         setShowScroller(false);
     }, [mapState]);

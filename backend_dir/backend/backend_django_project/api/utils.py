@@ -1341,9 +1341,9 @@ class RinexUtils:
     def _is_filtered(rinex, filters):
         datetime_string_format = "%Y-%m-%d %H:%M"
 
-        if filters["observation_doy"] != None and str(filters["observation_doy"]) not in str(rinex["observation_doy"]):
+        if filters["observation_doy"] != None and str(filters["observation_doy"]) != str(int(rinex["observation_doy"])):
             return True
-        elif filters["observation_f_year"] != None and str(filters["observation_f_year"]) not in str(round(float(rinex["observation_f_year"]), 3)):
+        elif filters["observation_f_year"] != None and str(filters["observation_f_year"]) != str(round(float(rinex["observation_f_year"]), 3)):
             return True
         elif filters["observation_s_time_since"] != None and datetime.datetime.strptime(filters["observation_s_time_since"], datetime_string_format).replace(second=0) > rinex["observation_s_time"].replace(second=0):
             return True
@@ -1353,7 +1353,7 @@ class RinexUtils:
             return True
         elif filters["observation_e_time_until"] != None and datetime.datetime.strptime(filters["observation_e_time_until"], datetime_string_format).replace(second=0) < rinex["observation_e_time"].replace(second=0):
             return True
-        elif filters["observation_year"] != None and str(filters["observation_year"]) not in str(rinex["observation_year"]):
+        elif filters["observation_year"] != None and str(filters["observation_year"]) != str(int(rinex["observation_year"])):
             return True
         elif filters["antenna_dome"] != None and str(filters["antenna_dome"]) not in str(rinex["antenna_dome"]):
             return True

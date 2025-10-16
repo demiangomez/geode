@@ -126,29 +126,6 @@ const EventsFilter = ({
                         </h2>
                         <div className="card-body">
                             <div className="grid grid-cols-1 h-full place-content-center gap-4">
-                                <div className="flex flex-col text-sm space-y-2 my-2">
-                                    <span className="font-bold">YEAR</span>
-                                    <label
-                                        htmlFor="year"
-                                        className="input input-bordered flex items-center w-full"
-                                    >
-                                        <input
-                                            type="text"
-                                            value={
-                                                formState[
-                                                    "year" as keyof typeof formState
-                                                ]
-                                            }
-                                            name="year"
-                                            id="year"
-                                            className="w-full"
-                                            onChange={(e) => {
-                                                handleChange(e);
-                                            }}
-                                        />
-                                    </label>
-                                </div>
-
                                 <div className="flex flex-col text-sm space-y-2 my-2 overflow-x-auto">
                                     <span className="font-bold">
                                         EVENT DATE
@@ -200,6 +177,30 @@ const EventsFilter = ({
                                         </label>
                                     </div>
                                 </div>
+
+                                <div className="flex flex-col text-sm space-y-2 my-2">
+                                    <span className="font-bold">YEAR</span>
+                                    <label
+                                        htmlFor="year"
+                                        className="input input-bordered flex items-center w-full"
+                                    >
+                                        <input
+                                            type="text"
+                                            value={
+                                                formState[
+                                                    "year" as keyof typeof formState
+                                                ]
+                                            }
+                                            name="year"
+                                            id="year"
+                                            className="w-full"
+                                            onChange={(e) => {
+                                                handleChange(e);
+                                            }}
+                                        />
+                                    </label>
+                                </div>
+
                                 <div className="flex flex-col text-sm space-y-2 my-2">
                                     <span className="font-bold">DOY</span>
                                     <label

@@ -170,19 +170,22 @@ const RinexFilter = ({
 
     const inputRefReceiverType = useRef<HTMLInputElement>(null);
 
-    const selectRef = (key: string) =>{
-        return key === "antenna type" ? inputRefAntennaType : key === "receiver type" ? inputRefReceiverType : null;
-    }
-    
+    const selectRef = (key: string) => {
+        return key === "antenna type"
+            ? inputRefAntennaType
+            : key === "receiver type"
+              ? inputRefReceiverType
+              : null;
+    };
 
     useEffect(() => {
-        if(showMenu){
+        if (showMenu) {
             const ref = selectRef(showMenu.type);
             if (ref && ref.current) {
                 ref.current.focus();
             }
         }
-    },[showMenu])
+    }, [showMenu]);
 
     return (
         <Modal
@@ -204,54 +207,6 @@ const RinexFilter = ({
 
                         <div className="card-body">
                             <div className="grid grid-cols-1 gap-4">
-                                <div className="flex flex-col text-sm space-y-2 my-2">
-                                    <span className="font-bold">F YEAR</span>
-                                    <label
-                                        htmlFor="f year"
-                                        className="input input-bordered flex items-center w-full"
-                                    >
-                                        <input
-                                            type="text"
-                                            value={
-                                                formState[
-                                                    quitSpace(
-                                                        "f year",
-                                                    ) as keyof typeof formState
-                                                ]
-                                            }
-                                            name="f year"
-                                            id="f year"
-                                            className="w-full"
-                                            onChange={(e) => {
-                                                handleChange(e);
-                                            }}
-                                        />
-                                    </label>
-                                </div>
-                                <div className="flex flex-col text-sm space-y-2 my-2">
-                                    <span className="font-bold">YEAR</span>
-                                    <label
-                                        htmlFor="year"
-                                        className="input input-bordered flex items-center w-full"
-                                    >
-                                        <input
-                                            type="text"
-                                            value={
-                                                formState[
-                                                    quitSpace(
-                                                        "year",
-                                                    ) as keyof typeof formState
-                                                ]
-                                            }
-                                            name="year"
-                                            id="year"
-                                            className="w-full"
-                                            onChange={(e) => {
-                                                handleChange(e);
-                                            }}
-                                        />
-                                    </label>
-                                </div>
                                 <div className="flex flex-col text-sm space-y-2 my-2 overflow-x-auto">
                                     <span className="font-bold">
                                         OBSERVATION TIME
@@ -307,6 +262,55 @@ const RinexFilter = ({
                                         </label>
                                     </div>
                                 </div>
+                                <div className="flex flex-col text-sm space-y-2 my-2">
+                                    <span className="font-bold">F YEAR</span>
+                                    <label
+                                        htmlFor="f year"
+                                        className="input input-bordered flex items-center w-full"
+                                    >
+                                        <input
+                                            type="text"
+                                            value={
+                                                formState[
+                                                    quitSpace(
+                                                        "f year",
+                                                    ) as keyof typeof formState
+                                                ]
+                                            }
+                                            name="f year"
+                                            id="f year"
+                                            className="w-full"
+                                            onChange={(e) => {
+                                                handleChange(e);
+                                            }}
+                                        />
+                                    </label>
+                                </div>
+                                <div className="flex flex-col text-sm space-y-2 my-2">
+                                    <span className="font-bold">YEAR</span>
+                                    <label
+                                        htmlFor="year"
+                                        className="input input-bordered flex items-center w-full"
+                                    >
+                                        <input
+                                            type="text"
+                                            value={
+                                                formState[
+                                                    quitSpace(
+                                                        "year",
+                                                    ) as keyof typeof formState
+                                                ]
+                                            }
+                                            name="year"
+                                            id="year"
+                                            className="w-full"
+                                            onChange={(e) => {
+                                                handleChange(e);
+                                            }}
+                                        />
+                                    </label>
+                                </div>
+
                                 <div className="flex flex-col text-sm space-y-2 my-2">
                                     <span className="font-bold">DOY</span>
                                     <label

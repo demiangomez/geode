@@ -1,8 +1,14 @@
-export { useAuth } from "./useAuth";
-
 export { useUser } from "./user/userInfo.context";
 
 export { useUserInfo } from "./user/useUserInfo.reducer";
+
+export { initialState as useUserInitialState } from "./user/useUserInfo.reducer";
+
+export type { Dispatch as useUserDispatchType } from "./user/useUserInfo.reducer";
+
+export type { UserState as useUserStateType } from "./user/useUserInfo.reducer";
+
+export { useAuth } from "./useAuth";
 
 export { default as useApi } from "./useApi";
 

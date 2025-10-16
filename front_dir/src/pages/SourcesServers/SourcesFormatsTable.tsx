@@ -80,6 +80,7 @@ const SourcesFormatsPage = ({
                 deleteRegister={false}
                 state={sourcesFormats}
                 setState={setSourceFormat}
+                dataFetchUrl="api/sources-formats"
             />
             {modals?.show && modals.title === "Source Format" && (
                 <SourcesFormatsTableModal

@@ -177,6 +177,7 @@ const StationStatusTable = () => {
                 }
                 setState={setStatus}
                 state={stationStatus}
+                dataFetchUrl="api/station-status"
             />
             {body && body.length > 0 ? (
                 <Pagination

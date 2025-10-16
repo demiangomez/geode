@@ -71,6 +71,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         if (token) {
             setToken(token);
             setRefresh(null);
+            userDispatch({
+                type: "CLEAR_ALL",
+            });
+
             <Navigate to="/" replace />;
         }
         if (token && nav) {
@@ -95,8 +99,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         setUserPhoto(null);
         // Esto es para que al cambiar de usuario se reseteen los permisos
         userDispatch({
-            type: "INIT",
-            method: "get",
+            type: "CLEAR_ALL",
         });
 
         if (href) <Navigate to="/auth/login" />;

@@ -388,6 +388,7 @@ const StationInfoModal = ({
                 }}
                 setState={setStationInfo}
                 state={stationInfos}
+                dataFetchUrl={"api/station-info"}
             />
             {stationInfos && stationInfos?.length > 0 && (
                 <Pagination

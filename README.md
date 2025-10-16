@@ -9,7 +9,7 @@ This document explains how to deploy the app using Docker Compose. We will use i
 ### Procedure
 
 All configuration files params are explained below.
-1. Create a PostgreSQL database with the schema located on 'backend_dir/backend/db_initial_schema.sql'. DB User set on this app must have all privileges on this DB.
+1. Create a PostgreSQL database with the schema located on 'backend_dir/db_initial_schema.sql'. DB User set on this app must have all privileges on this DB.
 2. Define a conf file named ".env" inside the root folder following '.env.sample'
 3. Define a conf file named "gnss_data.cfg" under 'backend_dir/backend/' following 'backend_dir/backend/conf_example.txt'
 4. Define a conf file named ".env" under 'front_dir/' following 'front_dir/.env.sample'

@@ -215,6 +215,7 @@ const PeopleTable = () => {
                         type: "none",
                     });
                 }}
+                dataFetchUrl="api/people"
             />
             {body && body?.length > 0 ? (
                 <Pagination

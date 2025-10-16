@@ -48,6 +48,7 @@ export default function useApi(
                     userDispatch({
                         type: "INIT",
                         method: error.config.method ?? "",
+                        url: error.config.url ?? "",
                     });
                     setTimeout(() => {
                         userDispatch({
@@ -58,6 +59,7 @@ export default function useApi(
                             msg:
                                 (error.response?.data as Errors).errors[0]
                                     .detail ?? error.message,
+                            url: error.config?.url ?? "",
                         });
                     }, 50);
                 }

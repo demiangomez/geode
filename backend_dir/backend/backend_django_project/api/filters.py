@@ -134,8 +134,8 @@ class EventsFilter(filters.FilterSet):
         field_name='network_code', lookup_expr='exact')
     station_code = filters.CharFilter(
         field_name='station_code', lookup_expr='exact')
-    year = filters.NumberFilter(field_name='year', lookup_expr='icontains')
-    doy = filters.NumberFilter(field_name='doy', lookup_expr='icontains')
+    year = filters.NumberFilter(field_name='year')
+    doy = filters.NumberFilter(field_name='doy')
     description = filters.CharFilter(
         field_name='description', lookup_expr='icontains')
     stack = filters.CharFilter(field_name='stack', lookup_expr='icontains')

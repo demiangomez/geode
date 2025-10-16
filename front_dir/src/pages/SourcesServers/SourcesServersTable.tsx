@@ -63,7 +63,7 @@ const SourcesServersPage = ({
 
     const titles: string[] =
         data.length > 0
-            ? [ "protocol","fqdn","username", "password",  "path" ,"format",]
+            ? ["protocol", "fqdn", "username", "password", "path", "format"]
             : [];
 
     const handleCloseModal = () => {
@@ -74,17 +74,16 @@ const SourcesServersPage = ({
     useEffect(() => {
         if (sourcesServers && sourcesServers.length > 0) {
             const body: string[][] = [];
-            sourcesServers
-                .forEach((sourceServer: SourcesServerData) => {
-                    body.push([
-                        sourceServer.protocol,
-                        sourceServer.fqdn,
-                        sourceServer.username ?? "",
-                        sourceServer.password,
-                        sourceServer.path ?? "",
-                        sourceServer.format,
-                    ]);
-                });
+            sourcesServers.forEach((sourceServer: SourcesServerData) => {
+                body.push([
+                    sourceServer.protocol,
+                    sourceServer.fqdn,
+                    sourceServer.username ?? "",
+                    sourceServer.password,
+                    sourceServer.path ?? "",
+                    sourceServer.format,
+                ]);
+            });
             setData(body);
         }
     }, [sourcesServers]);
@@ -155,6 +154,7 @@ const SourcesServersPage = ({
                 setState={setSourceServer}
                 viewRegister={true}
                 onViewClickFunction={onViewClickFunction}
+                dataFetchUrl="api/sources-servers"
             />
             {modals && modals.show && modals.title === "Sources Servers" && (
                 <SourcesServersTableModal

@@ -145,6 +145,7 @@ const StationsModal = ({ stations, mainParams, setState }: Props) => {
                     dataOnly={true}
                     onClickFunction={() => undefined}
                     state={paginatedStations}
+                    dataFetchUrl="api/stations"
                 />
                 {stations && stations?.length > 0 && (
                     <Pagination

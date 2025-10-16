@@ -146,6 +146,7 @@ const StationRolesTable = () => {
                 }
                 setState={setStationRole}
                 state={stationRoles}
+                dataFetchUrl={"api/station-roles"}
             />
             {body && body.length > 0 ? (
                 <Pagination

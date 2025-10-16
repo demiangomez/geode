@@ -4,9 +4,6 @@ import {
     Alert,
     ConfirmDeleteModal,
     LargeSkeleton,
-    Menu,
-    MenuButton,
-    MenuContent,
     Modal,
     RenderFileModal,
     StationAddFileModal,
@@ -114,10 +111,6 @@ const StationMetadataModal = ({
         { status: number; msg: string; errors?: Errors } | undefined
     >(undefined);
 
-    const [showMenu, setShowMenu] = useState<
-        { type: string; show: boolean } | undefined
-    >(undefined);
-
     const [loading, setLoading] = useState<boolean>(true);
     const [loadFile, setLoadFile] = useState<boolean>(false);
 
@@ -131,9 +124,6 @@ const StationMetadataModal = ({
     const [edit, setEdit] = useState<boolean>(false);
 
     const [monumentType, setMonumentType] = useState<MonumentTypes[]>([]);
-    const [matchingMonuments, setMatchingMonuments] = useState<MonumentTypes[]>(
-        [],
-    );
 
     const [chosenMonumentPhoto, setChosenMonumentPhoto] = useState<
         string | null
@@ -144,10 +134,8 @@ const StationMetadataModal = ({
     >();
 
     const [stationStatus, setStationStatus] = useState<StationStatus[]>([]);
-    const [matchingStatus, setMatchingStatus] = useState<StationStatus[]>([]);
 
     const [stationType, setStationType] = useState<StationStatus[]>([]);
-    const [matchingTypes, setMatchingTypes] = useState<StationStatus[]>([]);
 
     const [firstRinex, setFirstRinex] = useState<RinexData | undefined>(
         undefined,
@@ -256,10 +244,19 @@ const StationMetadataModal = ({
                     }
                 }
 
-                setStationType(types.data ?? []);
-                setMonumentType(monuments.data ?? []);
+                const stationTypes = types.data.sort((a, b) =>
+                    a.name.localeCompare(b.name),
+                );
+                const stationStatus = status.data.sort((a, b) =>
+                    a.name.localeCompare(b.name),
+                );
+                const monumentTypes = monuments.data.sort((a, b) =>
+                    a.name.localeCompare(b.name),
+                );
 
-                setStationStatus(status.data ?? []);
+                setStationType(stationTypes ?? []);
+                setMonumentType(monumentTypes ?? []);
+                setStationStatus(stationStatus ?? []);
             }
         } catch (err) {
             console.error(err);
@@ -537,15 +534,6 @@ const StationMetadataModal = ({
     }, [richText]);
 
     useEffect(() => {
-        if (showMenu) {
-            const ref = selectRef(showMenu.type);
-            if (ref && ref.current) {
-                ref.current.focus();
-            }
-        }
-    }, [showMenu]);
-
-    useEffect(() => {
         if (fileToShow !== undefined) {
             setModals({
                 show: true,
@@ -768,25 +756,6 @@ const StationMetadataModal = ({
                     inputValue: alt.toString(),
                 },
             });
-        }
-
-        if (name === "stationMeta.monument_type") {
-            const match = monumentType?.filter((mt) =>
-                mt.name.toLowerCase().includes(value.toLowerCase()),
-            );
-            setMatchingMonuments(match);
-        }
-        if (name === "stationMeta.status") {
-            const match = stationStatus?.filter((st) =>
-                st.name.toLowerCase().includes(value.toLowerCase()),
-            );
-            setMatchingStatus(match);
-        }
-        if (name === "stationMeta.station_type") {
-            const match = stationType?.filter((st) =>
-                st.name.toLowerCase().includes(value.toLowerCase()),
-            );
-            setMatchingTypes(match);
         }
     };
 
@@ -1048,7 +1017,7 @@ const StationMetadataModal = ({
                                                         {edit ? (
                                                             <div className="flex flex-col space-y-1">
                                                                 <label
-                                                                    className={`input input-bordered flex items-center  ${errorBadge || (key === "max_dist" && maxDistErrorBadge) ? "input-error" : ""}  `}
+                                                                    className={`input input-bordered flex items-center ${errorBadge || (key === "max_dist" && maxDistErrorBadge) ? "input-error" : ""}  `}
                                                                     title={
                                                                         errorBadge
                                                                             ? errorBadge.detail
@@ -1058,53 +1027,146 @@ const StationMetadataModal = ({
                                                                               ? maxDistErrorBadge.detail
                                                                               : ""
                                                                     }
-                                                                >
-                                                                    <input
-                                                                        className={
-                                                                            "w-full "
-                                                                        }
-                                                                        autoComplete="off"
-                                                                        type="text"
-                                                                        ref={selectRef(
+                                                                    style={
+                                                                        inputsWithSelectKey.includes(
                                                                             key,
-                                                                        )}
-                                                                        value={
-                                                                            formState
-                                                                                .stationMeta[
-                                                                                key as keyof typeof formState.stationMeta
-                                                                            ] ??
-                                                                            ""
-                                                                        }
-                                                                        name={
-                                                                            "stationMeta." +
-                                                                            key
-                                                                        }
-                                                                        onChange={(
-                                                                            e,
-                                                                        ) =>
-                                                                            handleChange(
+                                                                        )
+                                                                            ? {
+                                                                                  padding:
+                                                                                      "0",
+                                                                              }
+                                                                            : {}
+                                                                    }
+                                                                >
+                                                                    {inputsWithSelectKey.includes(
+                                                                        key,
+                                                                    ) ? (
+                                                                        <select
+                                                                            className="select select-ghost w-full focus:outline-none focus:border-transparent focus:ring-0 focus:scale-95"
+                                                                            name={
+                                                                                "stationMeta." +
+                                                                                key
+                                                                            }
+                                                                            value={
+                                                                                formState
+                                                                                    .stationMeta[
+                                                                                    key as keyof typeof formState.stationMeta
+                                                                                ] ??
+                                                                                ""
+                                                                            }
+                                                                            style={{
+                                                                                fontSize:
+                                                                                    "16px",
+                                                                                textOverflow:
+                                                                                    "ellipsis",
+                                                                                overflow:
+                                                                                    "hidden",
+                                                                                whiteSpace:
+                                                                                    "nowrap",
+                                                                            }}
+                                                                            onChange={(
                                                                                 e,
-                                                                            )
-                                                                        }
-                                                                        onClick={() => {
-                                                                            if (
-                                                                                inputsWithSelectKey.includes(
-                                                                                    key,
-                                                                                )
-                                                                            ) {
-                                                                                setShowMenu(
+                                                                            ) => {
+                                                                                dispatch(
                                                                                     {
-                                                                                        type: key,
-                                                                                        show: true,
+                                                                                        type: "change_value",
+                                                                                        payload:
+                                                                                            {
+                                                                                                inputName:
+                                                                                                    e
+                                                                                                        .target
+                                                                                                        .name,
+                                                                                                inputValue:
+                                                                                                    e
+                                                                                                        .target
+                                                                                                        .value,
+                                                                                            },
                                                                                     },
                                                                                 );
-                                                                            } else {
-                                                                                setShowMenu(
-                                                                                    undefined,
-                                                                                );
+                                                                            }}
+                                                                        >
+                                                                            <option
+                                                                                value=""
+                                                                                disabled
+                                                                            >
+                                                                                Select
+                                                                                a{" "}
+                                                                                {key.replace(
+                                                                                    "_",
+                                                                                    " ",
+                                                                                )}
+                                                                            </option>
+                                                                            {(key ===
+                                                                            "station_type"
+                                                                                ? stationType
+                                                                                : key ===
+                                                                                    "monument_type"
+                                                                                  ? monumentType
+                                                                                  : key ===
+                                                                                      "status"
+                                                                                    ? stationStatus
+                                                                                    : []
+                                                                            ).map(
+                                                                                (
+                                                                                    item,
+                                                                                ) => (
+                                                                                    <option
+                                                                                        className="truncate"
+                                                                                        key={
+                                                                                            item.id
+                                                                                        }
+                                                                                        value={
+                                                                                            item.name
+                                                                                        }
+                                                                                        title={
+                                                                                            item.name
+                                                                                        }
+                                                                                    >
+                                                                                        {item
+                                                                                            .name
+                                                                                            .length >
+                                                                                        30
+                                                                                            ? item.name.slice(
+                                                                                                  0,
+                                                                                                  30,
+                                                                                              ) +
+                                                                                              "..."
+                                                                                            : item.name}
+                                                                                    </option>
+                                                                                ),
+                                                                            )}
+                                                                        </select>
+                                                                    ) : (
+                                                                        <input
+                                                                            className={
+                                                                                "w-full "
                                                                             }
-                                                                        }}
-                                                                    />
+                                                                            autoComplete="off"
+                                                                            type="text"
+                                                                            ref={selectRef(
+                                                                                key,
+                                                                            )}
+                                                                            value={
+                                                                                formState
+                                                                                    .stationMeta[
+                                                                                    key as keyof typeof formState.stationMeta
+                                                                                ] ??
+                                                                                ""
+                                                                            }
+                                                                            name={
+                                                                                "stationMeta." +
+                                                                                key
+                                                                            }
+                                                                            onChange={(
+                                                                                e,
+                                                                            ) =>
+                                                                                handleChange(
+                                                                                    e,
+                                                                                )
+                                                                            }
+                                                                        />
+                                                                    )}
+
                                                                     {errorBadge ? (
                                                                         <span className="badge badge-error self-start -mt-2">
                                                                             {
@@ -1120,39 +1182,6 @@ const StationMetadataModal = ({
                                                                             }
                                                                         </span>
                                                                     ) : null}
-                                                                    {(key ===
-                                                                        "station_type" ||
-                                                                        key ===
-                                                                            "monument_type" ||
-                                                                        key ===
-                                                                            "status") && (
-                                                                        <MenuButton
-                                                                            setShowMenu={
-                                                                                setShowMenu
-                                                                            }
-                                                                            onMenuClick={() =>
-                                                                                handleChange(
-                                                                                    {
-                                                                                        target: {
-                                                                                            name:
-                                                                                                "stationMeta." +
-                                                                                                key,
-                                                                                            value: formState
-                                                                                                .stationMeta[
-                                                                                                key as keyof typeof formState.stationMeta
-                                                                                            ],
-                                                                                        },
-                                                                                    },
-                                                                                )
-                                                                            }
-                                                                            showMenu={
-                                                                                showMenu
-                                                                            }
-                                                                            typeKey={
-                                                                                key
-                                                                            }
-                                                                        />
-                                                                    )}
                                                                 </label>
                                                             </div>
                                                         ) : key ===
@@ -1203,113 +1232,6 @@ const StationMetadataModal = ({
                                                                     </span>
                                                                 )}
                                                             </p>
-                                                        )}
-                                                        {showMenu?.show &&
-                                                        showMenu.type === key &&
-                                                        key ===
-                                                            "monument_type" ? (
-                                                            <Menu
-                                                                absolute={true}
-                                                            >
-                                                                {(matchingMonuments.length >
-                                                                0
-                                                                    ? matchingMonuments
-                                                                    : monumentType
-                                                                )?.map((mt) => (
-                                                                    <MenuContent
-                                                                        key={
-                                                                            mt.id
-                                                                        }
-                                                                        typeKey={
-                                                                            "stationMeta." +
-                                                                            key
-                                                                        }
-                                                                        value={
-                                                                            mt.name
-                                                                        }
-                                                                        dispatch={
-                                                                            dispatch
-                                                                        }
-                                                                        setShowMenu={
-                                                                            setShowMenu
-                                                                        }
-                                                                    />
-                                                                ))}
-                                                            </Menu>
-                                                        ) : showMenu?.show &&
-                                                          showMenu.type ===
-                                                              key &&
-                                                          key ===
-                                                              "station_type" ? (
-                                                            <Menu
-                                                                absolute={true}
-                                                            >
-                                                                {(matchingTypes.length >
-                                                                0
-                                                                    ? matchingTypes
-                                                                    : stationType
-                                                                )?.map((st) => (
-                                                                    <MenuContent
-                                                                        key={
-                                                                            st.id
-                                                                        }
-                                                                        typeKey={
-                                                                            "stationMeta." +
-                                                                            key
-                                                                        }
-                                                                        value={
-                                                                            st.name
-                                                                        }
-                                                                        dispatch={
-                                                                            dispatch
-                                                                        }
-                                                                        setShowMenu={
-                                                                            setShowMenu
-                                                                        }
-                                                                    />
-                                                                ))}
-                                                            </Menu>
-                                                        ) : (
-                                                            showMenu?.show &&
-                                                            showMenu.type ===
-                                                                key &&
-                                                            key ===
-                                                                "status" && (
-                                                                <Menu
-                                                                    absolute={
-                                                                        true
-                                                                    }
-                                                                >
-                                                                    {(matchingStatus.length >
-                                                                    0
-                                                                        ? matchingStatus
-                                                                        : stationStatus
-                                                                    )?.map(
-                                                                        (
-                                                                            st,
-                                                                        ) => (
-                                                                            <MenuContent
-                                                                                key={
-                                                                                    st.id
-                                                                                }
-                                                                                typeKey={
-                                                                                    "stationMeta." +
-                                                                                    key
-                                                                                }
-                                                                                value={
-                                                                                    st.name
-                                                                                }
-                                                                                dispatch={
-                                                                                    dispatch
-                                                                                }
-                                                                                setShowMenu={
-                                                                                    setShowMenu
-                                                                                }
-                                                                            />
-                                                                        ),
-                                                                    )}
-                                                                </Menu>
-                                                            )
                                                         )}
                                                     </div>
                                                 );
@@ -1963,7 +1885,9 @@ const StationMetadataModal = ({
                                                     );
 
                                                 return (
-                                                    <div key={idx}>
+                                                    <div
+                                                        key={`geodetic-${key}-${idx}`}
+                                                    >
                                                         <div className="text-sm font-bold flex items-center">
                                                             {key === "lat"
                                                                 ? "Latitude"
@@ -2097,7 +2021,9 @@ const StationMetadataModal = ({
                                                     );
 
                                                 return (
-                                                    <div key={idx}>
+                                                    <div
+                                                        key={`cartesian-${key}-${idx}`}
+                                                    >
                                                         <div className="text-sm font-bold flex items-center">
                                                             {key === "auto_x"
                                                                 ? "X"
@@ -2187,7 +2113,9 @@ const StationMetadataModal = ({
                                         ([key, value], idx) => {
                                             if (key) {
                                                 return (
-                                                    <div key={key}>
+                                                    <div
+                                                        key={`equipment-${key}-${idx}`}
+                                                    >
                                                         <div className="text-sm font-bold flex items-center">
                                                             {
                                                                 equipmentFields[

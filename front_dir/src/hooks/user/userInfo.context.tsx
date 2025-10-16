@@ -1,14 +1,16 @@
 import React, { createContext, useReducer, useContext } from "react";
+
 import {
-    UserState,
-    Dispatch,
-    initialState,
+    useUserStateType as UserState,
+    useUserDispatchType as Dispatch,
     useUserInfo,
-} from "./useUserInfo.reducer";
+    useUserInitialState as initialState,
+} from "@hooks";
 
 export const UserContext = createContext<
     { state: UserState; dispatch: Dispatch } | undefined
 >(undefined);
+
 // exporting context
 export const useUser = () => {
     const context = useContext(UserContext);

@@ -221,6 +221,7 @@ const Sources = () => {
                                 deleteRegister={false}
                                 state={sourcesStations}
                                 setState={setSourceStation}
+                                dataFetchUrl="api/sources-stations"
                             />
                         ) : (
                             <div className="text-center text-neutral text-2xl font-bold w-full rounded-md bg-neutral-content p-6">

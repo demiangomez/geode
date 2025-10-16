@@ -219,6 +219,7 @@ const CampaignsTable = () => {
                         type: "edit",
                     })
                 }
+                dataFetchUrl="api/campaigns"
             />
             {body && body.length > 0 ? (
                 <Pagination

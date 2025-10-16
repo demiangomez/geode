@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { MonumentModal, Pagination, Table, TableCard } from "@componentsReact";
 
-import useApi from "@hooks/useApi";
-import { useAuth } from "@hooks/useAuth";
+import { useAuth, useApi } from "@hooks";
 
 import { getMonumentsTypesService } from "@services";
 import { showModal } from "@utils";
@@ -146,6 +145,7 @@ const MonumentsTable = () => {
                 }
                 setState={setMonument}
                 state={monuments}
+                dataFetchUrl={"api/monument-types"}
             />
             {body && body.length > 0 ? (
                 <Pagination

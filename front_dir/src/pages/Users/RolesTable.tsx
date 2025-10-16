@@ -128,6 +128,7 @@ const RolesTable = () => {
                 }
                 setState={setRole}
                 state={roles}
+                dataFetchUrl="api/roles"
             />
             {body && body.length > 0 ? (
                 <Pagination

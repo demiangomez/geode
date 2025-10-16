@@ -138,7 +138,7 @@ const ImageUploadCircle = ({
                     <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-center px-8 transition-opacity duration-200 opacity-75">
                         <span className="text-sm flex flex-col items-center">
                             <CameraIcon className="size-14 z-10 text-gray-600 opacity-75" />
-                            Click or drag a photo
+                            Select or drag a photo
                         </span>
                     </div>
 

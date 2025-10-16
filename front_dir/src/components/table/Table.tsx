@@ -34,6 +34,7 @@ interface TableProps {
     alterInfo?: any;
     state?: any;
     setState?: any;
+    dataFetchUrl?: string;
     onAlterClickFunction?: () => void;
     onClickFunction: () => void;
     onVisitsClickFunction?: () => void;
@@ -52,6 +53,7 @@ const Table = ({
     body,
     alterInfo,
     state,
+    dataFetchUrl,
     onClickFunction,
     onAlterClickFunction,
     onVisitsClickFunction,
@@ -64,7 +66,7 @@ const Table = ({
     selectAction,
 }: TableProps) => {
     const {
-        state: { status: userFetchStatus, msg: userMsg },
+        state: { unauthorizedOperations },
     } = useUser();
 
     const navigate = useNavigate();
@@ -77,15 +79,26 @@ const Table = ({
 
     const [indexCheked, setIndexCheked] = useState<number[]>([]);
 
+    // verifico si hay errores de auth para metodo get, ya que la tabla solo recibe datos
+
+    const unauthorizedOperationsKey = dataFetchUrl + "-get";
+
+    const authErrorForThisTable =
+        dataFetchUrl &&
+        unauthorizedOperations[unauthorizedOperationsKey] &&
+        unauthorizedOperations[unauthorizedOperationsKey].method === "get"
+            ? unauthorizedOperations[unauthorizedOperationsKey].msg
+            : null;
+
     return (
         <div
             className={
                 visibleTooltipIndex === null ? `overflow-x-auto pb-2` : ""
             }
         >
-            {userFetchStatus === "unAuthorized" ? (
+            {authErrorForThisTable ? (
                 <div className="text-center text-neutral text-xl font-bold w-full rounded-md bg-neutral-content p-6">
-                    {userMsg}
+                    {authErrorForThisTable}
                 </div>
             ) : (
                 <table className="table table-zebra bg-neutral-content">

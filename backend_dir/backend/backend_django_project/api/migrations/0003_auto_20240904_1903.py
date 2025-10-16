@@ -18,7 +18,7 @@ def set_has_stationinfo(apps, schema_editor):
     conn, cur = connect_to_db()
 
     query = """
-    WITH stations_with_stationinfo AS ( select api_id from (select s.api_id, EXISTS (SELECT 1 FROM stationinfo si where si."NetworkCode" = s."NetworkCode" and si."StationCode" = s."StationCode") as has_stationinfo from stations s) where has_stationinfo = true)
+    WITH stations_with_stationinfo AS ( select api_id from (select s.api_id, EXISTS (SELECT 1 FROM stationinfo si where si."NetworkCode" = s."NetworkCode" and si."StationCode" = s."StationCode") as has_stationinfo from stations s) subq where has_stationinfo = true)
     UPDATE api_stationmeta SET has_stationinfo = true WHERE station_id IN (SELECT * FROM stations_with_stationinfo);
     """
 
@@ -68,4 +68,3 @@ class Migration(migrations.Migration):
         migrations.RunPython(set_has_stationinfo),
         migrations.RunPython(add_station_country_code_fk)
     ]
-

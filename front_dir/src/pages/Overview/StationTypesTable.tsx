@@ -149,6 +149,7 @@ const StationTypesTable = () => {
                 }
                 setState={setStationType}
                 state={stationTypes}
+                dataFetchUrl={"api/station-types"}
             />
             {body && body.length > 0 ? (
                 <Pagination

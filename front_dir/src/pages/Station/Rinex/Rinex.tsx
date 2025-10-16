@@ -359,6 +359,8 @@ const Rinex = () => {
 
             setRinexFilterData(rinexWithGroupId);
 
+            setActivePage(1); // FAL: 15-09-2025 Reset to first page when applying a new filter to prevent errors on pagination
+
             setRinexFilter(true);
         } catch (err) {
             console.error(err);
