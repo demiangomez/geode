@@ -50,8 +50,12 @@ def prune(OC, central_points, method='minsize'):
         counts = mod.sum(axis=0)
         problems = np.sum(counts == 0)
         if problems == 0:
-            subset.append(i)
-            OC[i, :] = np.zeros(rowlength)
+            for row in mod:
+                if np.sum(row) > 0:
+                    problems += ~(np.max(mod[:,row].sum(axis=0)) >= 2)
+            if problems == 0:
+                subset.append(i)
+                OC[i, :] = np.zeros(rowlength)
     # Cast subset list to pandas index
     dfIndex = pd.Index(subset)
     # Cast OC to pandas dataframe
