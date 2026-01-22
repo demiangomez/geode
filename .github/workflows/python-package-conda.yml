@@ -5,6 +5,7 @@ on:
     branches:
       - 'master'
       - 'releases/**'
+      - 'test_fix'
   pull_request_target:
     types: [assigned, opened, synchronize, reopened]
 
