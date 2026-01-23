@@ -32,7 +32,7 @@ from geode.etm.core.s_score import ScoreTable
 from geode.etm.core.type_declarations import JumpType
 from geode.etm.data.solution_data import SolutionDataException
 from geode.etm.core.data_classes import (AdjustmentModels, SolutionType, CovarianceFunction,
-                                          ModelingParameters, SolutionOptions, StationMetadata)
+                                          ModelingParameters, SolutionOptions, StationMetadata, JumpParameters)
 from geode.etm.etm_functions.polynomial import PolynomialFunction
 from geode.etm.etm_functions.periodic import PeriodicFunction
 from geode.etm.etm_functions.jumps import JumpFunction
@@ -65,7 +65,7 @@ COVARIANCE_MAP = {
     'gaussian': CovarianceFunction.GAUSSIAN
 }
 
-def read_kml_or_kmz(cnn: dbConnection.Cnn, file_path: str, metadata: str):
+def read_kml_or_kmz(cnn: dbConnection.Cnn, file_path: str, metadata: str, s_score_mag_limit: float):
     # Check if the file is a KMZ (by its extension)
     if file_path.endswith('.kmz'):
         # Open the KMZ file and read it in memory
@@ -108,7 +108,7 @@ def read_kml_or_kmz(cnn: dbConnection.Cnn, file_path: str, metadata: str):
                                lat=coord[0][0], lon=coord[1][0],
                                sdate=Date(year=1990, doy=1),
                                edate=Date(datetime=datetime.now()),
-                               magnitude_limit=6.0)
+                               magnitude_limit=s_score_mag_limit)
             score_table = score.table
         else:
             score_table = []
@@ -382,6 +382,43 @@ def get_constraints(config, args):
     return user_constraints
 
 
+def process_custom_relaxations(cnn:dbConnection.Cnn, config: EtmConfig, custom_relax):
+    events = []
+    current_event = None
+    current_relaxations = []
+
+    for arg in custom_relax:
+        try:
+            # Try to convert to float - if successful, it's a relaxation value
+            relaxation = float(arg)
+            current_relaxations.append(relaxation)
+        except ValueError:
+            # If conversion fails, it's an event ID
+            # Save the previous event if it exists
+            if current_event is not None:
+                events.append((current_event, current_relaxations))
+
+            # Start a new event
+            current_event = arg
+            current_relaxations = []
+
+    # Don't forget the last event
+    if current_event is not None:
+        events.append((current_event, current_relaxations))
+
+    # now process the relaxations
+    for event, relax in events:
+        rs = cnn.query_float("SELECT * FROM earthquakes WHERE id = '%s'" % event, as_dict=True)[0]
+        date = Date(datetime=rs['date'])
+        jump_params = JumpParameters(
+            jump_type=JumpType.COSEISMIC_JUMP_DECAY,
+            relaxation=relax,
+            date=date,
+            action='+')
+
+        config.modeling.user_jumps.append(jump_params)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Plot extended trajectory models (ETMs) '
                                                  'for station data stored in the database, json files, or text files',
@@ -462,6 +499,12 @@ def main():
                         default=ModelingParameters().relaxation,
                         help="Relaxation value(s) to use during the fit. Default as defined by the station in "
                              "the database or in the ETM module (0.05 and 1 years)")
+
+    parser.add_argument('-event_relax', '--event_relax', type=str, nargs='+',
+                        default=[], metavar='event_id relax1 relax2',
+                        help="Override default relaxation values with custom relaxation for specific events without "
+                             "modifying the database. If custom database entry exists, this parameter overrides "
+                             "the existing configuration")
 
     parser.add_argument('-plot', '--plot_options', nargs='*',
                         choices=['out', 'hist', 'missing', 'residuals', 'no-model', 'no-plots'],
@@ -565,7 +608,7 @@ def main():
     from_kmz = False
     if args.stnlist[0].endswith(('kmz', 'kml')):
         # user selected database override
-        stnlist = read_kml_or_kmz(cnn, args.stnlist[0], args.metadata_filename)
+        stnlist = read_kml_or_kmz(cnn, args.stnlist[0], args.metadata_filename, args.s_score_mag_limit)
 
         print(' >> Station from kml/kmz file %s' % args.stnlist[0])
         print_columns([stationID(item) for item in stnlist])
@@ -600,10 +643,12 @@ def main():
         try:
             if from_kmz:
                 print('About to process ' + stn['network_code'] + '.' + stn['station_code'])
-                config = EtmConfig(stn['network_code'], stn['station_code'], json_file=stn)
+                config = EtmConfig(stn['network_code'], stn['station_code'], json_file=stn,
+                                   solution_options=solution_options)
             else:
                 print('About to process ' + stn['NetworkCode'] + '.' + stn['StationCode'])
-                config = EtmConfig(stn['NetworkCode'], stn['StationCode'], cnn=cnn, solution_options=solution_options)
+                config = EtmConfig(stn['NetworkCode'], stn['StationCode'], cnn=cnn,
+                                   solution_options=solution_options)
 
             # select language for plots
             config.language = args.language.lower()
@@ -661,6 +706,9 @@ def main():
             config.modeling.earthquakes_cherry_picked = args.force_earthquakes
             if not from_kmz:
                 config.refresh_config(cnn)
+
+            # add any custom relaxation values for events
+            process_custom_relaxations(cnn, config, args.event_relax)
 
             etm = EtmEngine(config, cnn=cnn)
             etm.run_adjustment(cnn=cnn,

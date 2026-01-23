@@ -95,7 +95,7 @@ class JumpFunction(EtmFunction):
 
     def _setup_relaxation(self, jump_type: JumpType) -> np.ndarray:
         """Setup relaxation parameters based on jump type.
-        Find jump in the list user jumps for a personalized relxation time"""
+        Find jump in the list user jumps for a personalized relaxation time"""
         if jump_type >= JumpType.COSEISMIC_JUMP_DECAY:
             # try to find the jump in the config
             jump_params = self.config.modeling.get_user_jump(self.date, jump_type)

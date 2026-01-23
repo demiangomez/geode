@@ -6,6 +6,7 @@ Author: Demian D. Gomez
 import numpy as np
 import math
 import logging
+from psycopg2.errors import ForeignKeyViolation
 
 logger = logging.getLogger(__name__)
 
@@ -110,14 +111,17 @@ class ScoreTable(object):
                                event_id=j['id'],
                                network_code=network_code,
                                station_code=station_code)
-
-                cnn.insert('s_score_cache',
-                           event_id=j['id'],
-                           network_code=network_code,
-                           station_code=station_code,
-                           coseismic=float(s_score),
-                           postseismic=float(p_score),
-                           hash=crc32(str(a) + str(b) + str(POST_SEISMIC_SCALE_FACTOR)))
+                try:
+                    cnn.insert('s_score_cache',
+                               event_id=j['id'],
+                               network_code=network_code,
+                               station_code=station_code,
+                               coseismic=float(s_score),
+                               postseismic=float(p_score),
+                               hash=crc32(str(a) + str(b) + str(POST_SEISMIC_SCALE_FACTOR)))
+                except ForeignKeyViolation:
+                    # the station is not in the stations table, ignore error (probably station from kml)
+                    pass
 
             if s_score > 0:
                 # seismic score came back > 0, add jump

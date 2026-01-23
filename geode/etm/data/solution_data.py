@@ -657,6 +657,9 @@ class FileSolutionData(SolutionData):
     def load_data(self, cnn: Cnn = None, **kwargs) -> None:
         """Load GAMIT solutions from database or polyhedron list"""
         # execute on a file with wk XYZ coordinates
+
+        logger.info(f'Loading from external file {self.config.solution.filename}')
+
         ts = np.genfromtxt(self.config.solution.filename)
 
         dd = []; x = []; y = []; z = []
