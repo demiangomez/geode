@@ -618,61 +618,68 @@ class StationInfo:
 
         return stninfo
 
-    @staticmethod
-    def _parse_ngl_file(filename: str) -> List[str]:
-        """Parse NGL format file."""
+    def _parse_ngl_file(self, filename: str) -> List[str]:
+        """Parse NGL format file for the current station only."""
         records = []
-        current_station = None
         current_start_date = None
         antenna_toggle = "UNKNOWN"
+
+        target_station = self.StationCode.lower() if self.StationCode else None
 
         with open(filename, 'r') as f:
             for line in f:
                 parts = line.split()
 
-                # Skip lines with column 3 = 2
-                if len(parts) >= 3 and parts[2] == '2':
+                # Need at least 3 columns (station, date, and code)
+                if len(parts) < 3:
                     continue
 
-                station_code = parts[0]
+                station_code = parts[0].lower()
+
+                # Skip stations that are not the one being analyzed
+                if target_station and station_code != target_station:
+                    continue
+
+                # Skip lines with column 3 = 2 (earthquakes)
+                if parts[2] == '2':
+                    continue
+
                 date_str = parts[1]
                 comment = parts[3] if len(parts) > 3 else ''
 
                 event_date = datetime.datetime.strptime(date_str, "%y%b%d")
 
-                # Check if starting a new station
-                if station_code != current_station:
-                    if current_station is not None:
-                        record = create_record(
-                            current_station, current_start_date,
-                            datetime.datetime.now(), antenna_toggle, "last record"
-                        )
-                        records.append(record)
-                        antenna_toggle = (
-                            "Unknown antenna" if antenna_toggle == "UNKNOWN" else "UNKNOWN"
-                        )
-
-                    current_station = station_code
+                # Initialize first start date
+                if current_start_date is None:
                     current_start_date = datetime.datetime(1990, 1, 1)
 
-                # Create record for current transition
+                # Create record if date changes
                 if current_start_date != event_date:
                     record = create_record(
-                        station_code, current_start_date, event_date,
-                        antenna_toggle, comment
+                        station_code,
+                        current_start_date,
+                        event_date,
+                        antenna_toggle,
+                        comment
                     )
                     records.append(record)
+
                     antenna_toggle = (
-                        "Unknown antenna" if antenna_toggle == "UNKNOWN" else "UNKNOWN"
+                        "Unknown antenna"
+                        if antenna_toggle == "UNKNOWN"
+                        else "UNKNOWN"
                     )
 
                 current_start_date = event_date
 
-        # Close last station's final record
-        if current_station is not None:
+        # Close final record
+        if current_start_date is not None:
             record = create_record(
-                current_station, current_start_date,
-                datetime.datetime.now(), antenna_toggle, ""
+                target_station,
+                current_start_date,
+                datetime.datetime.now(),
+                antenna_toggle,
+                ""
             )
             records.append(record)
 
