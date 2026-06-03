@@ -117,7 +117,7 @@ class Earthquake(BaseDataClass):
     lat: float = None
     lon: float = None
     date: Date = None
-    depth: int = None
+    depth: int = 0
     magnitude: float = 0
     distance: float = 0
     location: str = None

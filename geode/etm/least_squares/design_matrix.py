@@ -101,7 +101,6 @@ class DesignMatrix:
         self.total_constraints = 0
 
         for funct in const:
-            # logger.info(f'Applying constraint {repr(funct)}')
             # find the function type in the design matrix
             for f in self.functions:
                 if funct.p.object == f.p.object and f.fit:
@@ -130,11 +129,14 @@ class DesignMatrix:
                                 f.constrained[comp] = True
 
                                 j = f.column_index[i]
+                                # Cap sigma to avoid numerical instability from extreme weights
+                                # Min sigma of 1e-4 (0.1mm) gives max weight of 1e8
+                                sigma = max(funct.p.sigmas[comp][i], 1e-4)
                                 logger.info(f'Constraining column {j} for {repr(f)} to {funct.p.params[comp][i]:.5f} '
-                                            f'sigma {funct.p.sigmas[comp][i]:.8f} using constraint {repr(funct)}')
+                                            f'sigma {sigma:.8f} using constraint {repr(funct)}')
                                 nt[k, j:j+1] = 1
                                 # pseudo observation weights
-                                pt[k, k] = 1 / funct.p.sigmas[comp][i] ** 2
+                                pt[k, k] = 1 / sigma ** 2
                                 k += 1
 
                         # create vector for A.T @ P @ L

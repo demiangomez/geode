@@ -660,7 +660,7 @@ def okada(alpha, x, y, d, L1, L2, W1, W2, snd, csd, B1, B2, B3):
     cd = csd
 
     # check if input is np array, if not convert
-    if type(x) is not np.array:
+    if not isinstance(x, np.ndarray):
         x = np.array([x])
         y = np.array([y])
 

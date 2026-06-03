@@ -275,10 +275,25 @@ class JumpFunction(EtmFunction):
 
         for i in range(3):
             if not self.fit or not len(self.p.params):
-                output_table[i].append((self.format_str[0].format(0), 'gray'))
+                if self.format_str:
+                    output_table[i].append((self.format_str[0].format(0), 'gray'))
             else:
+                if len(self.p.params[i]) != len(self.format_str):
+                    # @todo: root cause unknown — params and format_str can get out of sync.
+                    # Possible triggers: configure_behavior({'relaxation': ...}) is called
+                    # (e.g. in EtmFit._validate_function_design_matrix to drop relaxations when
+                    # condition number is too large) which updates p.relaxation and param_count
+                    # but does NOT trim p.params. If plot() is then called with the old params
+                    # still in place, the lengths diverge. Need to reproduce with a known station
+                    # (chc.bton) and add an assertion here to capture the call stack.
+                    logger.warning(
+                        f'print_parameters: params/format_str length mismatch for {repr(self)}: '
+                        f'params={len(self.p.params[i])} format_str={len(self.format_str)} '
+                        f'jump_type={self.p.jump_type} relaxation={self.p.relaxation}'
+                    )
                 for j, param in enumerate(self.p.params[i]):
-                    output_table[i].append((self.format_str[j].format(param * 1000.), self.p.jump_type.color))
+                    if j < len(self.format_str):
+                        output_table[i].append((self.format_str[j].format(param * 1000.), self.p.jump_type.color))
 
         return output_table[0], output_table[1], output_table[2]
 
