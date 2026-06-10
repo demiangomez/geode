@@ -43,8 +43,13 @@ class ConstraintRegistry:
         for constraint_type in self._application_order:
             tqdm.write(f"Collecting {constraint_type} constraints")
             for constraint in self.constraints[constraint_type]:
-                # reset equations before collecting
+                # Reset equations and SW-Okada coefficient cache so that any change
+                # to regularisation parameters takes effect on every solve() call,
+                # including when the constraint object is reused after loading from
+                # a pickle file or called a second time in the interactive shell.
                 constraint.equations = []
+                if hasattr(constraint, '_constraint_coefficients'):
+                    constraint._constraint_coefficients = {}
                 constraint.collect_constraints(stations, total_parameters, grids, **kwargs)
 
     def add_all_constraints(self, neq: np.ndarray,

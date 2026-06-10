@@ -35,8 +35,8 @@ class EtmStackerConfig(BaseDataClass):
     interseismic_v_sigma: float = 0.001
     coseismic_h_sigma: float = 1
     coseismic_v_sigma: float = 1
-    postseismic_h_sigma: float = 0.01
-    postseismic_v_sigma: float = 0.02
+    postseismic_h_sigma: float = 0.001   # 1 mm — matches PostseismicConstraint class default
+    postseismic_v_sigma: float = 0.003   # 3 mm — matches PostseismicConstraint class default
     vertical_method: str = 'spline2d'
     vertical_load_radius: float = 50  # in km
     tension: float = 0.10

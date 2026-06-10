@@ -18,15 +18,17 @@ from .constraints import (
     InterseismicConstraint, CoseismicConstraint,
     PostseismicConstraint, ConstraintRegistry
 )
+from .constraints.fault_geometry import FaultGeometry
 from ..core.etm_engine import EtmEngine
 from ..core.etm_config import EtmConfig
 from ..core.data_classes import Earthquake
-from ..core.type_declarations import SolutionType, FitStatus
+from ..core.type_declarations import SolutionType, FitStatus, JumpType
 from ..data.solution_data import SolutionDataException
 from ..least_squares.design_matrix import DesignMatrixException
 from ..etm_functions.jumps import JumpFunction
 from ..visualization.plot_fields import plot_velocity_field
 from ...dbConnection import Cnn
+from ...pyDate import Date
 from ...pyOkada import Mask
 from ...Utils import stationID, print_yellow
 
@@ -149,50 +151,99 @@ class EtmStacker:
     def _build_etm(self, cnn: Cnn, network_code: str, station_code: str,
                    json_folder: str = None, save_json_folder: str = None):
 
-        etm = None
         loaded_from_json = False
+        saved_obs_sigmas = None
+        prefit: List[JumpFunction] = []
+        etm = None
 
-        if json_folder is not None:
-            if os.path.isfile(os.path.join(json_folder, f'{network_code}.{station_code}_ppp.json')):
-                tqdm.write(f'Loading etm for {network_code}.{station_code} from json file')
-                config = EtmConfig(json_file=os.path.join(json_folder, f'{network_code}.{station_code}_ppp.json'))
-                # remove any prefit models from the json (should be applied when we did the model in the first place)
-                etm = EtmEngine(config)
-                loaded_from_json = True
-            else:
+        # Check for a saved JSON first. The JSON was written after obs_sigmas restoration
+        # (step 3 below), so it already carries the correct weights. Running the
+        # unconstrained ETM against current DB data would produce an observation count
+        # that may not match the JSON snapshot, causing a size mismatch in
+        # _create_normal_equations. Skip steps 1 and 3 entirely for the JSON path.
+        json_path = (os.path.join(json_folder, f'{network_code}.{station_code}_ppp.json')
+                     if json_folder is not None else None)
+
+        if json_path is not None and os.path.isfile(json_path):
+            tqdm.write(f'Loading etm for {network_code}.{station_code} from json file')
+            config = EtmConfig(json_file=json_path)
+            etm = EtmEngine(config)
+            loaded_from_json = True
+        else:
+            if json_folder is not None:
                 tqdm.write(f'Could not find etm json for {network_code}.{station_code}, '
                            f'will try to use the database')
+
+            # @todo: check why stations not getting the default relaxation from the etm_stacker config
+            # STEP 1: Always run a plain unconstrained ETM (no cherry-picked events) first.
+            # This gives unbiased obs_sigmas and detects any mechanical jumps for correction.
+            try:
+                unconstrained_config = EtmConfig(network_code, station_code, cnn=cnn)
+                unconstrained_config.modeling.relaxation = np.array([np.max(self.config.relaxation)])
+                etm_unconstrained = EtmEngine(unconstrained_config, cnn=cnn, silent=True)
+
+                if (etm_unconstrained.solution_data.time_vector[-1] -
+                        etm_unconstrained.solution_data.time_vector[0] <= 1.5):
+                    tqdm.write(print_yellow(f' -- Station {network_code}.{station_code} has less than 1.5 '
+                                            f'years of data, skipping'))
+                    return None
+
+                etm_unconstrained.run_adjustment(try_loading_db=False, force_computation=True,
+                                                 try_save_to_db=False)
+                etm_unconstrained.config.plotting_config.filename = \
+                    f'./production/{network_code}.{station_code}_unconstrained'
+                etm_unconstrained.config.plotting_config.plot_show_outliers = True
+                etm_unconstrained.plot()
+            except SolutionDataException as e:
+                tqdm.write(print_yellow(str(e)))
+                return None
+
+            if etm_unconstrained.config.modeling.status == FitStatus.UNABLE_TO_FIT:
+                tqdm.write(print_yellow(f' -- Unconstrained ETM for {network_code}.{station_code} '
+                                        f'could not fit; skipping obs_sigmas restoration and '
+                                        f'mechanical jump detection'))
+            else:
+                saved_obs_sigmas = [r.obs_sigmas.copy() for r in etm_unconstrained.fit.results]
+                prefit = list(etm_unconstrained.jump_manager.get_active_mechanical_jumps())
+                if prefit:
+                    tqdm.write(f' -- Found {len(prefit)} mechanical jump(s) in {network_code}.{station_code}; '
+                               f'will correct via prefit')
 
         try:
             if etm is None:
                 tqdm.write(f'Estimating etm for {network_code}.{station_code}')
                 config = EtmConfig(network_code, station_code, cnn=cnn)
                 config.solution.solution_type = SolutionType.PPP
-
                 config = self._apply_config(config, cnn)
-
                 etm = EtmEngine(config, cnn=cnn, silent=True)
-                etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_stacker'
-                etm.plot()
-            if etm.solution_data.time_vector[-1] - etm.solution_data.time_vector[0] <= 1.5:
-                tqdm.write(print_yellow(f' -- Station {network_code}.{station_code} has less than 1.5 '
-                                        f'years of data, skipping'))
-                return None
 
-            etm.run_adjustment(cnn=cnn)
+            # Apply mechanical jump prefit before running the adjustment
+            if prefit:
+                etm.config.modeling.status = FitStatus.PREFIT
+                etm.config.modeling.prefit_models = copy.deepcopy(prefit)
+                for j in etm.jump_manager.get_active_mechanical_jumps():
+                    j.fit = False
+
+            etm.run_adjustment(cnn=cnn, force_computation=not loaded_from_json,
+                               try_loading_db=False, try_save_to_db=False)
+            etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_stacker'
+            etm.plot()
         except (DesignMatrixException, numpy.linalg.linalg.LinAlgError):
             tqdm.write(print_yellow(f' -- Unable to fit {network_code}.{station_code} -> system is rank deficient. '
                                     f'Will redo ETM with only 10 years of postseismic events.'))
-            # default back to max condition number = 3
             config.validation.max_condition_number = 3
             etm = EtmEngine(config, cnn=cnn, silent=True)
+            if prefit:
+                etm.config.modeling.status = FitStatus.PREFIT
+                etm.config.modeling.prefit_models = copy.deepcopy(prefit)
+                for j in etm.jump_manager.get_active_mechanical_jumps():
+                    j.fit = False
             try:
                 etm.run_adjustment(cnn=cnn)
             except Exception:
                 tqdm.write(print_yellow(f' -- Unable to fit {network_code}.{station_code}. '
                                         f'Station will not be added.'))
                 return None
-
         except SolutionDataException as e:
             tqdm.write(print_yellow(str(e)))
             return None
@@ -210,8 +261,15 @@ class EtmStacker:
                 return None
             etm.config.modeling.least_squares_strategy.constraints = zero_constraints
             etm = EtmEngine(etm.config, cnn=cnn, silent=True)
+            # prefit status and models are already carried in etm.config; only need to
+            # deactivate the mechanical jumps in the freshly built jump_manager
+            if prefit:
+                for j in etm.jump_manager.get_active_mechanical_jumps():
+                    j.fit = False
             try:
                 etm.run_adjustment(cnn=cnn, try_loading_db=False, force_computation=True, try_save_to_db=False)
+                etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_stacker'
+                etm.plot()
             except Exception:
                 tqdm.write(print_yellow(f' -- Still unable to fit {network_code}.{station_code} with constraints. '
                                         f'Station will not be added.'))
@@ -226,30 +284,192 @@ class EtmStacker:
                                     f'yielded a singular solution, station cannot be used'))
             return None
 
-        # gather any mechanical jumps to remove
-        mechanical = etm.jump_manager.get_active_mechanical_jumps()
-        if len(mechanical):
-            if not self._correct_mechanical_jumps(network_code, station_code, etm, mechanical, cnn):
-                return None
+        # STEP 3: Restore obs_sigmas from the unconstrained run (when available).
+        # The cherry-picked ETM may produce large residuals near geophysical events,
+        # spuriously downweighting those observations in the stacker's normal equations.
+        # The unconstrained run provides unbiased per-observation weights.
+        if saved_obs_sigmas is not None:
+            for i, r in enumerate(etm.fit.results):
+                r.obs_sigmas = saved_obs_sigmas[i]
 
         if save_json_folder is not None and not loaded_from_json:
             if not os.path.exists(save_json_folder):
                 os.makedirs(save_json_folder)
-            # let the etm build the filename of the station
-            etm.save_etm(save_json_folder + '/', dump_functions=True, dump_observations=True,
-                         dump_raw_results=True, dump_design_matrix=True, dump_model=True)
+            etm.save_etm(
+                save_json_folder + '/',
+                dump_functions=True,
+                dump_observations=True,
+                dump_raw_results=True,
+                dump_design_matrix=True
+            )
 
         return etm
 
     def _apply_config(self, config: EtmConfig, cnn: Cnn):
         config.validation.max_condition_number = self.config.max_condition_number
         config.modeling.check_jump_collisions = False  # turn off jump collision check. Add all jumps.
-        config.modeling.earthquake_magnitude_limit = self.config.earthquake_magnitude_limit
+        # Set an impossibly high magnitude limit so the ScoreTable SQL "mag >= limit" branch
+        # never fires. Only events in earthquakes_cherry_picked (the pre-computed canonical
+        # list) will be admitted via the "id IN cherry_picked" branch of the query.
+        config.modeling.earthquake_magnitude_limit = 10
         config.modeling.post_seismic_back_lim = self.config.post_seismic_back_lim
         config.modeling.relaxation = self.config.relaxation
         config.modeling.earthquakes_cherry_picked = self.config.earthquakes_cherry_picked
+        config.plotting_config.plot_show_outliers = True
         config.refresh_config(cnn)
+
+        # @todo: implement a permanent fix for this. The clean solution is Option A:
+        #   add a `force_relaxation: bool = False` flag to ModelingParameters
+        #   (data_classes.py) and check it first in JumpFunction._setup_relaxation()
+        #   (jumps.py) to skip the user_jumps lookup entirely. This would make the
+        #   stacker's relaxation authoritative without mutating the loaded user_jumps.
+        #
+        # Workaround: refresh_config reloads per-jump relaxation from the DB via
+        # user_jumps, which silently overrides config.modeling.relaxation in
+        # JumpFunction._setup_relaxation(). Overwrite the relaxation field on all
+        # geophysical user_jumps here so the stacker's values are actually used.
+        for jp in config.modeling.user_jumps:
+            if jp.jump_type >= JumpType.COSEISMIC_JUMP_DECAY:
+                jp.relaxation = self.config.relaxation.copy()
+
         return config
+
+    def prepare_earthquake_list(self, cnn: Cnn, stnlist: list) -> None:
+        """
+        Pre-compute the canonical earthquake list before any station ETMs are fitted.
+
+        For each station in stnlist, queries ScoreTable with the configured
+        magnitude_limit to find all events with s-score > 0.  Events provided
+        via config.earthquakes_cherry_picked (--force) are merged on top without
+        a magnitude-limit check (identical to per-station behaviour).
+
+        The union is deduplicated by event ID, sorted, and collision-windowed using
+        the same 10-day rule as _record_earthquakes.  Collision losers are excluded
+        from cherry_picked entirely (they will not appear in any station ETM).
+        Results are written to:
+          - self.config.earthquakes_cherry_picked  (surviving event IDs only)
+          - self.collided_earthquakes              (IDs of excluded losers, for bookkeeping)
+
+        _record_earthquakes will therefore skip the collision step.
+        """
+        import math
+        from datetime import datetime as _dt
+        from ..core.s_score import ScoreTable
+        from ..core.type_declarations import JumpType
+        # @todo: collisions need to consider station intersection. If no station intersection then there is no
+        #        collision even when time window suggests there is one. For example, two earthquakes very close in time
+        #        but without station overlap (i.e. very distant from each other) should still remain in the stacker
+        
+        # date range for the scan
+        if isinstance(self.config.post_seismic_back_lim, Date):
+            sdate = self.config.post_seismic_back_lim
+        else:
+            # float = years back from station start; use conservative fallback
+            sdate = Date(year=1975, doy=1)
+        edate = Date(datetime=_dt.utcnow())
+
+        seen_ids: set = set()
+        candidate_events: List[Earthquake] = []
+
+        tqdm.write(f'Pre-computing earthquake list for {len(stnlist)} stations '
+                   f'(mag >= {self.config.earthquake_magnitude_limit})...')
+
+        # s-score scan for every station
+        for stn in stnlist:
+            net, code = stn['NetworkCode'], stn['StationCode']
+            rs = cnn.query_float(
+                'SELECT lat, lon FROM stations '
+                f'WHERE "NetworkCode" = \'{net}\' AND "StationCode" = \'{code}\'',
+                as_dict=True
+            )
+            if not rs:
+                tqdm.write(f'  WARNING: Could not get coordinates for {net}.{code}, skipping')
+                continue
+            lat, lon = float(rs[0]['lat']), float(rs[0]['lon'])
+
+            score = ScoreTable(cnn, net, code, lat, lon, sdate, edate,
+                               magnitude_limit=self.config.earthquake_magnitude_limit)
+            for eq in score.table:
+                if eq.id not in seen_ids:
+                    seen_ids.add(eq.id)
+                    candidate_events.append(eq)
+
+        tqdm.write(f'  s-score scan: {len(candidate_events)} unique events from '
+                   f'{len(stnlist)} stations')
+
+        # merge force (cherry-picked) events on top
+        if self.config.earthquakes_cherry_picked:
+            for eid in self.config.earthquakes_cherry_picked:
+                if eid in seen_ids:
+                    continue
+                rows = cnn.query_float(
+                    f"SELECT * FROM earthquakes WHERE id = '{eid}'", as_dict=True
+                )
+                if not rows:
+                    tqdm.write(f'  WARNING: Cherry-picked event {eid} not found in database')
+                    continue
+                j = rows[0]
+                has_fm = not math.isnan(float(j['strike1']))
+                strike = [float(j['strike1']), float(j['strike2'])] if has_fm else []
+                dip    = [float(j['dip1']),    float(j['dip2'])]    if has_fm else []
+                rake   = [float(j['rake1']),   float(j['rake2'])]   if has_fm else []
+                candidate_events.append(Earthquake(
+                    id=j['id'],
+                    lat=float(j['lat']), lon=float(j['lon']),
+                    date=Date(datetime=j['date']),
+                    depth=int(j['depth']),
+                    magnitude=float(j['mag']),
+                    location=j['location'],
+                    strike=strike, dip=dip, rake=rake,
+                    jump_type=JumpType.COSEISMIC_JUMP_DECAY
+                ))
+                seen_ids.add(eid)
+                tqdm.write(f'  Added cherry-picked event {eid}')
+
+        candidate_events.sort()
+
+        # Exclude events with no focal mechanism — SW-Okada requires strike/dip/rake
+        no_fm = [e for e in candidate_events if not e.strike]
+        if no_fm:
+            tqdm.write(f'  Excluding {len(no_fm)} event(s) with no focal mechanism: '
+                       + ', '.join(e.id for e in no_fm))
+            candidate_events = [e for e in candidate_events if e.strike]
+
+        tqdm.write(f'  Total: {len(candidate_events)} candidate events')
+
+        # collision detection: exclude the smaller event whenever two events are
+        # within 15 days of each other, regardless of ordering.
+        collision_window_days = 15
+        for i, event_i in enumerate(candidate_events):
+            for j, event_j in enumerate(candidate_events):
+                if i >= j:
+                    continue
+                days_apart = abs(event_i.date.fyear - event_j.date.fyear) * 365.25
+                if days_apart <= collision_window_days:
+                    if event_i.magnitude >= event_j.magnitude:
+                        loser, winner = event_j, event_i
+                    else:
+                        loser, winner = event_i, event_j
+
+                    if loser.id not in self.collided_earthquakes:
+                        tqdm.write(
+                            f'WARNING: Earthquake collision detected between '
+                            f'{event_i.id} (M{event_i.magnitude:.1f}, {event_i.date.yyyyddd():.1f}) and '
+                            f'{event_j.id} (M{event_j.magnitude:.1f}, {event_j.date.yyyyddd():.1f}) '
+                            f'({days_apart:.1f} days apart). '
+                            f'Keeping {winner.id}, excluding {loser.id}.'
+                        )
+                        self.collided_earthquakes.add(loser.id)
+
+        if self.collided_earthquakes:
+            tqdm.write(f'  Collisions: {len(self.collided_earthquakes)} event(s) excluded: '
+                       + ', '.join(sorted(self.collided_earthquakes)))
+
+        # publish results — collision losers are excluded entirely, not zero-tied
+        kept = [e.id for e in candidate_events if e.id not in self.collided_earthquakes]
+        self.config.earthquakes_cherry_picked = kept
+        tqdm.write(f'Earthquake list ready: {len(kept)} events '
+                   f'({len(self.collided_earthquakes)} excluded due to collisions)')
 
     @staticmethod
     def _create_station(etm: EtmEngine):
@@ -271,46 +491,6 @@ class EtmStacker:
 
         return station
 
-    def _correct_mechanical_jumps(self, network_code: str, station_code: str,
-                                  station_etm: EtmEngine,
-                                  mechanical: List[JumpFunction],
-                                  cnn: Cnn):
-
-        # need to rerun the model but without letting it be unconstrained
-        # create a deep copy of the etm
-        config = EtmConfig(network_code, station_code, cnn=cnn)
-        config.modeling.relaxation = np.array([np.max(self.config.relaxation)])
-
-        if not os.path.exists('./production'):
-            os.makedirs('./production')
-
-        etm = EtmEngine(config, cnn=cnn)
-        etm.run_adjustment(try_loading_db=False, force_computation=True, try_save_to_db=False)
-        etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_before_correction'
-        etm.plot()
-
-        prefit: List[JumpFunction] = []
-        for jump in etm.jump_manager.get_active_mechanical_jumps():
-            prefit.append(jump)
-
-        # assign prefit models to remove
-        station_etm.config.modeling.status = FitStatus.PREFIT
-        station_etm.config.modeling.prefit_models = copy.deepcopy(prefit)
-        # deactivate these jumps from the design matrix
-        for j in mechanical:
-            j.fit = False
-        # rerun adjustment without the mechanical jumps
-        try:
-            station_etm.run_adjustment(try_loading_db=False, force_computation=True, try_save_to_db=False)
-            tqdm.write(f' -- Found and corrected {len(mechanical)} mechanical jumps in {network_code}.{station_code}')
-            station_etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_corrected'
-            station_etm.plot()
-        except (DesignMatrixException, numpy.linalg.linalg.LinAlgError):
-            tqdm.write(print_yellow(f' -- Unable to fit {network_code}.{station_code} -> system is rank deficient.'))
-            return False
-
-        return True
-
     def _build_zero_tie_constraints(self, etm) -> List:
         """Build soft zero-tie constraints for all geophysical jumps (coseismic and postseismic).
 
@@ -328,7 +508,7 @@ class EtmStacker:
                               date=jump.date, jump_type=jump.p.jump_type, fit=False)
 
             for j in range(3):
-                sigma = 1 # self.config.postseismic_v_sigma if j == 2 else self.config.postseismic_h_sigma
+                sigma = 10 # self.config.postseismic_v_sigma if j == 2 else self.config.postseismic_h_sigma
                 jc.p.params[j] = np.zeros(jc.param_count)
                 jc.p.sigmas[j] = np.full(jc.param_count, sigma)
 
@@ -581,24 +761,38 @@ class EtmStacker:
             # Coseismic
             stations = [stn for stn in self.stations if stn.get_coseismic_column(event.id) is not None]
 
+            fault_geometry = None
             if len(stations):
-                self.constraint_registry.add_constraint(
-                    CoseismicConstraint(
-                        event, stations, self.grids,
-                        self.config.coseismic_h_sigma,
-                        self.config.coseismic_v_sigma,
-                        is_collision=event.id in self.collided_earthquakes
-                    )
+                coseis = CoseismicConstraint(
+                    event, stations, self.grids,
+                    self.config.coseismic_h_sigma,
+                    self.config.coseismic_v_sigma,
+                    is_collision=event.id in self.collided_earthquakes
                 )
+                self.constraint_registry.add_constraint(coseis)
+                fault_geometry = coseis.fault_geometry
             else:
                 tqdm.write(f'No stations observed coseismic event {event.id}. '
                            f'A coseismic constraint for this event will not be added.')
 
             # Postseismic for each relaxation
             for relax in self.config.relaxation:
+                # Build a FaultGeometry from postseismic stations if coseismic had none
+                if fault_geometry is None:
+                    ps_stations = [stn for stn in self.stations
+                                   if stn.get_postseismic_column(event.id, relax) is not None]
+                    fg = FaultGeometry(event, ps_stations) if ps_stations else None
+                else:
+                    fg = fault_geometry
+
+                if fg is None:
+                    tqdm.write(f'No stations for postseismic event {event.id} relax={relax:.3f}. '
+                               f'Skipping postseismic constraint.')
+                    continue
+
                 self.constraint_registry.add_constraint(
                     PostseismicConstraint(
-                        event, relax,
+                        event, relax, fg, self.grids,
                         self.config.postseismic_h_sigma,
                         self.config.postseismic_v_sigma,
                         is_collision=event.id in self.collided_earthquakes
@@ -606,6 +800,9 @@ class EtmStacker:
                 )
 
     def _record_earthquakes(self):
+
+        # open connection to database
+        cnn = Cnn('gnss_data.cfg')
 
         for stn in self.stations:
             for jump in [jump for jump in stn.etm.jump_manager.jumps
@@ -621,8 +818,6 @@ class EtmStacker:
                     self.earthquakes.append(jump.earthquake)
                     self.earthquakes.sort()
 
-                    # open connection to database
-                    cnn = Cnn('gnss_data.cfg')
                     lon, lat = self.grids.interpolation_geographic
 
                     # save a mask for the event
@@ -635,40 +830,8 @@ class EtmStacker:
                     # save the actual object to query it
                     self.grids.earthquake_masks[jump.earthquake.id] = (s_score, p_score, mask)
 
-        # Check for earthquake collisions (events within 10 days of each other)
-        # Only the largest magnitude event survives; others get zero-tie constraints
-        collision_window_days = 10
-        for i, event_i in enumerate(self.earthquakes):
-            for j, event_j in enumerate(self.earthquakes):
-                if i >= j:
-                    continue
-                # Check if events are within collision window
-                days_apart = abs(event_i.date.fyear - event_j.date.fyear) * 365.25
-                if days_apart <= collision_window_days:
-                    # Collision detected - keep the larger magnitude event
-                    if event_i.magnitude >= event_j.magnitude:
-                        loser = event_j
-                        winner = event_i
-                    else:
-                        loser = event_i
-                        winner = event_j
-
-                    if loser.date >= winner.date:
-                        # Loser fires after (or simultaneously with) winner:
-                        # its coseismic is buried in the winner's postseismic → zero-tie
-                        if loser.id not in self.collided_earthquakes:
-                            tqdm.write(f'WARNING: Earthquake collision detected between '
-                                       f'{event_i.id} (M{event_i.magnitude:.1f}) and '
-                                       f'{event_j.id} (M{event_j.magnitude:.1f}) '
-                                       f'({days_apart:.1f} days apart). '
-                                       f'Keeping {winner.id}, constraining {loser.id} to zero.')
-                            self.collided_earthquakes.add(loser.id)
-                    else:
-                        # Loser fires before winner: its coseismic is observable;
-                        # the stacker postseismic constraints handle the overlap.
-                        tqdm.write(f'NOTE: Event {loser.id} (M{loser.magnitude:.1f}) fires '
-                                   f'{days_apart:.1f} days before {winner.id} (M{winner.magnitude:.1f}); '
-                                   f'coseismic is observable, not constraining to zero.')
+        # Collision detection was already performed in prepare_earthquake_list.
+        # self.collided_earthquakes is pre-populated; no action needed here.
 
     def _build_base_normal_equations(self) -> Tuple[np.ndarray, np.ndarray]:
         """Build the base NEQ from individual stations."""
@@ -760,23 +923,37 @@ class EtmStacker:
 
         # now add the constraint
         stations = [stn for stn in self.stations if stn.get_coseismic_column(event.id) is not None]
+        fault_geometry = None
         if len(stations):
-            self.constraint_registry.add_constraint(
-                CoseismicConstraint(
-                    event, stations,
-                    self.config.coseismic_h_sigma,
-                    self.config.coseismic_v_sigma
-                )
+            coseis = CoseismicConstraint(
+                event, stations, self.grids,
+                self.config.coseismic_h_sigma,
+                self.config.coseismic_v_sigma
             )
+            self.constraint_registry.add_constraint(coseis)
+            fault_geometry = coseis.fault_geometry
         else:
             tqdm.write(f'No stations observed coseismic event {event.id}. '
                        f'A coseismic constraint for this event will not be added.')
 
         # Postseismic for each relaxation
         for relax in self.config.relaxation:
+            # Build a FaultGeometry from postseismic stations if coseismic had none
+            if fault_geometry is None:
+                ps_stations = [stn for stn in self.stations
+                               if stn.get_postseismic_column(event.id, relax) is not None]
+                fg = FaultGeometry(event, ps_stations) if ps_stations else None
+            else:
+                fg = fault_geometry
+
+            if fg is None:
+                tqdm.write(f'No stations for postseismic event {event.id} relax={relax:.3f}. '
+                           f'Skipping postseismic constraint.')
+                continue
+
             self.constraint_registry.add_constraint(
                 PostseismicConstraint(
-                    event, relax,
+                    event, relax, fg, self.grids,
                     self.config.postseismic_h_sigma,
                     self.config.postseismic_v_sigma
                 )
@@ -908,9 +1085,62 @@ class EtmStacker:
 
         # do the thing
         for constraint in apply_to:
+            tqdm.write(f'Updating sigma for {constraint.short_description()}: '
+                       f'h={constraint.h_sigma*1000:.2f}mm -> {h_sigma*1000:.2f}mm  '
+                       f'v={constraint.v_sigma*1000:.2f}mm -> {v_sigma*1000:.2f}mm')
             constraint.update_weights(h_sigma, v_sigma)
 
+        if not apply_to:
+            tqdm.write('update_weights: no matching constraints found')
+
         self.solved = False
+
+    def update_okada_weights(self, h_weight: float, v_weight: float,
+                              event_id: str = None, relax: float = None) -> int:
+        """
+        Update SW-Okada regularization weights on coseismic/postseismic constraints.
+
+        Sets _sw_okada_h_weight and _sw_okada_v_weight on all matching constraints.
+        The LOO coefficient cache is cleared automatically on the next solve() call.
+
+        Parameters
+        ----------
+        h_weight : float
+            New horizontal Okada regularization weight.
+        v_weight : float
+            New vertical Okada regularization weight.
+        event_id : str, optional
+            If given, only constraints for this earthquake are updated.
+        relax : float, optional
+            If given together with event_id, only the postseismic constraint with
+            this relaxation constant is updated.
+
+        Returns
+        -------
+        int
+            Number of constraints updated.
+        """
+        apply_to = []
+        for constraint in (self.constraint_registry.constraints['coseismic'] +
+                           self.constraint_registry.constraints['postseismic']):
+            if event_id and constraint.event.id != event_id:
+                continue
+            if relax is not None and getattr(constraint, 'relaxation', None) != relax:
+                continue
+            apply_to.append(constraint)
+
+        for constraint in apply_to:
+            tqdm.write(f'Updating Okada weights for {constraint.short_description()}: '
+                       f'h={constraint._sw_okada_h_weight}->{h_weight}  '
+                       f'v={constraint._sw_okada_v_weight}->{v_weight}')
+            constraint._sw_okada_h_weight = h_weight
+            constraint._sw_okada_v_weight = v_weight
+
+        if not apply_to:
+            tqdm.write('update_okada_weights: no matching constraints found')
+
+        self.solved = False
+        return len(apply_to)
 
     def plot_grid_result(self, sigmas=False):
 

@@ -359,7 +359,7 @@ class EtmEngine:
                 filename = os.path.join(filename, self.config.build_filename()) + '.json'
             else:
                 dirs = os.path.dirname(filename)
-                file = os.path.basename(filename).split('.')
+                file = os.path.basename(filename).split('.json')
                 filename = os.path.join(dirs, file[0]) + '.json'
 
             #import bson

@@ -90,7 +90,7 @@ class FaultGeometry:
         self.patches_h = self._build_patch_grid(n_patches_h)
         self.patches_v = self._build_patch_grid(n_patches_v)
 
-    def _build_patch_grid(self, n_patches: int) -> PatchGrid:
+    def _build_patch_grid(self, n_patches: int, verbose: bool = True) -> PatchGrid:
         """
         Build a fault patch grid with a regular rectangular layout.
 
@@ -132,8 +132,9 @@ class FaultGeometry:
         radius_L = (L2 - L1) / (2 * ps)   # half-width along strike
         radius_W = (W2 - W1) / (2 * ps)   # half-width down dip
 
-        tqdm.write(f'    Rectangular patch grid: {ps}×{ps} = {actual_patches} patches '
-                   f'(ΔL={2*radius_L:.1f} km, ΔW={2*radius_W:.1f} km)')
+        if verbose:
+            tqdm.write(f'    Rectangular patch grid: {ps}×{ps} = {actual_patches} patches '
+                       f'(ΔL={2*radius_L:.1f} km, ΔW={2*radius_W:.1f} km)')
 
         # Compute depths for each possible dip angle
         grid_dep = []
@@ -200,7 +201,48 @@ class FaultGeometry:
         sites_nam = [stationID(stn) for stn in stations]
         N = len(stations)
 
-        tqdm.write(f'Testing fault planes for {self.event.id} with {N} stations')
+        # Filter stations for plane determination: all three sigma components < 0.001 m
+        sigma_threshold = 0.001
+        keep_idx = []
+        filtered_sites = []
+        for idx, j in enumerate(jumps):
+            if j is None:
+                filtered_sites.append(sites_nam[idx])
+                continue
+            s_n = j.p.sigmas[0][0] if len(j.p.sigmas[0]) > 0 else np.inf
+            s_e = j.p.sigmas[1][0] if len(j.p.sigmas[1]) > 0 else np.inf
+            s_u = j.p.sigmas[2][0] if len(j.p.sigmas[2]) > 0 else np.inf
+            if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
+                keep_idx.append(idx)
+            else:
+                filtered_sites.append(sites_nam[idx])
+
+        if filtered_sites:
+            tqdm.write(f'  Stations excluded from plane determination '
+                       f'(sigma >= {sigma_threshold:.3f} m in >= 1 component): '
+                       + ', '.join(filtered_sites))
+
+        if len(keep_idx) < 2:
+            # A single station produces a 1×1 NN-distance matrix whose diagonal
+            # is forced to inf, making local_reg = inf and get_qpw return NaN.
+            # At least 2 stations are needed for a finite nearest-neighbour offset
+            # and a meaningful plane RMS comparison.
+            if keep_idx:
+                tqdm.write(f'  WARNING: Only {len(keep_idx)} station passes the sigma filter '
+                           f'(minimum 2 required); using all stations for plane determination')
+            else:
+                tqdm.write('  WARNING: No stations pass the sigma filter; '
+                           'using all stations for plane determination')
+            keep_idx = list(range(N))
+
+        keep_idx = np.array(keep_idx)
+        N_filt = len(keep_idx)
+        sites_lon_filt = sites_lon[keep_idx]
+        sites_lat_filt = sites_lat[keep_idx]
+        obs_filt = np.concatenate([le[keep_idx], ln[keep_idx], lu[keep_idx]])
+
+        tqdm.write(f'Testing fault planes for {self.event.id} with {N} stations '
+                   f'({N_filt} used for plane determination)')
 
         a_list = []
         p_list = []
@@ -213,19 +255,24 @@ class FaultGeometry:
             strike, dip = self.event.strike[i], self.event.dip[i]
             tqdm.write(f'  Plane {i}: strike={strike:.1f}, dip={dip:.1f}')
 
+            # Full system for all stations: used for table printout and return value
             a, p = self._compute_sw_okada_system(
                 grid, sites_lon, sites_lat, strike, dip, mask, spline_tension
             )
 
-            # Solve for body forces
+            # Full solve for table printout
             n_mat = a.T @ a + p
-            c = a.T @ obs
-            x = np.linalg.solve(n_mat, c)
-
-            # Compute model and residuals
+            x = np.linalg.solve(n_mat, a.T @ obs)
             fitted = a @ x
             v = obs - fitted
-            rms_h = rms_horizontal(v, N)
+
+            # Filtered system for plane selection: only reliable stations contribute
+            a_filt, p_filt = self._compute_sw_okada_system(
+                grid, sites_lon_filt, sites_lat_filt, strike, dip, mask, spline_tension
+            )
+            n_mat_filt = a_filt.T @ a_filt + p_filt
+            x_filt = np.linalg.solve(n_mat_filt, a_filt.T @ obs_filt)
+            rms_h = rms_horizontal(obs_filt - a_filt @ x_filt, N_filt)
 
             a_list.append(a)
             p_list.append(p)
@@ -329,7 +376,7 @@ class FaultGeometry:
         r_ev, _, _ = get_radius(np.column_stack([x, y]), np.column_stack([x, y]))
         np.fill_diagonal(r_ev, np.inf)
         local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
-        tqdm.write(f'  SW local regularization: {local_reg:.1f} km  (global grid offset: {grid.offset:.1f} km)')
+        # tqdm.write(f'  SW local regularization: {local_reg:.1f} km  (global grid offset: {grid.offset:.1f} km)')
 
         q, p, w = get_qpw(np.column_stack([x, y]), np.column_stack([x, y]), local_reg, grid.poisson_ratio)
         ah = np.block([[q, w], [w, p]])
@@ -351,9 +398,16 @@ class FaultGeometry:
         T = R @ np.array([x, y])
         tx, ty = T[0, :], T[1, :]
 
-        # Compute Okada response matrices using separate patch grids
-        D_ok = self._compute_okada_horizontal(tx, ty, dip, grid.poisson_ratio)
-        D_oz = self._compute_okada_vertical(tx, ty, dip, grid.poisson_ratio)
+        # Build patch grids sized for the current N so D_ok is always tall
+        # (2*N rows, ~N cols).  Using self.patches_h, which is sized for the
+        # full coseismic station count, would make D_ok fat when N_other <
+        # N_coseismic/2, collapsing Pok to zero and killing the Okada weight.
+        local_patches_h = self._build_patch_grid(max(1, int(np.floor(N / 2))), verbose=False)
+        local_patches_v = self._build_patch_grid(max(1, int(np.floor(N / 4))), verbose=False)
+
+        # Compute Okada response matrices using local patch grids
+        D_ok = self._compute_okada_horizontal(tx, ty, dip, grid.poisson_ratio, patches=local_patches_h)
+        D_oz = self._compute_okada_vertical(tx, ty, dip, grid.poisson_ratio, patches=local_patches_v)
 
         # Rotate horizontal responses back to geographic coordinates
         D_ok = self._rotate_okada_horizontal(D_ok, R, N)
@@ -371,25 +425,33 @@ class FaultGeometry:
         Pok = np.eye(2 * N) - D_ok @ np.linalg.pinv(D_ok)
         Poz = np.eye(N) - D_oz @ np.linalg.pinv(D_oz)
 
-        # Compute weights
-        term_av = np.linalg.norm(av.T @ av, 'fro')
-        term_Poz = np.linalg.norm(av.T @ Poz @ av, 'fro')
+        # Auto-scale weights so that h/v_weight=1 gives an Okada regularization
+        # term equal in Frobenius norm to the corresponding data term.  This makes
+        # both weights interpretable as dimensionless relative strengths regardless
+        # of station count, fault size, or Green's function scale.  Without this,
+        # h_weight and v_weight are raw multipliers whose effect depends entirely on
+        # the accident of matrix norms, making tuning unpredictable.
+        term_ah  = np.linalg.norm(ah.T @ ah,       'fro')
+        term_Pok = np.linalg.norm(ah.T @ Pok @ ah, 'fro')
+        term_av  = np.linalg.norm(av.T @ av,        'fro')
+        term_Poz = np.linalg.norm(av.T @ Poz @ av,  'fro')
 
-        if v_weight is None:
-            v_weight = 5 * term_av / max(term_Poz, 1e-10)
+        h_weight_eff = h_weight                          * term_ah / max(term_Pok, 1e-10)
+        v_weight_eff = (5.0 if v_weight is None else v_weight) * term_av / max(term_Poz, 1e-10)
 
         # Force balance constraint: sum of alphas = 0 (field decays at infinity)
         C_z = np.ones((1, N))
         mu_z = 1e4 * term_av / N
 
         # Build regularization matrices
-        P_h = h_weight * ah.T @ Pok @ ah
-        P_z = v_weight * av.T @ Poz @ av + mu_z * C_z.T @ C_z
+        P_h = h_weight_eff * ah.T @ Pok @ ah
+        P_z = v_weight_eff * av.T @ Poz @ av + mu_z * C_z.T @ C_z
 
         return a, block_diag(P_h, P_z)
 
     def _compute_okada_horizontal(self, tx: np.ndarray, ty: np.ndarray,
-                                   dip: float, poisson_ratio: float) -> np.ndarray:
+                                   dip: float, poisson_ratio: float,
+                                   patches: 'PatchGrid' = None) -> np.ndarray:
         """
         Compute Okada horizontal displacement matrix using horizontal patch grid.
 
@@ -413,7 +475,8 @@ class FaultGeometry:
         cosd = lambda x: np.cos(np.deg2rad(x))
 
         N = len(tx)
-        patches = self.patches_h
+        if patches is None:
+            patches = self.patches_h
         n_patches = patches.n_patches
 
         # D_ok: (2*N, 2*n_patches) - [ux; uy] for each slip component
@@ -444,7 +507,8 @@ class FaultGeometry:
         return D_ok
 
     def _compute_okada_vertical(self, tx: np.ndarray, ty: np.ndarray,
-                                 dip: float, poisson_ratio: float) -> np.ndarray:
+                                 dip: float, poisson_ratio: float,
+                                 patches: 'PatchGrid' = None) -> np.ndarray:
         """
         Compute Okada vertical displacement matrix using vertical patch grid.
 
@@ -468,7 +532,8 @@ class FaultGeometry:
         cosd = lambda x: np.cos(np.deg2rad(x))
 
         N = len(tx)
-        patches = self.patches_v
+        if patches is None:
+            patches = self.patches_v
         n_patches = patches.n_patches
 
         # D_oz: (N, 2*n_patches)

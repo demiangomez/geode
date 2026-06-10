@@ -10,7 +10,7 @@ from tqdm import tqdm
 from ..data_classes import Station, ConstraintEquation
 from ..types import ConstraintType
 from ...core.data_classes import Earthquake
-from ....Utils import stationID, azimuthal_equidistant
+from ....Utils import stationID
 from ....elasticity.elastic_interpolation import get_radius
 
 if TYPE_CHECKING:
@@ -174,67 +174,7 @@ class BaseConstraint(ABC):
         """
         pass
 
-    def compute_constraint_coefficients(self, target_station: Station,
-                                        constraining_stations: List[Station],
-                                        grids: 'GridSystem') -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Use Sandwell-Wessel for horizontal, elastic loads for vertical."""
-
-        # Horizontal interpolation (Sandwell-Wessel 2016)
-        # Do not use the station projected coordinates which have a projection center
-        # at a mean regional location. Use the target station as center
-        lat = np.array([stn.lat for stn in constraining_stations])
-        lon = np.array([stn.lon for stn in constraining_stations])
-
-        x, y = azimuthal_equidistant(np.array([target_station.lon]),
-                                     np.array([target_station.lat]), lon, lat)
-
-        # Use a local offset derived from the constraining station spacing rather than the
-        # global grid offset. The global offset is calibrated for the full network and can be
-        # much larger than the actual inter-station distances at this constraint site, making
-        # the SW design matrix ill-conditioned. Matches the logic used in the coseismic constraint.
-        if len(x) > 1:
-            r, _, _ = get_radius(np.column_stack([x, y]), np.column_stack([x, y]))
-            np.fill_diagonal(r, np.inf)
-            local_offset = max(8.0, float(np.median(r.min(axis=1))) * 0.5)
-        else:
-            local_offset = grids.offset
-
-        ke, kn = grids.compute_horizontal_interpolant_at_point(0, 0, x, y, offset=local_offset)
-
-        # Vertical interpolation (elastic loads)
-        ku = grids.compute_vertical_interpolant_at_point(
-            target_station.vertical_response,
-            [stn.vertical_response for stn in constraining_stations]
-        )
-
-        return ke, kn, ku
-
-    def _build_k_matrix(self, station: Station,
-                        constraining: List[Station],
-                        grids: 'GridSystem',
-                        total_parameters: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Build the K matrix for a single constraint."""
-        _ke, _kn, _ku = self.compute_constraint_coefficients(
-            station, constraining, grids
-        )
-        """Build K matrix for interseismic constraint."""
-        ke = np.zeros((1, total_parameters * 3))
-        kn = np.zeros((1, total_parameters * 3))
-        ku = np.zeros((1, total_parameters * 3))
-
-        target_idx, idx = self._get_target_cols(station, constraining)
-
-        ke[0, target_idx] = -1
-        kn[0, target_idx + total_parameters] = -1
-        ku[0, target_idx + total_parameters * 2] = -1
-        # at the velocity position of the site, place constraint
-        ke[0, np.concatenate((idx, idx + total_parameters))] = _ke
-        kn[0, np.concatenate((idx, idx + total_parameters))] = _kn
-        # vertical component
-        ku[0, idx + total_parameters * 2] = _ku
-
-        return ke, kn, ku
-
-    def short_description(self):
-        """Return short description of the constraint."""
+    @abstractmethod
+    def short_description(self) -> str:
+        """Return a short human-readable description of the constraint."""
         pass
