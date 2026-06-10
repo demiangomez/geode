@@ -580,7 +580,7 @@ def main():
 
     parser.add_argument('-lang', '--language', type=str, default='eng',
                         help="Change the language of the plots. Default is English. "
-                        "Use ESP to select Spanish. To add more languages, "
+                        "Use SPA to select Spanish. To add more languages, "
                         "include the ISO 639-1 code in etm_config")
 
     parser.add_argument('-file', '--filename', type=str, default=None,
