@@ -758,19 +758,19 @@ class EtmStacker:
             if event.id in self.collided_earthquakes:
                 tqdm.write(f'Setting number of stations for collided earthquake {event.id} to zero.')
 
-            # Coseismic
+            # coseismic stations
             stations = [stn for stn in self.stations if stn.get_coseismic_column(event.id) is not None]
+            # compute fault_geometry for this event (will use co or postseismic stations)
+            fault_geometry = FaultGeometry(event, self.stations, self.grids)
 
-            fault_geometry = None
             if len(stations):
                 coseis = CoseismicConstraint(
-                    event, stations, self.grids,
+                    event, fault_geometry, stations, self.grids,
                     self.config.coseismic_h_sigma,
                     self.config.coseismic_v_sigma,
                     is_collision=event.id in self.collided_earthquakes
                 )
                 self.constraint_registry.add_constraint(coseis)
-                fault_geometry = coseis.fault_geometry
             else:
                 tqdm.write(f'No stations observed coseismic event {event.id}. '
                            f'A coseismic constraint for this event will not be added.')
@@ -778,21 +778,16 @@ class EtmStacker:
             # Postseismic for each relaxation
             for relax in self.config.relaxation:
                 # Build a FaultGeometry from postseismic stations if coseismic had none
-                if fault_geometry is None:
-                    ps_stations = [stn for stn in self.stations
-                                   if stn.get_postseismic_column(event.id, relax) is not None]
-                    fg = FaultGeometry(event, ps_stations) if ps_stations else None
-                else:
-                    fg = fault_geometry
+                stations = [stn for stn in self.stations if stn.get_postseismic_column(event.id, relax) is not None]
 
-                if fg is None:
+                if stations:
                     tqdm.write(f'No stations for postseismic event {event.id} relax={relax:.3f}. '
                                f'Skipping postseismic constraint.')
                     continue
 
                 self.constraint_registry.add_constraint(
                     PostseismicConstraint(
-                        event, relax, fg, self.grids,
+                        event, fault_geometry, stations, relax, self.grids,
                         self.config.postseismic_h_sigma,
                         self.config.postseismic_v_sigma,
                         is_collision=event.id in self.collided_earthquakes

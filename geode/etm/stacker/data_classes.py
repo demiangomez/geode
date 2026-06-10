@@ -298,7 +298,7 @@ class EtmStackerField(BaseDataClass):
                      grids: 'GridSystem',
                      event: Earthquake = None,
                      relaxation: np.ndarray = None,
-                     coseismic_constraint: 'CoseismicConstraint' = None):
+                     coseismic_constraint: Union['CoseismicConstraint', None] = None):
         """Create field(s) from solution."""
         # Import here to avoid circular imports
         from .types import ConstraintType

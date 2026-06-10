@@ -38,7 +38,7 @@ class FaultGeometry:
     - Okada response matrix computation
     """
 
-    def __init__(self, event: Earthquake, stations: List['Station']):
+    def __init__(self, event: Earthquake, stations: List['Station'], grid: GridSystem):
         """
         Initialize fault geometry from earthquake and station list.
 
@@ -66,6 +66,11 @@ class FaultGeometry:
         self.patches_v: PatchGrid = None
 
         self._compute_patch_grids(len(stations))
+
+        # get the postseismic mask which is used to compute the scale length for the spline interpolation
+        mask = grid.earthquake_masks[event.id][1]
+
+        self.determine_plane(stations, grid, mask, 0.1)
 
     def _compute_patch_grids(self, n_stations: int):
         """
@@ -142,11 +147,11 @@ class FaultGeometry:
             fault_dep = self.event.depth + grid_dd * sind(dip)
 
             # Ensure no patches stick out of the ground
-            if np.any(np.round(fault_dep) <= 0):
+            if np.any(fault_dep.round() <= 0):
                 min_dep = fault_dep.min()
                 adjustment = min_dep - radius_W * sind(dip) - 1.
                 fault_dep = fault_dep - adjustment
-                tqdm.write(f'    Adjusted depths for dip={dip}: shift={-adjustment:.1f} km')
+                # tqdm.write(f'    Adjusted depths for dip={dip}: shift={-adjustment:.1f} km')
 
             grid_dep.append(fault_dep)
 
@@ -256,6 +261,7 @@ class FaultGeometry:
             tqdm.write(f'  Plane {i}: strike={strike:.1f}, dip={dip:.1f}')
 
             # Full system for all stations: used for table printout and return value
+            # call with default Okada weight to ensure compliance with Okada
             a, p = self._compute_sw_okada_system(
                 grid, sites_lon, sites_lat, strike, dip, mask, spline_tension
             )

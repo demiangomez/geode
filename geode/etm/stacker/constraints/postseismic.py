@@ -12,9 +12,8 @@ from typing import List, Tuple, Dict, TYPE_CHECKING
 import numpy as np
 from tqdm import tqdm
 
-from .base import BaseConstraint
 from .fault_geometry import FaultGeometry
-from .sw_okada_mixin import SWOkadaMixin
+from .sw_okada import SWOkada
 from ..data_classes import Station
 from ..types import ConstraintType
 from ...core.data_classes import Earthquake
@@ -35,7 +34,7 @@ MISSING_DAYS_TOLERANCE = 5
 MIN_CONSTRAINING_YEARS = 2.0
 
 
-class PostseismicConstraint(BaseConstraint, SWOkadaMixin):
+class PostseismicConstraint(SWOkada):
     """
     Constraints for postseismic relaxation using SW-Okada interpolation.
 
@@ -45,35 +44,16 @@ class PostseismicConstraint(BaseConstraint, SWOkadaMixin):
     plane determination.
     """
 
-    def __init__(self, event: Earthquake, relaxation: float,
-                 fault_geometry: FaultGeometry, grid: 'GridSystem',
+    def __init__(self, event: Earthquake, fault_geometry: FaultGeometry,
+                stations: List[Station], relaxation: float, grid: 'GridSystem',
                  h_sigma: float = 0.001, v_sigma: float = 0.003,
-                 spline_tension: float = 0.10,
-                 is_collision: bool = False):
+                 spline_tension: float = 0.10, is_collision: bool = False):
 
-        super().__init__(ConstraintType.POSTSEISMIC, h_sigma, v_sigma)
-        self.event = event
+        super().__init__(event, fault_geometry, stations, grid,
+                         h_sigma, v_sigma, ConstraintType.COSEISMIC, spline_tension)
+
+        # postseismic-specific state variable
         self.relaxation = relaxation
-        self.fault_geometry = fault_geometry
-        self.grid = grid
-        self.spline_tension = spline_tension
-        # flag to set no constraining stations (add zero-tie)
-        self.is_collision = is_collision
-
-        # SWOkadaMixin configuration
-        # With the normalised scaling (weight=1 → Okada term = data term),
-        # the useful range is ~0.01 (data-dominated) to ~10 (Okada-dominated).
-        # Values above ~10 are saturated: incremental changes have no effect.
-        self._sw_okada_h_weight = 1.0
-        self._sw_okada_v_weight = 1.0
-        self._mask_index = 1
-        self._loo_context = f'relax={relaxation:.3f}'
-
-        # Will be set after plane determination (lazily, same as coseismic)
-        self.dislocation_model = None  # (a, p) design and regularization matrices
-
-        # Cache for leave-one-out constraint coefficients
-        self._constraint_coefficients: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
 
     def select_stations(self, all_stations: List[Station],
                         **kwargs) -> Tuple[List[Station], List[Station]]:
@@ -95,7 +75,8 @@ class PostseismicConstraint(BaseConstraint, SWOkadaMixin):
         # If the earthquake is younger than MIN_CONSTRAINING_YEARS (relative to today),
         # no station can have accumulated enough post-event data to meet the coverage
         # threshold — all qualifying stations are kept as constraining.
-        today_fyear = Date(datetime=_dt.utcnow()).fyear
+        today_fyear = Date(datetime=_dt.now()).fyear
+
         event_is_recent = (today_fyear - self.event.date.fyear) < MIN_CONSTRAINING_YEARS
 
         for stn in all_stations:
@@ -124,11 +105,6 @@ class PostseismicConstraint(BaseConstraint, SWOkadaMixin):
         if self.is_collision:
             return [], constraining + to_constrain
 
-        # If the coseismic constraint already determined the fault plane, reuse it:
-        # the spatial regularization is sound regardless of postseismic sigma values.
-        if self.fault_geometry.plane is not None:
-            return constraining, to_constrain
-
         # No coseismic plane available.  Determine_plane will be called fresh using
         # these stations' jump parameters.  Apply the same sigma filter it uses
         # (all three component sigmas < 1 mm) to check whether at least one station
@@ -151,32 +127,6 @@ class PostseismicConstraint(BaseConstraint, SWOkadaMixin):
                    f'and no coseismic plane available; zero-tying all parameters')
         return [], constraining + to_constrain
 
-    def _ensure_dislocation_model(self, stations: List[Station],
-                                      grids: 'GridSystem', mask: np.ndarray):
-        """
-        Initialise dislocation model.
-
-        If the coseismic constraint already called determine_plane, we must NOT
-        call it again: determine_plane always re-runs both nodal planes and
-        overwrites fault_geometry.plane, which would corrupt the strike/dip used
-        in the leave-one-out computation (get_strike_dip() reads fault_geometry.plane).
-        The dislocation_model field itself is unused by the postseismic leave-one-out
-        (each call to _compute_interpolation_coefficients builds its own (a,p) for
-        N-1 stations with the configured weights), so we only need the plane to be set.
-        """
-        if self.fault_geometry.plane is not None:
-            tqdm.write(f'Reusing SW-Okada plane {self.fault_geometry.plane} from coseismic '
-                       f'for postseismic {self.event.id} (relax={self.relaxation:.3f})')
-            # Mark as initialised without touching fault_geometry state.
-            self.dislocation_model = (None, None)
-        else:
-            tqdm.write(f'Initializing SW-Okada model for postseismic {self.event.id} '
-                       f'(relax={self.relaxation:.3f})')
-            a, p = self.fault_geometry.determine_plane(
-                stations, self.grid, mask, self.spline_tension
-            )
-            self.dislocation_model = (a, p)
-
     def _get_target_cols(self, station: Station, constraining: List[Station]):
 
         target_idx = station.get_postseismic_column(self.event.id, self.relaxation)
@@ -190,7 +140,9 @@ class PostseismicConstraint(BaseConstraint, SWOkadaMixin):
 
     def __str__(self) -> str:
         """String representation for debugging."""
-        out_str = [f"{self.event.id}", f"relax {self.relaxation:.3f}",
+        out_str = [f"{self.event.id}",
+                   f"plane: {self.plane}",
+                   f"relax: {self.relaxation:.3f}",
                    f"equation count: {len(self.equations) * 3}",
                    f"h_sigma: {self.h_sigma:.6f}", f"v_sigma: {self.v_sigma:.6f}"]
 

@@ -626,7 +626,7 @@ class GridSystem:
         a = a_full[np.ix_(row_idx, row_idx)]
 
         # grab the grid response (already masked in CoseismicConstraint.compute_constraint_coefficients)
-        ke, kn, ku = self.earthquake_responses[event.id]
+        ke, kn, ku = constraint.grid_prediction_kernels
 
         s_score, _, _ = self.earthquake_masks[event.id]
 
