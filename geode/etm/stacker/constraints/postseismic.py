@@ -50,7 +50,7 @@ class PostseismicConstraint(SWOkada):
                  spline_tension: float = 0.10, is_collision: bool = False):
 
         super().__init__(event, fault_geometry, stations, grid,
-                         h_sigma, v_sigma, ConstraintType.COSEISMIC, spline_tension)
+                         h_sigma, v_sigma, ConstraintType.POSTSEISMIC, spline_tension, is_collision)
 
         # postseismic-specific state variable
         self.relaxation = relaxation
@@ -126,6 +126,27 @@ class PostseismicConstraint(SWOkada):
                    f'no station with all component sigmas < {sigma_threshold * 1000:.0f} mm '
                    f'and no coseismic plane available; zero-tying all parameters')
         return [], constraining + to_constrain
+
+    def get_parameters_and_covariance(self, solution: np.ndarray, covariance: np.ndarray):
+        """Return postseismic relaxation amplitudes and their covariance sub-matrix."""
+        tp = solution.shape[1]
+        idx = []
+        relax_params = {}
+
+        for stn in self._station_list:
+            par, _ = stn.get_constrained_relax(self.event, self.relaxation, solution, covariance)
+            if par is not None:
+                idx.append(stn.get_postseismic_column(self.event, self.relaxation))
+                relax_params[stn] = par
+
+        if len(idx) > 1:
+            v = np.array(list(relax_params.values())).T
+            idx = np.array(idx).flatten()
+            idx_ = np.concatenate((idx, idx + tp, idx + tp * 2))
+            c = covariance[idx_][:, idx_]
+            return v, c
+        else:
+            return np.array([]), np.array([])
 
     def _get_target_cols(self, station: Station, constraining: List[Station]):
 

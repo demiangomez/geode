@@ -18,8 +18,10 @@ if TYPE_CHECKING:
 class InterseismicConstraint(BaseConstraint):
     """Constraints for interseismic velocities."""
 
-    def __init__(self, h_sigma: float = 0.0001, v_sigma: float = 0.0003):
+    def __init__(self, stations: List[Station], h_sigma: float = 0.0001, v_sigma: float = 0.0003):
         super().__init__(ConstraintType.INTERSEISMIC, h_sigma, v_sigma)
+
+        self._station_list = stations
 
     def select_stations(self, all_stations: List[Station],
                         **kwargs) -> Tuple[List[Station], List[Station]]:
@@ -32,6 +34,19 @@ class InterseismicConstraint(BaseConstraint):
         to_constrain = [stn for stn in all_stations if not stn.is_interseismic]
 
         return constraining, to_constrain
+
+    def get_parameters_and_covariance(self, solution: np.ndarray, covariance: np.ndarray):
+        """retrieve solution parameters and covariance for this constraint"""
+        # total parameters
+        tp = solution.shape[1]
+
+        idx = np.array([stn.get_velocity_column() for stn in self._station_list])
+        v = solution[:, idx]
+        # create array with indices of stations for covariance
+        idx_ = np.concatenate((idx, idx + tp, idx + tp * 2))
+        c = covariance[idx_][:, idx_]
+
+        return v, c
 
     def compute_constraint_coefficients(self, target_station: Station,
                                         constraining_stations: List[Station],

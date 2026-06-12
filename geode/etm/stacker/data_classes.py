@@ -12,14 +12,14 @@ from ..core.etm_config import EtmConfig
 from ..etm_functions.polynomial import PolynomialFunction
 from ..etm_functions.jumps import JumpFunction
 from ...pyDate import Date
-from ...Utils import stationID
 
 if TYPE_CHECKING:
     from ..core.etm_engine import EtmEngine
     from .grid_system import GridSystem
-    from .constraints.coseismic import CoseismicConstraint
     from .types import ConstraintType
-
+    from .constraints.interseismic import InterseismicConstraint
+    from .constraints.coseismic import CoseismicConstraint
+    from .constraints.postseismic import PostseismicConstraint
 
 @dataclass
 class EtmStackerConfig(BaseDataClass):
@@ -275,7 +275,6 @@ class EtmStackerField(BaseDataClass):
     enu_covar: Union[np.ndarray, None] = None
     constrain_stations: List[Station] = field(default_factory=list)
     constrained_parameters: np.ndarray = None
-    parameters_indices: np.ndarray = None
     convex_hull: np.ndarray = None
 
     @property
@@ -296,87 +295,31 @@ class EtmStackerField(BaseDataClass):
                      solution: np.ndarray,
                      covariance: np.ndarray,
                      grids: 'GridSystem',
-                     event: Earthquake = None,
-                     relaxation: np.ndarray = None,
-                     coseismic_constraint: Union['CoseismicConstraint', None] = None):
+                     constraint: Union['InterseismicConstraint', 'CoseismicConstraint', 'PostseismicConstraint']):
         """Create field(s) from solution."""
+
         # Import here to avoid circular imports
         from .types import ConstraintType
 
-        # total parameters
-        tp = solution.shape[1]
+        params, sigmas = constraint.get_parameters_and_covariance(solution, covariance)
 
-        if event is None:
-            idx = np.array([stn.get_velocity_column() for stn in stations])
-            v = solution[:, idx]
-            # create array with indices of stations for covariance
-            idx_ = np.concatenate((idx, idx + tp, idx + tp * 2))
-            c = covariance[idx_][:, idx_]
-            velocity_field, velocity_sigma, velocity_cova = grids.interpolate_field(stations, v, c)
+        if constraint.constraint_type == ConstraintType.INTERSEISMIC:
+            velocity_field, velocity_sigma, velocity_cova = grids.interpolate_field(stations, params, sigmas)
 
-            return EtmStackerField(ConstraintType.INTERSEISMIC, grids,
-                                   enu_field=velocity_field,
-                                   enu_sigma=velocity_sigma,
-                                   constrain_stations=stations,
-                                   constrained_parameters=v,
-                                   parameters_indices=idx,
-                                   enu_covar=velocity_cova)
-
+            return EtmStackerField(
+                ConstraintType.INTERSEISMIC, grids, enu_field=velocity_field, enu_sigma=velocity_sigma,
+                constrain_stations=stations, constrained_parameters=params, enu_covar=velocity_cova)
         else:
-            # get values and sigmas for each station
-            return_fields, idx = [], []
-            coseismic = {}
-            for stn in stations:
-                par, _ = stn.get_constrained_jump(event, solution, covariance)
-                if par is not None:
-                    idx.append(stn.get_coseismic_column(event))
-                    coseismic[stn] = par
+            seismic_field, seismic_sigma, seismic_covar = grids.predict_seismic_deformation(
+                constraint.event, constraint.station_list, params, sigmas, constraint
+            )
 
-            # if there is something to process, add an EtmStackerField to the return list
-            if len(idx) > 1:
-                v = np.array(list(coseismic.values())).T
-                idx = np.array(idx).flatten()
-                idx_ = np.concatenate((idx, idx + tp, idx + tp * 2))
-                c = covariance[idx_][:, idx_]
-                # do the prediction
-                coseismic_field, coseismic_sigma, coseismic_covar = grids.predict_coseismic(event,
-                    list(coseismic.keys()), v, c, coseismic_constraint
-                )
-                return_fields.append(
-                    EtmStackerField(
-                        ConstraintType.COSEISMIC, grids, enu_field=coseismic_field, onset_date=event.date,
-                        enu_sigma=coseismic_sigma, constrain_stations=list(coseismic.keys()),
-                        event=event, constrained_parameters=v, parameters_indices=idx, enu_covar=coseismic_covar)
-                )
-
-            # now do it for the postseismic fields
-            for relax in relaxation:
-                idx = []
-                postseismic = {}
-                for stn in stations:
-                    par, _ = stn.get_constrained_relax(event, relax, solution, covariance)
-                    if par is not None:
-                        idx.append(stn.get_postseismic_column(event, relax))
-                        postseismic[stn] = par
-
-                if len(idx) > 1:
-                    v = np.array(list(postseismic.values())).T
-                    idx = np.array(idx).flatten()
-                    idx_ = np.concatenate((idx, idx + tp, idx + tp * 2))
-                    c = covariance[idx_][:, idx_]
-                    # do the interpolation
-                    postseismic_field, postseismic_sigma, postseismic_covar = grids.interpolate_field(
-                        list(postseismic.keys()), v, c, event)
-
-                    return_fields.append(
-                        EtmStackerField(
-                            ConstraintType.POSTSEISMIC, grids, enu_field=postseismic_field, onset_date=event.date,
-                            enu_sigma=postseismic_sigma, constrain_stations=list(postseismic.keys()),
-                            event=event, relaxation=relax, constrained_parameters=v,
-                            parameters_indices=idx, enu_covar=postseismic_covar)
-                    )
-
-            return return_fields
+            return EtmStackerField(
+                constraint.constraint_type, grids, enu_field=seismic_field, onset_date=constraint.event.date,
+                enu_sigma=seismic_sigma, constrain_stations=constraint.station_list,
+                event=constraint.event, relaxation=constraint.relaxation,
+                constrained_parameters=params, enu_covar=seismic_covar
+            )
 
     def get_interpolation_grid(self) -> Tuple[np.ndarray, np.ndarray]:
         """Get interpolation grid coordinates."""

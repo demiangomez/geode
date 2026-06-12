@@ -3,7 +3,7 @@ Base constraint class for ETM Stacker.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple, TYPE_CHECKING
+from typing import List, Tuple, Union, TYPE_CHECKING
 import numpy as np
 from tqdm import tqdm
 
@@ -24,10 +24,18 @@ class BaseConstraint(ABC):
                  h_sigma: float = 0.001, v_sigma: float = 0.003):
         self.constraint_type = constraint_type
         self.event: Earthquake = None
+        self._station_list: List[Station] = []
         self.h_sigma = h_sigma
         self.v_sigma = v_sigma
         self.equations: List[ConstraintEquation] = []
         self._is_collected = False
+        self.is_collision = False
+        self.relaxation: Union[float, None] = None
+
+    @property
+    def station_list(self):
+        """Station names in order used in this constraint."""
+        return self._station_list
 
     @abstractmethod
     def select_stations(self, all_stations: List[Station],
@@ -36,6 +44,10 @@ class BaseConstraint(ABC):
         Returns (constraining_stations, stations_to_constrain)
         Constraining stations have data, stations_to_constrain need constraints.
         """
+        pass
+
+    @abstractmethod
+    def get_parameters_and_covariance(self, solution: np.ndarray, covariance: np.ndarray):
         pass
 
     def collect_constraints(self,
@@ -165,6 +177,11 @@ class BaseConstraint(ABC):
         # Update all parameter sigmas
         for param in self.equations:
             param.constraint_sigma = np.array([self.h_sigma, self.h_sigma, self.v_sigma])
+
+    @abstractmethod
+    def _build_k_matrix(self, station: Station, constraining: List[Station],
+                        grids: 'GridSystem', total_parameters: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        pass
 
     @abstractmethod
     def _get_target_cols(self, station: Station, constraining: List[Station]):

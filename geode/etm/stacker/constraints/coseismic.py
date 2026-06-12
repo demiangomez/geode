@@ -62,7 +62,7 @@ class CoseismicConstraint(SWOkada):
             Spline tension parameter for vertical interpolation (0 < t < 1)
         """
         super().__init__(event, fault_geometry, stations, grid,
-                         h_sigma, v_sigma, ConstraintType.COSEISMIC, spline_tension)
+                         h_sigma, v_sigma, ConstraintType.COSEISMIC, spline_tension, is_collision)
 
     def select_stations(self, all_stations: List[Station],
                         **kwargs) -> Tuple[List[Station], List[Station]]:

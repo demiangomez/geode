@@ -38,7 +38,7 @@ class FaultGeometry:
     - Okada response matrix computation
     """
 
-    def __init__(self, event: Earthquake, stations: List['Station'], grid: GridSystem):
+    def __init__(self, event: Earthquake, stations: List['Station'], relaxation: float, grid: 'GridSystem'):
         """
         Initialize fault geometry from earthquake and station list.
 
@@ -55,22 +55,44 @@ class FaultGeometry:
         self.along_strike = 10. ** (-3.22 + 0.69 * event.magnitude) * 1.2  # [km] (inflate 20%)
         self.down_dip = 10. ** (-1.01 + 0.32 * event.magnitude) * 1.6      # [km] (inflate 60%)
 
-        # Selected fault plane (0 or 1)
-        self.plane = None
-        # Station names in the order used for dislocation matrices
-        self.station_list = None
-
         # Separate patch grids for horizontal and vertical
         # Horizontal has 2*N observations, vertical has N observations
         self.patches_h: PatchGrid = None
         self.patches_v: PatchGrid = None
 
-        self._compute_patch_grids(len(stations))
+        # Restrict to stations that actually have a jump for this event.
+        # Building le/ln/lu with `if j` but indexing with full-list positions causes
+        # an IndexError whenever stations without jumps are present (the compressed
+        # array is shorter than the index values from the full list).
 
-        # get the postseismic mask which is used to compute the scale length for the spline interpolation
-        mask = grid.earthquake_masks[event.id][1]
+        self.station_list = [stn for stn in stations if stn.get_coseismic_column(event.id) is not None]
+        # if not enough coseismic observations, choose postseismic with the largest relaxation value
+        if len(self.station_list) < 2:
+            self.station_list = [stn for stn in stations if stn.get_postseismic_column(event.id, relaxation) is not None]
 
-        self.determine_plane(stations, grid, mask, 0.1)
+        if len(self.station_list) < 2:
+            # 0 stations  → nothing to fit.
+            # 1 station   → NN-distance matrix diagonal is forced to inf,
+            #               making local_reg = inf and get_qpw return NaN;
+            #               plane comparison is impossible.
+            # In both cases default to plane 0 and skip the solve.
+            msg = ('No stations have' if not self.station_list
+                   else 'Only 1 station has')
+            tqdm.write(f'  WARNING: {msg} a jump for {self.event.id}; '
+                       f'cannot determine plane — defaulting to plane 0')
+            self.plane = 0
+            self._compute_patch_grids(len(self.station_list) if self.station_list else 1)
+            self.station_list = [stationID(stn) for stn in self.station_list]
+        else:
+            jumps = [stn.etm.jump_manager.get_geophysical_jump(self.event.id) for stn in self.station_list]
+
+            # Selected fault plane (0 or 1)
+            self.plane = None
+            self._compute_patch_grids(len(self.station_list))
+
+            # get the postseismic mask which is used to compute the scale length for the spline interpolation
+            mask = grid.earthquake_masks[event.id][1]
+            self.determine_plane(self.station_list, jumps, grid, mask, 0.1)
 
     def _compute_patch_grids(self, n_stations: int):
         """
@@ -88,7 +110,7 @@ class FaultGeometry:
         # Vertical: 1 observation per station
         n_patches_v = max(1, int(np.floor(n_stations / 4)))
 
-        tqdm.write(f'Event {self.event.id}: {n_stations} stations -> '
+        tqdm.write(f'Event {self.event.id} {self.event.date.yyyyddd()}: {n_stations} stations -> '
                    f'{n_patches_h} horizontal patches, {n_patches_v} vertical patches')
         tqdm.write(f'  Fault dimensions: AS={self.along_strike:.1f} km, DD={self.down_dip:.1f} km')
 
@@ -164,7 +186,7 @@ class FaultGeometry:
             n_patches=actual_patches
         )
 
-    def determine_plane(self, stations: List['Station'], grid: 'GridSystem',
+    def determine_plane(self, stations: List['Station'], jumps, grid: 'GridSystem',
                         mask: np.ndarray, spline_tension: float) -> Tuple[np.ndarray, np.ndarray]:
         """
         Determine which nodal plane best fits the observations.
@@ -195,12 +217,9 @@ class FaultGeometry:
 
         sites_lon = np.array([stn.lon for stn in stations])
         sites_lat = np.array([stn.lat for stn in stations])
-
-        # Get observed jumps
-        jumps = [stn.etm.jump_manager.get_geophysical_jump(self.event.id) for stn in stations]
-        le = np.array([j.p.params[1][0] for j in jumps if j])
-        ln = np.array([j.p.params[0][0] for j in jumps if j])
-        lu = np.array([j.p.params[2][0] for j in jumps if j])
+        le = np.array([j.p.params[1][0] for j in jumps])
+        ln = np.array([j.p.params[0][0] for j in jumps])
+        lu = np.array([j.p.params[2][0] for j in jumps])
         obs = np.concatenate([le.ravel(), ln.ravel(), lu.ravel()])
 
         sites_nam = [stationID(stn) for stn in stations]
@@ -211,9 +230,6 @@ class FaultGeometry:
         keep_idx = []
         filtered_sites = []
         for idx, j in enumerate(jumps):
-            if j is None:
-                filtered_sites.append(sites_nam[idx])
-                continue
             s_n = j.p.sigmas[0][0] if len(j.p.sigmas[0]) > 0 else np.inf
             s_e = j.p.sigmas[1][0] if len(j.p.sigmas[1]) > 0 else np.inf
             s_u = j.p.sigmas[2][0] if len(j.p.sigmas[2]) > 0 else np.inf

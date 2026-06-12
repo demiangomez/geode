@@ -356,10 +356,6 @@ class EtmStacker:
         from datetime import datetime as _dt
         from ..core.s_score import ScoreTable
         from ..core.type_declarations import JumpType
-        # @todo: collisions need to consider station intersection. If no station intersection then there is no
-        #        collision even when time window suggests there is one. For example, two earthquakes very close in time
-        #        but without station overlap (i.e. very distant from each other) should still remain in the stacker
-        
         # date range for the scan
         if isinstance(self.config.post_seismic_back_lim, Date):
             sdate = self.config.post_seismic_back_lim
@@ -370,6 +366,10 @@ class EtmStacker:
 
         seen_ids: set = set()
         candidate_events: List[Earthquake] = []
+        # Maps event_id -> set of station IDs (net.code) that see the event.
+        # Used by the collision check: two close events only collide if they
+        # share at least one common station.
+        event_stations: dict = {}
 
         tqdm.write(f'Pre-computing earthquake list for {len(stnlist)} stations '
                    f'(mag >= {self.config.earthquake_magnitude_limit})...')
@@ -393,6 +393,7 @@ class EtmStacker:
                 if eq.id not in seen_ids:
                     seen_ids.add(eq.id)
                     candidate_events.append(eq)
+                event_stations.setdefault(eq.id, set()).add(f'{net}.{code}')
 
         tqdm.write(f'  s-score scan: {len(candidate_events)} unique events from '
                    f'{len(stnlist)} stations')
@@ -446,6 +447,20 @@ class EtmStacker:
                     continue
                 days_apart = abs(event_i.date.fyear - event_j.date.fyear) * 365.25
                 if days_apart <= collision_window_days:
+                    # Only a true collision when both events affect at least one
+                    # common station.  Two events close in time but in different
+                    # regions (no shared stations) are independent and should
+                    # remain in the stacker separately.
+                    shared = (event_stations.get(event_i.id, set()) &
+                              event_stations.get(event_j.id, set()))
+                    if not shared:
+                        tqdm.write(
+                            f'  Events {event_i.id} and {event_j.id} are '
+                            f'{days_apart:.1f} days apart but have no common '
+                            f'stations — not a collision'
+                        )
+                        continue
+
                     if event_i.magnitude >= event_j.magnitude:
                         loser, winner = event_j, event_i
                     else:
@@ -454,8 +469,8 @@ class EtmStacker:
                     if loser.id not in self.collided_earthquakes:
                         tqdm.write(
                             f'WARNING: Earthquake collision detected between '
-                            f'{event_i.id} (M{event_i.magnitude:.1f}, {event_i.date.yyyyddd():.1f}) and '
-                            f'{event_j.id} (M{event_j.magnitude:.1f}, {event_j.date.yyyyddd():.1f}) '
+                            f'{event_i.id} (M{event_i.magnitude:.1f}, {event_i.date.yyyyddd():s}) and '
+                            f'{event_j.id} (M{event_j.magnitude:.1f}, {event_j.date.yyyyddd():s}) '
                             f'({days_apart:.1f} days apart). '
                             f'Keeping {winner.id}, excluding {loser.id}.'
                         )
@@ -605,7 +620,7 @@ class EtmStacker:
         # rebuild normal equations before solving
         system_neq, system_ceq = self._build_base_normal_equations()
 
-        # collect constraints. Changes to smoothing and weight will be applied here
+        # collect constraints. Weight changes take effect here
         self.constraint_registry.collect_all_constraints(
             self.stations, self.total_parameters, self.grids,
             earthquakes=self.earthquakes
@@ -744,6 +759,7 @@ class EtmStacker:
         # Interseismic
         self.constraint_registry.add_constraint(
             InterseismicConstraint(
+                self.stations,
                 self.config.interseismic_h_sigma,
                 self.config.interseismic_v_sigma
             )
@@ -761,7 +777,7 @@ class EtmStacker:
             # coseismic stations
             stations = [stn for stn in self.stations if stn.get_coseismic_column(event.id) is not None]
             # compute fault_geometry for this event (will use co or postseismic stations)
-            fault_geometry = FaultGeometry(event, self.stations, self.grids)
+            fault_geometry = FaultGeometry(event, self.stations, np.max(self.config.relaxation), self.grids)
 
             if len(stations):
                 coseis = CoseismicConstraint(
@@ -780,7 +796,7 @@ class EtmStacker:
                 # Build a FaultGeometry from postseismic stations if coseismic had none
                 stations = [stn for stn in self.stations if stn.get_postseismic_column(event.id, relax) is not None]
 
-                if stations:
+                if not stations:
                     tqdm.write(f'No stations for postseismic event {event.id} relax={relax:.3f}. '
                                f'Skipping postseismic constraint.')
                     continue
@@ -819,7 +835,7 @@ class EtmStacker:
                     mask = Mask(cnn, jump.earthquake.id)
                     s_score, p_score = mask.score(lat, lon)
 
-                    tqdm.write(f'Getting mask for event {jump.earthquake.id}')
+                    # tqdm.write(f'Getting mask for event {jump.earthquake.id}')
                     s_score = s_score > 0
                     p_score = p_score > 0
                     # save the actual object to query it
@@ -917,40 +933,36 @@ class EtmStacker:
                         self.total_equations += station.normal_equations.equation_count
 
         # now add the constraint
+        fault_geometry = FaultGeometry(event, self.stations, np.max(self.config.relaxation), self.grids)
+
         stations = [stn for stn in self.stations if stn.get_coseismic_column(event.id) is not None]
-        fault_geometry = None
         if len(stations):
             coseis = CoseismicConstraint(
-                event, stations, self.grids,
+                event, fault_geometry, stations, self.grids,
                 self.config.coseismic_h_sigma,
-                self.config.coseismic_v_sigma
+                self.config.coseismic_v_sigma,
+                is_collision=event.id in self.collided_earthquakes
             )
             self.constraint_registry.add_constraint(coseis)
-            fault_geometry = coseis.fault_geometry
         else:
             tqdm.write(f'No stations observed coseismic event {event.id}. '
                        f'A coseismic constraint for this event will not be added.')
 
         # Postseismic for each relaxation
         for relax in self.config.relaxation:
-            # Build a FaultGeometry from postseismic stations if coseismic had none
-            if fault_geometry is None:
-                ps_stations = [stn for stn in self.stations
-                               if stn.get_postseismic_column(event.id, relax) is not None]
-                fg = FaultGeometry(event, ps_stations) if ps_stations else None
-            else:
-                fg = fault_geometry
+            stations = [stn for stn in self.stations if stn.get_postseismic_column(event.id, relax) is not None]
 
-            if fg is None:
+            if not stations:
                 tqdm.write(f'No stations for postseismic event {event.id} relax={relax:.3f}. '
                            f'Skipping postseismic constraint.')
                 continue
 
             self.constraint_registry.add_constraint(
                 PostseismicConstraint(
-                    event, relax, fg, self.grids,
+                    event, fault_geometry, stations, relax, self.grids,
                     self.config.postseismic_h_sigma,
-                    self.config.postseismic_v_sigma
+                    self.config.postseismic_v_sigma,
+                    is_collision=event.id in self.collided_earthquakes
                 )
             )
 
@@ -1020,26 +1032,6 @@ class EtmStacker:
     def get_constraint_summary(self) -> Dict:
         """Get summary of constraint system."""
         return self.constraint_registry.get_constraint_summary()
-
-    def update_smoothing(self, event_id: str, new_smoothing: float):
-        pass
-        #for const in self.constraint_registry.constraints['coseismic']:
-        #    if const.event.id == event_id:
-        #        tqdm.write(f'Found event {event_id} with current smoothing {const.smoothing:.3e}')
-        #        const.smoothing = new_smoothing
-        #        self.solved = False
-
-    def update_smoothing_start_stop(self, event_id: str, new_smoothing_start: float,
-                                    new_smoothing_stop: float):
-        for const in self.constraint_registry.constraints['coseismic']:
-            if const.event.id == event_id:
-                tqdm.write(f'Found event {event_id} with current smoothing start {const.search_start_smoothing:.3e} '
-                           f'stop {const.search_stop_smoothing:.3e}')
-                const.search_start_smoothing = new_smoothing_start
-                const.search_stop_smoothing = new_smoothing_stop
-                # reset fields
-                const.start_smoothing = [None, None, None]
-                const.stop_smoothing = [None, None, None]
 
     def update_weights(self, event_id: str = None, relax: float = None, constraint_type: str = None,
                        h_sigma: float = None, v_sigma: float = None):
@@ -1126,10 +1118,11 @@ class EtmStacker:
 
         for constraint in apply_to:
             tqdm.write(f'Updating Okada weights for {constraint.short_description()}: '
-                       f'h={constraint._sw_okada_h_weight}->{h_weight}  '
-                       f'v={constraint._sw_okada_v_weight}->{v_weight}')
-            constraint._sw_okada_h_weight = h_weight
-            constraint._sw_okada_v_weight = v_weight
+                       f'h={constraint.sw_okada_h_weight}->{h_weight}  '
+                       f'v={constraint.sw_okada_v_weight}->{v_weight}')
+            constraint.sw_okada_h_weight = h_weight
+            constraint.sw_okada_v_weight = v_weight
+            constraint.dislocation_model = None
 
         if not apply_to:
             tqdm.write('update_okada_weights: no matching constraints found')
@@ -1281,33 +1274,25 @@ class EtmStacker:
             # clean any previous runs
             self.fields = []
 
-            self.fields.append(
-                EtmStackerField.create_field(
-                    self.stations, self.solution, self.covariance, self.grids)
-            )
+            # iterate through the constraints
+            constraint_types = self.constraint_registry.constraints.values()
+            for constraint_type in constraint_types:
+                for constraint in constraint_type:
+                    if constraint.is_collision:
+                        tqdm.write(f'Skipping field interpolation for collided event {constraint.event.id} '
+                                   f'(parameters are zero-tied)')
+                        continue
 
-            for event in self.earthquakes:
-                # find the constraint for this event
-                coseismic_constraint = None
-                for const in self.constraint_registry.constraints['coseismic']:
-                    if const.event == event:
-                        coseismic_constraint = const
-                        break
+                    if (constraint.constraint_type != ConstraintType.INTERSEISMIC and
+                            getattr(constraint, 'dislocation_model', None) is None):
+                        tqdm.write(f'Skipping field interpolation for {constraint.short_description()} '
+                                   f'(zero-constrained: no SW-Okada model was built)')
+                        continue
 
-                if coseismic_constraint is None:
-                    tqdm.write(f'Could not find coseismic constraint for {event.id}')
-                    continue
-
-                if coseismic_constraint.is_collision:
-                    tqdm.write(f'Skipping field interpolation for collided event {event.id} '
-                               f'(parameters are zero-tied)')
-                    continue
-
-                fields = EtmStackerField.create_field(
-                    self.stations, self.solution, self.covariance, self.grids, event,
-                    self.config.relaxation, coseismic_constraint)
-
-                self.fields += fields
+                    self.fields.append(
+                        EtmStackerField.create_field(
+                            self.stations, self.solution, self.covariance, self.grids, constraint)
+                    )
 
         else:
             tqdm.write('System has not been solved! Invoke solve first')

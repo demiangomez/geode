@@ -123,71 +123,14 @@ class EtmStackerShell(cmd.Cmd):
         for cmd in self.etm_stacker.command_history:
             print(cmd)
 
-    def do_smoothing(self, arg: str):
-        """
-        Update the smoothing coefficient of an earthquake.
-        syntax: smoothing <id> <value> (default: 1e-6)
-                alternatively, call without <id> to apply to all events
-                smoothing <value>
-        """
-        try:
-            args = arg.split()
-            if len(args) == 2:
-                eid, value = arg.split()
-                self.etm_stacker.update_smoothing(eid, float(value))
-                if not self.etm_stacker.solved:
-                    print(f"Updated to event {eid} smoothing to {value}")
-                    print('Remember to invoke solve again!')
-                else:
-                    print(f"Could not find event {eid}!")
-            elif len(args) == 1:
-                for event in self.etm_stacker.earthquakes:
-                    self.etm_stacker.update_smoothing(event.id, float(arg))
-                    print(f"Updated to event {event.id} smoothing to {arg}")
-
-                print('Remember to invoke solve again!')
-        except ValueError:
-            print("Usage: smoothing <id> <value>")
-
-    def do_smoothing_start_stop(self, arg: str):
-        """
-        Update the smoothing search start and stop values of an earthquake.
-        syntax: smoothing_start_stop [id] <value> <value> (default: 1e-6 1e-12)
-                alternatively, call without [id] to apply to all events
-                smoothing_start_stop <value> <value>
-        """
-        try:
-            args = arg.split()
-            if len(args) == 3:
-                eid, value_start, value_stop = arg.split()
-                if float(value_start) <= float(value_stop):
-                    raise ValueError('start value must be > stop value')
-
-                self.etm_stacker.update_smoothing_start_stop(eid, float(value_start), float(value_stop))
-                print(f"Updated event {eid} smoothing start {value_start} stop {value_stop}")
-                print('Remember to call predict!')
-
-            elif len(args) == 2:
-                if float(args[0]) <= float(args[1]):
-                    raise ValueError('start value must be > stop value')
-
-                for event in self.etm_stacker.earthquakes:
-                    self.etm_stacker.update_smoothing_start_stop(event.id, float(args[0]), float(args[1]))
-                    print(f"Updated event {event.id} smoothing start {args[0]} stop {args[1]}")
-
-                print('Remember to call predict!')
-
-        except ValueError as e:
-            print(f"Usage: smoothing_start_stop <id> <value_start> <value_stop>: {str(e)}")
-
     def do_remove_station(self, arg: str):
         self.etm_stacker.remove_station(arg)
         print(f'Removed station {arg}, invoke solve again when ready')
 
     def do_reweight_station(self, arg: str):
         """
-        Update the smoothing coefficient of an earthquake.
-        syntax: smoothing <id> <value> (default: 1e-6)
+        Update the weight scale of one or more stations.
+        syntax: reweight_station <net.stn> [<net.stn> ...] <value>
         """
         try:
             values = arg.split()
@@ -403,7 +346,7 @@ class EtmStackerShell(cmd.Cmd):
 
         print('Re-solving...')
         tic = time.time()
-        self.velocities, self.postseismic = self.etm_stacker.solve(interpolate_fields=False)
+        self.velocities, self.postseismic = self.etm_stacker.solve()
         print(f'Solved in {(time.time() - tic):.1f} sec')
 
     def do_okada_weights(self, arg):
@@ -446,7 +389,7 @@ class EtmStackerShell(cmd.Cmd):
 
         print(f'Updated {n} constraint(s). Re-solving...')
         tic = time.time()
-        self.velocities, self.postseismic = self.etm_stacker.solve(interpolate_fields=False)
+        self.velocities, self.postseismic = self.etm_stacker.solve()
         toc = time.time()
         print(f'Solved in {(toc - tic):.1f} sec')
 

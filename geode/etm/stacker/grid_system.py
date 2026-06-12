@@ -3,9 +3,8 @@ ETM Stacker grid system for spatial interpolation.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, TYPE_CHECKING
+from typing import List, Tuple, Dict, Union, TYPE_CHECKING
 import numpy as np
-import os
 
 import matplotlib
 matplotlib.use('TkAgg')
@@ -27,6 +26,7 @@ from ...Utils import stationID, azimuthal_equidistant, inverse_azimuthal
 if TYPE_CHECKING:
     from .data_classes import Station
     from .constraints.coseismic import CoseismicConstraint
+    from .constraints.postseismic import PostseismicConstraint
 
 
 def fill_region_with_grid(x_points, y_points, radius, apply_buffer=True) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -602,14 +602,16 @@ class GridSystem:
 
         return values, enu_sigmas, enu_cov
 
-    def predict_coseismic(self, event: Earthquake, stations: List['Station'],
+    def predict_seismic_deformation(self, event: Earthquake, stations: List['Station'],
                           observations: np.ndarray,
                           covar: np.ndarray,
-                          constraint: 'CoseismicConstraint') -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                          constraint: Union['CoseismicConstraint',
+                          'PostseismicConstraint']) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Output enu_cov is en, eu, nu."""
-        tqdm.write(f'Predicting jumps for {event.id}')
+        tqdm.write(f'Predicting from {constraint.constraint_type} for event {event.id} {event.date.yyyyddd()}')
 
-        sites = np.isin(constraint.station_list, [stationID(stn) for stn in stations])
+        sites = np.isin([stationID(s) for s in constraint.station_list],
+                        [stationID(stn) for stn in stations])
 
         # grab the design matrix (dislocation_model is now a tuple (a, p))
         a_full, p_full = constraint.dislocation_model
@@ -628,7 +630,7 @@ class GridSystem:
         # grab the grid response (already masked in CoseismicConstraint.compute_constraint_coefficients)
         ke, kn, ku = constraint.grid_prediction_kernels
 
-        s_score, _, _ = self.earthquake_masks[event.id]
+        s_score = self.earthquake_masks[event.id][constraint._mask_index]
 
         # get how many points we actually need
         active_points = int(np.sum(s_score))

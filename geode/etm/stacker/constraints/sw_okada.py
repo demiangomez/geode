@@ -60,7 +60,6 @@ class SWOkada(BaseConstraint):
         # Fault geometry handles patch grids, Okada responses, and plane selection
         self.fault_geometry = fault_geometry
 
-        # Will be set after plane determination
         self.dislocation_model = None  # (a, p) design and regularization matrices
 
         # Snapshot of station_list at the time the dislocation model was built.
@@ -94,45 +93,67 @@ class SWOkada(BaseConstraint):
         """Selected fault plane index (0 or 1)."""
         return self.fault_geometry.plane
 
-    @property
-    def station_list(self):
-        """Station names in order used for dislocation matrices.
+    def get_parameters_and_covariance(self, solution: np.ndarray, covariance: np.ndarray):
+        """retrieve solution parameters and covariance for this constraint"""
 
-        Returns the snapshot taken when the coseismic dislocation model was
-        built.  Falls back to fault_geometry.station_list before that happens,
-        but after _ensure_dislocation_model runs the snapshot is immutable
-        even if the shared FaultGeometry is later updated by a PostseismicConstraint.
-        """
-        if self._station_list is not None:
-            return self._station_list
-        return self.fault_geometry.station_list
+        # total parameters
+        tp = solution.shape[1]
 
-    def _compute_dislocation_model(self, stations: List[Station],
-                                   grids: 'GridSystem', mask: np.ndarray):
+        return_fields, idx = [], []
+        seismic = {}
+
+        # find stations affected by event
+        for stn in self._station_list:
+            par, _ = stn.get_constrained_jump(self.event, solution, covariance)
+            if par is not None:
+                if self.constraint_type == ConstraintType.COSEISMIC:
+                    idx.append(stn.get_coseismic_column(self.event))
+                else:
+                    idx.append(stn.get_postseismic_column(self.event, self.relaxation))
+                seismic[stn] = par
+
+        # if there is something to process, add an EtmStackerField to the return list
+        if len(idx) > 1:
+            v = np.array(list(seismic.values())).T
+            idx = np.array(idx).flatten()
+            idx_ = np.concatenate((idx, idx + tp, idx + tp * 2))
+            c = covariance[idx_][:, idx_]
+
+            return v, c
+        else:
+            return np.array([]), np.array([])
+
+    def _compute_dislocation_model(self, grids: 'GridSystem', mask: np.ndarray):
         """
         Initialize dislocation model: determine plane and compute grid kernels.
+
+        self._station_list (all stations: constraining + to_constrain) so that
+        predict_seismic_deformation and the grid interpolation use every
+        available observation.  Cross-validation coefficients
+        (_compute_interpolation_coefficients) build their own per-station
+        systems and are not affected by this choice.
         """
         tqdm.write(f'Initializing SW-Okada model for {self.event.id}')
 
         strike, dip = self.fault_geometry.get_strike_dip()
 
-        sites_lon = np.array([stn.lon for stn in stations])
-        sites_lat = np.array([stn.lat for stn in stations])
+        # Use ALL stations (constraining + to_constrain): both sets have fitted
+        # parameters from the joint stack and their spatial distribution improves
+        # the SW-Okada regularization and the grid prediction coverage.
+        all_stations = self._station_list
+        sites_lon = np.array([stn.lon for stn in all_stations])
+        sites_lat = np.array([stn.lat for stn in all_stations])
 
         self.dislocation_model = self.fault_geometry._compute_sw_okada_system(
             grids, sites_lon, sites_lat, strike, dip, mask,
             self.spline_tension, self.sw_okada_h_weight, self.sw_okada_v_weight
         )
 
-        # Freeze the station list now.  Any subsequent call to determine_plane on
-        # the shared FaultGeometry (e.g. from PostseismicConstraint) will overwrite
-        # fault_geometry.station_list, but this constraint's property returns the
-        # snapshot and remains unaffected.
-        self._station_list = list(self.fault_geometry.station_list)
-
-        # Compute grid prediction kernels
+        # Compute grid prediction kernels using the same all-station set so that
+        # ke/kn/ku dimensions are consistent with dislocation_model and
+        # station_list (N_all × N_all matrices throughout).
         tqdm.write('Computing earthquake response for the interpolation grid')
-        ke, kn, ku = self._compute_grid_prediction_kernels(stations, mask)
+        ke, kn, ku = self._compute_grid_prediction_kernels(all_stations, mask)
 
         self.grid_prediction_kernels = (ke, kn, ku)
 
@@ -148,7 +169,7 @@ class SWOkada(BaseConstraint):
         mask = grids.earthquake_masks[self.event.id][self._mask_index]
 
         if self.dislocation_model is None:
-            self._compute_dislocation_model(constraining_stations, grids, mask)
+            self._compute_dislocation_model(grids, mask)
 
         station_id = stationID(target_station)
 
