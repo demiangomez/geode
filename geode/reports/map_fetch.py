@@ -65,10 +65,66 @@ import logging
 import os
 import sys
 import tempfile
+import xml.etree.ElementTree as _ET
+import zipfile as _zipfile
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+
+def _parse_kml_coords(path: str) -> list[tuple[float, float]]:
+    """
+    Extract all (lon, lat) coordinate pairs from a KML or KMZ file.
+    KMZ is a ZIP archive — the first .kml entry inside is used.
+    Handles both namespaced and bare <coordinates> elements.
+    Returns a flat list of (lon, lat) tuples in document order.
+    """
+    coords: list[tuple[float, float]] = []
+
+    def _extract_from_xml(content: bytes) -> None:
+        try:
+            root = _ET.fromstring(content)
+            for elem in root.iter():
+                tag = elem.tag
+                text = (elem.text or '').strip()
+                if not text:
+                    continue
+                if tag.endswith('}coordinates') or tag == 'coordinates':
+                    # Standard KML: comma-separated "lon,lat[,alt]" tokens
+                    for token in text.split():
+                        parts = token.split(',')
+                        if len(parts) >= 2:
+                            try:
+                                coords.append((float(parts[0]), float(parts[1])))
+                            except ValueError:
+                                pass
+                elif tag.endswith('}coord'):
+                    # gx:Track extension: space-separated "lon lat [alt]" per element
+                    parts = text.split()
+                    if len(parts) >= 2:
+                        try:
+                            coords.append((float(parts[0]), float(parts[1])))
+                        except ValueError:
+                            pass
+        except Exception as exc:
+            log.warning(f'KML XML parse error: {exc}')
+
+    try:
+        if path.lower().endswith('.kmz'):
+            with _zipfile.ZipFile(path) as zf:
+                # Use the first .kml entry found (usually doc.kml)
+                kml_names = [n for n in zf.namelist() if n.lower().endswith('.kml')]
+                if not kml_names:
+                    log.warning(f'No .kml file found inside KMZ: {path}')
+                    return coords
+                _extract_from_xml(zf.read(kml_names[0]))
+        else:
+            _extract_from_xml(Path(path).read_bytes())
+    except Exception as exc:
+        log.warning(f'KML parse error ({path}): {exc}')
+
+    return coords
 
 # ── Image size for all map outputs ─────────────────────────────────────────────
 OUTPUT_W = 900
@@ -118,6 +174,7 @@ def fetch_maps(
     timeout: int       = 15,
     marker_color: str  = "#185fa5",
     marker_sat_color: str = "#00ff00",
+    navigation_kml: Optional[str] = None,  # path to KML file to overlay on detail map
 ) -> dict:
     """
     Fetch map tiles and return a dict with PIL Image objects.
@@ -141,6 +198,7 @@ def fetch_maps(
     osm_url          : OSM tile URL template (override for self-hosted tiles)
     esri_url         : ESRI tile URL template
     cache_dir        : Tile cache directory. Pass None to disable caching.
+    navigation_kml   : Path to a KML file whose track is drawn on the detail map.
     timeout          : HTTP request timeout in seconds
     marker_color     : Color of the station dot on OSM maps (hex)
     marker_sat_color : Color of the station dot on satellite map (hex)
@@ -170,19 +228,23 @@ def fetch_maps(
              f"zooms: general={zoom_general} detail={zoom_detail} sat={zoom_satellite}")
 
     def _make_map(url_template: str, zoom: int,
-                  dot_color: str, dot_radius: int = 10) -> "Image.Image":
-        """Fetch tiles, stitch, add marker, resize to OUTPUT_W×OUTPUT_H."""
+                  dot_color: str, dot_radius: int = 10,
+                  extra_lines: list | None = None) -> "Image.Image":
+        """Fetch tiles, stitch, add marker (and optional lines), resize to OUTPUT_W×OUTPUT_H."""
         m = staticmap.StaticMap(
             OUTPUT_W, OUTPUT_H,
             url_template=url_template,
             tile_request_timeout=timeout,
             headers={"User-Agent": USER_AGENT},
         )
-        # Set tile cache directory (staticmap uses requests-cache internally
-        # if available; we manage it at the tile URL level via the cache_dir param)
+        if extra_lines:
+            for line in extra_lines:
+                m.add_line(line)
         marker = staticmap.CircleMarker((lon, lat), dot_color, dot_radius)
         m.add_marker(marker)
-        img = m.render(zoom=zoom)
+        # Always pin the center to the station so KML tracks extending far
+        # away don't cause staticmap to re-fit the bounding box.
+        img = m.render(zoom=zoom, center=(lon, lat))
         # Ensure exact output size (staticmap may return slightly different dims)
         if img.size != (OUTPUT_W, OUTPUT_H):
             img = img.resize((OUTPUT_W, OUTPUT_H), Image.LANCZOS)
@@ -223,11 +285,21 @@ def fetch_maps(
         log.warning(f"OSM overview failed: {e}")
         results["general"] = _placeholder("General location", str(e)[:60])
 
-    # ── Site detail ──────────────────────────────────────────────────────────
+    # ── Site detail (with optional KML track overlay) ────────────────────────
+    kml_lines = []
+    if navigation_kml and os.path.exists(navigation_kml):
+        kml_coords = _parse_kml_coords(navigation_kml)
+        if kml_coords:
+            log.info(f"KML track loaded: {len(kml_coords)} points from {navigation_kml}")
+            kml_lines.append(staticmap.Line(kml_coords, "#e53e3e", 3))
+        else:
+            log.warning(f"KML file yielded no coordinates: {navigation_kml}")
+
     try:
         log.info(f"Fetching OSM detail (zoom {zoom_detail})…")
         results["detail"] = _make_map(osm_url, zoom_detail,
-                                       marker_color, dot_radius=14)
+                                       marker_color, dot_radius=14,
+                                       extra_lines=kml_lines)
         log.info("  OK")
     except Exception as e:
         log.warning(f"OSM detail failed: {e}")
@@ -289,6 +361,10 @@ def attach_maps_to_station(station, out_dir: Optional[str] = None, **kwargs):
     if out_dir is None:
         # Use a temp dir that persists for the process lifetime
         out_dir = tempfile.mkdtemp(prefix="geode_maps_")
+
+    # Pass navigation KML path from StationReport if not already supplied by caller
+    if 'navigation_kml' not in kwargs and getattr(station, 'navigation_kml_path', None):
+        kwargs['navigation_kml'] = station.navigation_kml_path
 
     paths = fetch_maps_to_files(station.lat, station.lon, out_dir, **kwargs)
     station.map_general_path  = paths.get("general")

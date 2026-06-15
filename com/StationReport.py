@@ -27,6 +27,9 @@ Usage examples
 
   # Skip map tile download (faster, no network needed)
   StationReport ARS.AT47 --no-maps -o /tmp/reports/
+
+  # Omit specific sections
+  StationReport ARS.AT47 --no-instruments --no-timeseries -o /tmp/reports/
 """
 
 import argparse
@@ -89,6 +92,28 @@ def main():
         help='Path to the GeoDE logo PNG to embed in the report header.',
     )
 
+    # ── Section visibility ────────────────────────────────────────────────────
+    parser.add_argument(
+        '--no-instruments', action='store_true',
+        help='Omit the Instrument History section.',
+    )
+    parser.add_argument(
+        '--no-timeseries', action='store_true',
+        help='Omit the Position Time Series (ETM) section.',
+    )
+    parser.add_argument(
+        '--no-rinex', action='store_true',
+        help='Omit the RINEX Data Availability section.',
+    )
+    parser.add_argument(
+        '--no-contacts', action='store_true',
+        help='Omit the Contact Information section.',
+    )
+    parser.add_argument(
+        '--no-visits', action='store_true',
+        help='Omit the Visit History section.',
+    )
+
     add_version_argument(parser)
     args = parser.parse_args()
 
@@ -146,7 +171,14 @@ def main():
 
         # Render report
         try:
-            html = build_report(station)
+            html = build_report(
+                station,
+                show_instruments = not args.no_instruments,
+                show_timeseries  = not args.no_timeseries,
+                show_rinex       = not args.no_rinex,
+                show_contacts    = not args.no_contacts,
+                show_visits      = not args.no_visits,
+            )
         except Exception as exc:
             print(f' !! {tag}: render failed — {exc}', file=sys.stderr)
             errors.append(tag)

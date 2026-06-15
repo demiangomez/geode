@@ -112,6 +112,9 @@ class StationReport:
     # Status colour (hex from api_stationstatuscolor, e.g. "#28a745")
     status_color: Optional[str] = None
 
+    # Navigation KML track (plotted on the detail map)
+    navigation_kml_path: Optional[str] = None
+
     # RINEX
     first_rinex: Optional[str] = None  # "YYYY-MM-DD HH:MM:SS"
     last_rinex:  Optional[str]  = None
@@ -454,9 +457,8 @@ a { color: #185fa5; text-decoration: none; }
   @page { margin:12mm 14mm; size:A4; }
   body { background:#fff; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   .page { max-width:100%; box-shadow:none; }
-  .visit-card, .info-card, .contact-card, .contact-grid,
+  .info-card, .contact-card, .contact-grid,
   .metric-row, .card-row, .instr-session-card, .meta-block { break-inside:avoid; }
-  .section-header { break-after:avoid; }
 }
 """
 
@@ -653,7 +655,12 @@ def build_report(s: StationReport,
                  etm_subtitle: str = "",
                  rinex_image_path: Optional[str] = None,
                  rinex_caption: str = "",
-                 rinex_subtitle: str = "") -> str:
+                 rinex_subtitle: str = "",
+                 show_instruments: bool = True,
+                 show_timeseries: bool = True,
+                 show_rinex: bool = True,
+                 show_contacts: bool = True,
+                 show_visits: bool = True) -> str:
     """
     Build the full station report HTML string.
 
@@ -670,7 +677,7 @@ def build_report(s: StationReport,
     rinex_caption / rinex_subtitle : str
         Caption and subtitle text for the RINEX section.
     """
-    today = datetime.date.today().strftime("%Y-%m-%d")
+    today = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
     # Encode images
     logo_uri      = _encode_logo(s.logo_path)
@@ -693,20 +700,34 @@ def build_report(s: StationReport,
     flag_html  = _flag(s.country)
     comms_chip = "chip-blue" if s.comms else "chip-gray"
 
+    # Map api_stationstatuscolor icon-class names → hex colours for the report
+    _STATUS_COLOR_MAP = {
+        "green-icon":       "#28a745",
+        "light-green-icon": "#6fcf97",
+        "yellow-icon":      "#f0c040",
+        "light-gray-icon":  "#d3d3d3",
+        "gray-icon":        "#6c757d",
+        "light-red-icon":   "#f08080",
+        "granate-icon":     "#800000",
+        "blue-icon":        "#185fa5",
+        "lilac-icon":       "#c8a2c8",
+        "purple-icon":      "#6f42c1",
+        "light-blue-icon":  "#6ab0de",
+        "orange-icon":      "#fd7e14",
+    }
+
     # Status chip: use DB colour when available, fall back to green/amber
-    if s.status_color:
-        try:
-            h = s.status_color.lstrip('#')
-            _r, _g, _b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-            _bg = f'rgba({_r},{_g},{_b},0.15)'
-            status_chip_html = (
-                f'<span class="chip" style="background:{_bg} !important;'
-                f'color:{s.status_color} !important;">&#10003; {s.status}</span>'
-            )
-        except Exception:
-            status_chip_html = _chip(f"&#10003; {s.status}", "chip-green")
+    _hex = _STATUS_COLOR_MAP.get(s.status_color or "") if s.status_color else None
+    if _hex:
+        h = _hex.lstrip('#')
+        _r, _g, _b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        _bg = f'rgba({_r},{_g},{_b},0.15)'
+        status_chip_html = (
+            f'<span class="chip" style="background:{_bg} !important;'
+            f'color:{_hex} !important;">&#10003; {s.status}</span>'
+        )
     else:
-        _fallback = "chip-green" if s.status.lower() == "active" else "chip-amber"
+        _fallback = "chip-green" if (s.status or "").lower() == "active" else "chip-amber"
         status_chip_html = _chip(f"&#10003; {s.status}", _fallback)
 
     # ── Header ─────────────────────────────────────────────────────────────────
@@ -728,9 +749,9 @@ def build_report(s: StationReport,
     # ── Chips ──────────────────────────────────────────────────────────────────
     chips = f"""
 <div class="chips" style="margin-top:6px">
+  {_chip(f"Country: {s.country}", "chip-blue", flag_html)}
   {_chip(f"Network: {s.network}", "chip-blue")}
   {_chip(f"Station: {s.station}", "chip-blue")}
-  {_chip(f"Country: {s.country}", "chip-blue", flag_html)}
   {status_chip_html}
   {_chip(s.station_type, "chip-blue")}
 </div>
@@ -834,7 +855,7 @@ def build_report(s: StationReport,
 
     # ── Instrument history ─────────────────────────────────────────────────────
     instr_section = ""
-    if s.instrument_history:
+    if show_instruments and s.instrument_history:
         cards = ""
         for i, sess in enumerate(s.instrument_history):
             is_current = (i == len(s.instrument_history) - 1)
@@ -843,16 +864,25 @@ def build_report(s: StationReport,
 
     # ── Contacts ───────────────────────────────────────────────────────────────
     contacts_section = ""
-    if s.contacts:
-        cards_html = "".join(_contact_card(c) for c in s.contacts)
-        contacts_section = (
-            _section("Contact Information")
-            + f'<div class="contact-grid">{cards_html}</div>'
-        )
+    if show_contacts:
+        if s.contacts:
+            cards_html = "".join(_contact_card(c) for c in s.contacts)
+            contacts_section = (
+                _section("Contact Information")
+                + f'<div class="contact-grid">{cards_html}</div>'
+            )
+        else:
+            contacts_section = (
+                _section("Contact Information")
+                + f'<div class="comment-box" style="background:#f5f5f3 !important;'
+                f'border-color:#d0ced8;border-left-color:#9b9a96;">'
+                f'<p style="color:#9b9a96;font-style:italic;">No contact information on record for this station.</p>'
+                f'</div>'
+            )
 
     # ── ETM time series ────────────────────────────────────────────────────────
     etm_section = ""
-    if etm_uri:
+    if show_timeseries and etm_uri:
         etm_section = (
             _section("Position Time Series &middot; ETM")
             + (f'<div class="sub-note">{etm_subtitle}</div>' if etm_subtitle else "")
@@ -862,7 +892,7 @@ def build_report(s: StationReport,
 
     # ── RINEX availability ─────────────────────────────────────────────────────
     rinex_section = ""
-    if rinex_uri:
+    if show_rinex and rinex_uri:
         rinex_section = (
             _section("RINEX Data Availability")
             + (f'<div class="sub-note">{rinex_subtitle}</div>' if rinex_subtitle else "")
@@ -895,12 +925,9 @@ def build_report(s: StationReport,
 
     # ── Visit history ──────────────────────────────────────────────────────────
     visits_section = ""
-    if s.visits:
+    if show_visits and s.visits:
         n_visits = len(s.visits)
-        if s.visits:
-            year_range = f"{s.visits[-1].date[:4]}&ndash;{s.visits[0].date[:4]}"
-        else:
-            year_range = ""
+        year_range = f"{s.visits[-1].date[:4]}&ndash;{s.visits[0].date[:4]}"
         visit_cards = "".join(_visit_card(v) for v in s.visits)
         visits_section = (
             _section(f"Visit History &nbsp;&middot;&nbsp; {n_visits} visits &nbsp;&middot;&nbsp; {year_range}")
@@ -991,6 +1018,13 @@ def station_from_db(cnn,
     nc = network_code          # keep as-is (DB stores NetworkCode in lowercase)
     sc = station_code.lower()
 
+    if media_path and not os.path.isdir(media_path):
+        print(f' !! Warning: media path does not exist or is not accessible: {media_path}',
+              file=sys.stderr)
+        print(f' !! Images (monument, station photos, visit photos) will be omitted.',
+              file=sys.stderr)
+        media_path = None
+
     def _media(rel: Optional[str]) -> Optional[str]:
         """Resolve a relative Django media path to an absolute path."""
         if not rel or not media_path:
@@ -1030,8 +1064,11 @@ def station_from_db(cnn,
     monument_path = None
     comments      = None
 
+    navigation_kml_path = None
+
     meta = cnn.query_float(
         f"""SELECT m.has_battery, m.has_communications, m.comments,
+                   m.navigation_file,
                    st.name       AS status_name,
                    stype.name    AS station_type_name,
                    mon.name      AS monument_type_name,
@@ -1055,6 +1092,7 @@ def station_from_db(cnn,
         monument_path = _media(m.get('monument_image')) if m.get('monument_image') else None
         raw_comments  = m.get('comments') or ''
         comments      = raw_comments.strip() or None
+        navigation_kml_path = _media(m.get('navigation_file')) if m.get('navigation_file') else None
 
     # ── 3. RINEX date range (from rinex_proc, completion ≥ 0.5) ─────────────
     rinex = cnn.query_float(
@@ -1280,6 +1318,7 @@ def station_from_db(cnn,
         visits             = visits,
         contacts           = contacts,
         monument_path      = monument_path,
+        navigation_kml_path = navigation_kml_path,
         station_images     = station_images,
         etm_base64         = etm_base64,
         rinex_base64       = rinex_base64,
