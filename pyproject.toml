@@ -60,14 +60,23 @@ dependencies = [
     "shapely",
     "obspy",
     "geopandas",
-    "cartopy>=0.22"
+    "cartopy>=0.22",
+    "pillow>=9.0",
+    "staticmap>=0.5.4",
+    "weasyprint>=60.0"
 ]
+
+[project.scripts]
+StationReport = "com.StationReport:main"
 
 [project.urls]
 "Homepage" = "https://github.com/demiangomez/geode"
 "Bug Tracker" = "https://github.com/demiangomez/geode/issues"
 
 [tool.setuptools]
-packages = ["geode"]
+packages = ["geode", "geode.reports", "com"]
+
+[tool.setuptools.package-data]
+"geode.reports" = ["geode_logo.png"]
 
 [tool.setuptools_scm]

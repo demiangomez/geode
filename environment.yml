@@ -24,6 +24,7 @@ dependencies:
   - obspy
   - geopandas
   - cartopy>=0.22
+  - pillow>=9.0
   - pip
   - pip:
     - anthropic
@@ -35,3 +36,5 @@ dependencies:
     - usgs-libcomcat
     - textual>=0.50.0
     - rich>=13.0.0
+    - staticmap>=0.5.4
+    - weasyprint>=60.0

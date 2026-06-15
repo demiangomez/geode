@@ -395,9 +395,15 @@ class FaultGeometry:
         # Compute local SW regularization offset from event-specific stations only.
         # Matches MATLAB: reg = max(8, median_nearest_neighbour * 0.5)
         # grid.offset is computed from all stacker stations and would be far too large here.
-        r_ev, _, _ = get_radius(np.column_stack([x, y]), np.column_stack([x, y]))
-        np.fill_diagonal(r_ev, np.inf)
-        local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
+        # When N < 2 (leave-one-out with only 1 remaining station), the nearest-neighbour
+        # distance is undefined (diagonal = inf after fill) and median([inf]) = inf, which
+        # propagates as NaN through get_qpw.  Fall back to the minimum safe offset.
+        if N >= 2:
+            r_ev, _, _ = get_radius(np.column_stack([x, y]), np.column_stack([x, y]))
+            np.fill_diagonal(r_ev, np.inf)
+            local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
+        else:
+            local_reg = 8.0
         # tqdm.write(f'  SW local regularization: {local_reg:.1f} km  (global grid offset: {grid.offset:.1f} km)')
 
         q, p, w = get_qpw(np.column_stack([x, y]), np.column_stack([x, y]), local_reg, grid.poisson_ratio)

@@ -388,7 +388,8 @@ class EtmStacker:
             lat, lon = float(rs[0]['lat']), float(rs[0]['lon'])
 
             score = ScoreTable(cnn, net, code, lat, lon, sdate, edate,
-                               magnitude_limit=self.config.earthquake_magnitude_limit)
+                               magnitude_limit=self.config.earthquake_magnitude_limit,
+                               include_all_events=True)
             for eq in score.table:
                 if eq.id not in seen_ids:
                     seen_ids.add(eq.id)

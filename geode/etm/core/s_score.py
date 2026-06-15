@@ -58,8 +58,20 @@ class ScoreTable(object):
                  sdate: Date,
                  edate: Date,
                  magnitude_limit: float,
-                 force_events: List = ()):
-
+                 force_events: List = (),
+                 include_all_events: bool = False):
+        """
+        Parameters
+        ----------
+        include_all_events : bool
+            When False (default), applies DISTINCT ON (date::date) so only the
+            highest-magnitude event per calendar day is returned — appropriate
+            for ETM fitting which supports one jump per day.
+            When True, all qualifying events are returned without per-day
+            deduplication.  Use this when building event lists for collision
+            detection, where two same-day co-located events must both appear so
+            their station sets can be intersected.
+        """
         self.table: List[Earthquake] = []
 
         logger.info(f'Loading s-score table for {lat:.8f} {lon:.8f} from {sdate} to {edate}')
@@ -75,18 +87,25 @@ class ScoreTable(object):
         else:
             cherry_picked_events = ''
 
+        if include_all_events:
+            distinct_clause = ''
+            order_clause = 'ORDER BY date ASC, mag DESC'
+        else:
+            distinct_clause = 'DISTINCT ON (date::date)'
+            order_clause = 'ORDER BY date::date ASC, mag DESC'
+
         jumps = cnn.query_float(
             f"""
-            SELECT DISTINCT ON (date::date) * FROM 
+            SELECT {distinct_clause} * FROM
             (
-                SELECT 2*ASIN(sqrt(sin((radians({lat})-radians(lat))/2)^2 + cos(radians(lat)) * 
-                cos(radians({lat})) * sin((radians({lon})-radians(lon))/2)^2))*6371 AS distance, * 
+                SELECT 2*ASIN(sqrt(sin((radians({lat})-radians(lat))/2)^2 + cos(radians(lat)) *
+                cos(radians({lat})) * sin((radians({lon})-radians(lon))/2)^2))*6371 AS distance, *
                 FROM earthquakes
-                    LEFT JOIN s_score_cache ON id = event_id 
+                    LEFT JOIN s_score_cache ON id = event_id
                     AND station_code = '{station_code}' AND network_code = '{network_code}'
             )
             WHERE {a} * mag - log10(distance) + {b} + log10({POST_SEISMIC_SCALE_FACTOR}) > 0 AND
-            date BETWEEN '%s' AND '%s' AND (mag >= %f %s) ORDER BY date::date ASC, mag DESC"""
+            date BETWEEN '%s' AND '%s' AND (mag >= %f %s) {order_clause}"""
             % (sdate.yyyymmdd(), edate.yyyymmdd(), magnitude_limit, cherry_picked_events), as_dict=True)
 
         for j in jumps:

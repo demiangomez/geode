@@ -208,13 +208,18 @@ class SWOkada(BaseConstraint):
             sites_lon, sites_lat
         )
 
-        # Local offset: same formula as fault_geometry._compute_sw_okada_system
-        r_ev, _, _ = get_radius(np.column_stack([x, y]), np.column_stack([x, y]))
-        np.fill_diagonal(r_ev, np.inf)
-        local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
+        # Local offset: same formula as fault_geometry._compute_sw_okada_system.
+        # Guard for N < 2 to avoid median([inf]) = inf.
+        if N >= 2:
+            r_ev, _, _ = get_radius(np.column_stack([x, y]), np.column_stack([x, y]))
+            np.fill_diagonal(r_ev, np.inf)
+            local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
+        else:
+            local_reg = 8.0
 
-        # Pseudo-inverse of the fitted system (a is block_diag(ah, av))
-        a_dagger = np.linalg.solve(a.T @ a + p, a.T)
+        # Pseudo-inverse of the fitted system (a is block_diag(ah, av)).
+        # Use lstsq for robustness (handles rank-deficient edge cases).
+        a_dagger, _, _, _ = np.linalg.lstsq(a.T @ a + p, a.T, rcond=None)
         a_dagger_h = a_dagger[:2*N, :2*N]  # maps [E_obs, N_obs] -> horizontal coefficients
         a_dagger_v = a_dagger[2*N:, 2*N:]  # maps  U_obs         -> vertical coefficients
 
@@ -289,8 +294,12 @@ class SWOkada(BaseConstraint):
             self.sw_okada_h_weight, self.sw_okada_v_weight
         )
 
-        # Pseudo-inverse
-        a_dagger = np.linalg.solve(a.T @ a + p, a.T)
+        # Pseudo-inverse.  Use lstsq instead of solve so that rank-deficient
+        # systems (e.g. N_other=1 where the spline vertical block av=0 makes
+        # the normal matrix singular) are handled gracefully rather than
+        # crashing.  For full-rank systems (N_other >= 2) the result is
+        # identical to solve.
+        a_dagger, _, _, _ = np.linalg.lstsq(a.T @ a + p, a.T, rcond=None)
 
         # Project coordinates from epicenter (matches _compute_sw_okada_system)
         x_other, y_other = azimuthal_equidistant(
@@ -302,11 +311,14 @@ class SWOkada(BaseConstraint):
             target_lon, target_lat
         )
 
-        # Local offset from the N-1 other stations
-        r_ev, _, _ = get_radius(np.column_stack([x_other, y_other]),
-                                np.column_stack([x_other, y_other]))
-        np.fill_diagonal(r_ev, np.inf)
-        local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
+        # Local offset from the N-1 other stations.  Guard for N_other < 2.
+        if N_other >= 2:
+            r_ev, _, _ = get_radius(np.column_stack([x_other, y_other]),
+                                    np.column_stack([x_other, y_other]))
+            np.fill_diagonal(r_ev, np.inf)
+            local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
+        else:
+            local_reg = 8.0
 
         # Horizontal forward: SW Green's functions from other stations to target
         q, pp, w = get_qpw(
