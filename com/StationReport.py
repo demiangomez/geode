@@ -146,7 +146,15 @@ def main():
 
         # Build StationReport (queries DB, generates ETM + RINEX plots)
         try:
-            station = station_from_db(cnn, nc, sc, media_path=media_path)
+            station = station_from_db(
+                cnn, nc, sc,
+                media_path       = media_path,
+                show_instruments = not args.no_instruments,
+                show_timeseries  = not args.no_timeseries,
+                show_rinex       = not args.no_rinex,
+                show_contacts    = not args.no_contacts,
+                show_visits      = not args.no_visits,
+            )
         except Exception as exc:
             print(f' !! {tag}: failed to build report — {exc}', file=sys.stderr)
             errors.append(tag)

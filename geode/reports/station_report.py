@@ -768,7 +768,11 @@ def build_report(s: StationReport,
     location_section = ""
     # Monument cell: show placeholder when no image is available
     if mon_uri:
-        mon_cell = _cell(mon_uri, f"Monument &middot; {s.monument}")
+        mon_cell = (
+            f'<div class="cell">'
+            f'<img src="{mon_uri}" alt="Monument">'
+            f'<div class="cap">Monument &middot; {s.monument}</div></div>'
+        )
     else:
         mon_cell = (
             f'<div class="cell">'
@@ -792,7 +796,7 @@ def build_report(s: StationReport,
     )
     if map_gen_uri or map_det_uri or sat_uri or mon_uri:
         location_section = (
-            _section("Location")
+            _section("Location and Monument")
             + f'<div class="img-grid-2x2">{cells_html}</div>'
         )
 
@@ -1002,7 +1006,12 @@ def render_pdf(html: str, output_path: str) -> None:
 def station_from_db(cnn,
                     network_code: str,
                     station_code: str,
-                    media_path: Optional[str] = None) -> StationReport:
+                    media_path: Optional[str] = None,
+                    show_instruments: bool = True,
+                    show_timeseries:  bool = True,
+                    show_rinex:       bool = True,
+                    show_contacts:    bool = True,
+                    show_visits:      bool = True) -> StationReport:
     """
     Build a StationReport from the GeoDE PostgreSQL database.
 
@@ -1109,143 +1118,146 @@ def station_from_db(cnn,
         last_rinex  = str(rinex[0]['last_rinex'])[:19]
 
     # ── 4. Instrument history (stationinfo) ──────────────────────────────────
-    instr_rows = cnn.query_float(
-        f"""SELECT "DateStart", "DateEnd", "ReceiverCode", "ReceiverSerial",
-                   "ReceiverFirmware", "ReceiverVers",
-                   "AntennaCode", "AntennaSerial", "AntennaHeight",
-                   "HeightCode", "RadomeCode"
-            FROM stationinfo
-            WHERE "NetworkCode" = '{nc}' AND "StationCode" = '{sc}'
-            ORDER BY "DateStart" """,
-        as_dict=True)
     instrument_history = []
-    for r in instr_rows:
-        ds = str(r['DateStart'])[:10] if r.get('DateStart') else ''
-        de = str(r['DateEnd'])[:10]   if r.get('DateEnd')   else 'present'
-        if de.startswith('9999'):
-            de = 'present'
-        instrument_history.append(InstrumentSession(
-            date_start  = ds,
-            date_end    = de,
-            receiver    = str(r.get('ReceiverCode')     or ''),
-            rcvr_sn     = str(r.get('ReceiverSerial')   or 'N/A'),
-            firmware    = str(r.get('ReceiverFirmware') or 'N/A'),
-            version     = str(r.get('ReceiverVers')     or '&mdash;'),
-            antenna     = str(r.get('AntennaCode')      or ''),
-            ant_sn      = str(r.get('AntennaSerial')    or 'N/A'),
-            ant_h       = float(r['AntennaHeight']) if r.get('AntennaHeight') is not None else 0.0,
-            height_code = str(r.get('HeightCode')       or ''),
-            radome      = str(r.get('RadomeCode')       or 'NONE'),
-        ))
+    if show_instruments:
+        instr_rows = cnn.query_float(
+            f"""SELECT "DateStart", "DateEnd", "ReceiverCode", "ReceiverSerial",
+                       "ReceiverFirmware", "ReceiverVers",
+                       "AntennaCode", "AntennaSerial", "AntennaHeight",
+                       "HeightCode", "RadomeCode"
+                FROM stationinfo
+                WHERE "NetworkCode" = '{nc}' AND "StationCode" = '{sc}'
+                ORDER BY "DateStart" """,
+            as_dict=True)
+        for r in instr_rows:
+            ds = str(r['DateStart'])[:10] if r.get('DateStart') else ''
+            de = str(r['DateEnd'])[:10]   if r.get('DateEnd')   else 'present'
+            if de.startswith('9999'):
+                de = 'present'
+            instrument_history.append(InstrumentSession(
+                date_start  = ds,
+                date_end    = de,
+                receiver    = str(r.get('ReceiverCode')     or ''),
+                rcvr_sn     = str(r.get('ReceiverSerial')   or 'N/A'),
+                firmware    = str(r.get('ReceiverFirmware') or 'N/A'),
+                version     = str(r.get('ReceiverVers')     or '&mdash;'),
+                antenna     = str(r.get('AntennaCode')      or ''),
+                ant_sn      = str(r.get('AntennaSerial')    or 'N/A'),
+                ant_h       = float(r['AntennaHeight']) if r.get('AntennaHeight') is not None else 0.0,
+                height_code = str(r.get('HeightCode')       or ''),
+                radome      = str(r.get('RadomeCode')       or 'NONE'),
+            ))
 
     # ── 5. Contacts (api_rolepersonstation → api_person, api_stationrole) ────
-    contact_rows = cnn.query_float(
-        f"""SELECT p.first_name, p.last_name, p.phone, p.email,
-                   r.name AS role
-            FROM api_rolepersonstation rps
-            JOIN api_person      p ON rps.person_id = p.id
-            JOIN api_stationrole r ON rps.role_id   = r.id
-            WHERE rps.station_id = {api_id}
-            ORDER BY r.name, p.last_name""",
-        as_dict=True)
     contacts = []
-    for c in contact_rows:
-        first    = str(c.get('first_name') or '')
-        last     = str(c.get('last_name')  or '')
-        initials = (first[:1] + last[:1]).upper() if (first or last) else '?'
-        contacts.append(Contact(
-            initials = initials,
-            name     = f"{first} {last}".strip(),
-            role     = str(c.get('role') or 'Contact'),
-            phone    = c.get('phone') or None,
-            email    = c.get('email') or None,
-        ))
+    if show_contacts:
+        contact_rows = cnn.query_float(
+            f"""SELECT p.first_name, p.last_name, p.phone, p.email,
+                       r.name AS role
+                FROM api_rolepersonstation rps
+                JOIN api_person      p ON rps.person_id = p.id
+                JOIN api_stationrole r ON rps.role_id   = r.id
+                WHERE rps.station_id = {api_id}
+                ORDER BY r.name, p.last_name""",
+            as_dict=True)
+        for c in contact_rows:
+            first    = str(c.get('first_name') or '')
+            last     = str(c.get('last_name')  or '')
+            initials = (first[:1] + last[:1]).upper() if (first or last) else '?'
+            contacts.append(Contact(
+                initials = initials,
+                name     = f"{first} {last}".strip(),
+                role     = str(c.get('role') or 'Contact'),
+                phone    = c.get('phone') or None,
+                email    = c.get('email') or None,
+            ))
 
     # ── 6. Visits ────────────────────────────────────────────────────────────
-    visit_rows = cnn.query_float(
-        f"""SELECT v.id, v.date,
-                   v.log_sheet_filename, v.navigation_filename,
-                   v.comments,
-                   c.name AS campaign_name
-            FROM api_visits v
-            LEFT JOIN api_campaigns c ON v.campaign_id = c.id
-            WHERE v.station_id = {api_id}
-            ORDER BY v.date DESC""",
-        as_dict=True)
     visits = []
-    for vr in visit_rows:
-        vid = int(vr['id'])
+    if show_visits:
+        visit_rows = cnn.query_float(
+            f"""SELECT v.id, v.date,
+                       v.log_sheet_filename, v.navigation_filename,
+                       v.comments,
+                       c.name AS campaign_name
+                FROM api_visits v
+                LEFT JOIN api_campaigns c ON v.campaign_id = c.id
+                WHERE v.station_id = {api_id}
+                ORDER BY v.date DESC""",
+            as_dict=True)
+        for vr in visit_rows:
+            vid = int(vr['id'])
 
-        # Personnel
-        pers = cnn.query_float(
-            f"""SELECT p.first_name, p.last_name
-                FROM api_visits_people vp
-                JOIN api_person p ON vp.person_id = p.id
-                WHERE vp.visits_id = {vid}
-                ORDER BY p.last_name""",
-            as_dict=True)
-        personnel = [f"{r['first_name']} {r['last_name']}".strip() for r in pers]
-
-        # GNSS data observation files — count total, fetch first 4 only
-        gf_cnt = cnn.query_float(
-            f"SELECT COUNT(*) AS n FROM api_visitgnssdatafiles WHERE visit_id = {vid}",
-            as_dict=True)
-        obs_files_total = int(gf_cnt[0]['n']) if gf_cnt else 0
-        gf = cnn.query_float(
-            f"""SELECT filename FROM api_visitgnssdatafiles
-                WHERE visit_id = {vid}
-                ORDER BY filename LIMIT 4""",
-            as_dict=True)
-        obs_files = [r['filename'] for r in gf if r.get('filename')]
-
-        # Attached files: log sheet + navigation file + api_visitattachedfiles
-        att_prefix: list = []
-        if str(vr.get('log_sheet_filename') or '').strip():
-            att_prefix.append(str(vr['log_sheet_filename']))
-        if str(vr.get('navigation_filename') or '').strip():
-            att_prefix.append(str(vr['navigation_filename']))
-        af_cnt = cnn.query_float(
-            f"SELECT COUNT(*) AS n FROM api_visitattachedfiles WHERE visit_id = {vid}",
-            as_dict=True)
-        att_extra_total = int(af_cnt[0]['n']) if af_cnt else 0
-        att_files_total = len(att_prefix) + att_extra_total
-        needed = max(0, 4 - len(att_prefix))
-        if needed:
-            af = cnn.query_float(
-                f"""SELECT filename FROM api_visitattachedfiles
-                    WHERE visit_id = {vid}
-                    ORDER BY filename LIMIT {needed}""",
+            # Personnel
+            pers = cnn.query_float(
+                f"""SELECT p.first_name, p.last_name
+                    FROM api_visits_people vp
+                    JOIN api_person p ON vp.person_id = p.id
+                    WHERE vp.visits_id = {vid}
+                    ORDER BY p.last_name""",
                 as_dict=True)
-            att_prefix += [r['filename'] for r in af if r.get('filename')]
-        att_files = att_prefix
+            personnel = [f"{r['first_name']} {r['last_name']}".strip() for r in pers]
 
-        # Photos (api_visitimages.image is a relative path from media root)
-        photos = cnn.query_float(
-            f"""SELECT image, name, description
-                FROM api_visitimages
-                WHERE visit_id = {vid}
-                ORDER BY id""",
-            as_dict=True)
-        photo_paths    = [_media(r['image']) for r in photos]
-        photo_captions = [str(r.get('description') or r.get('name') or '') for r in photos]
-        valid = [(p, c) for p, c in zip(photo_paths, photo_captions) if p]
-        if valid:
-            photo_paths, photo_captions = map(list, zip(*valid))
-        else:
-            photo_paths, photo_captions = [], []
+            # GNSS data observation files — count total, fetch first 4 only
+            gf_cnt = cnn.query_float(
+                f"SELECT COUNT(*) AS n FROM api_visitgnssdatafiles WHERE visit_id = {vid}",
+                as_dict=True)
+            obs_files_total = int(gf_cnt[0]['n']) if gf_cnt else 0
+            gf = cnn.query_float(
+                f"""SELECT filename FROM api_visitgnssdatafiles
+                    WHERE visit_id = {vid}
+                    ORDER BY filename LIMIT 4""",
+                as_dict=True)
+            obs_files = [r['filename'] for r in gf if r.get('filename')]
 
-        visits.append(Visit(
-            date             = str(vr['date'])[:10] if vr.get('date') else '',
-            campaign         = vr.get('campaign_name') or None,
-            personnel        = personnel,
-            obs_files        = obs_files,
-            att_files        = att_files,
-            obs_files_total  = obs_files_total,
-            att_files_total  = att_files_total,
-            photo_paths      = list(photo_paths),
-            photo_captions   = list(photo_captions),
-            comments         = str(vr.get('comments') or '').strip() or None,
-        ))
+            # Attached files: log sheet + navigation file + api_visitattachedfiles
+            att_prefix: list = []
+            if str(vr.get('log_sheet_filename') or '').strip():
+                att_prefix.append(str(vr['log_sheet_filename']))
+            if str(vr.get('navigation_filename') or '').strip():
+                att_prefix.append(str(vr['navigation_filename']))
+            af_cnt = cnn.query_float(
+                f"SELECT COUNT(*) AS n FROM api_visitattachedfiles WHERE visit_id = {vid}",
+                as_dict=True)
+            att_extra_total = int(af_cnt[0]['n']) if af_cnt else 0
+            att_files_total = len(att_prefix) + att_extra_total
+            needed = max(0, 4 - len(att_prefix))
+            if needed:
+                af = cnn.query_float(
+                    f"""SELECT filename FROM api_visitattachedfiles
+                        WHERE visit_id = {vid}
+                        ORDER BY filename LIMIT {needed}""",
+                    as_dict=True)
+                att_prefix += [r['filename'] for r in af if r.get('filename')]
+            att_files = att_prefix
+
+            # Photos (api_visitimages.image is a relative path from media root)
+            photos = cnn.query_float(
+                f"""SELECT image, name, description
+                    FROM api_visitimages
+                    WHERE visit_id = {vid}
+                    ORDER BY id""",
+                as_dict=True)
+            photo_paths    = [_media(r['image']) for r in photos]
+            photo_captions = [str(r.get('description') or r.get('name') or '') for r in photos]
+            valid = [(p, c) for p, c in zip(photo_paths, photo_captions) if p]
+            if valid:
+                photo_paths, photo_captions = map(list, zip(*valid))
+            else:
+                photo_paths, photo_captions = [], []
+
+            visits.append(Visit(
+                date             = str(vr['date'])[:10] if vr.get('date') else '',
+                campaign         = vr.get('campaign_name') or None,
+                personnel        = personnel,
+                obs_files        = obs_files,
+                att_files        = att_files,
+                obs_files_total  = obs_files_total,
+                att_files_total  = att_files_total,
+                photo_paths      = list(photo_paths),
+                photo_captions   = list(photo_captions),
+                comments         = str(vr.get('comments') or '').strip() or None,
+            ))
 
     # ── 7. Station photos (all api_stationimages entries) ───────────────────
     # monument_path already set from api_monumenttype in step 2
@@ -1263,32 +1275,34 @@ def station_from_db(cnn,
 
     # ── 8. ETM time-series plot (PPP solution, base64 PNG) ───────────────────
     etm_base64 = None
-    try:
-        from io import BytesIO as _BytesIO
-        from ..etm.core.etm_config import EtmConfig, SolutionOptions
-        from ..etm.core.type_declarations import SolutionType
-        from ..etm.core.etm_engine import EtmEngine
+    if show_timeseries:
+        try:
+            from io import BytesIO as _BytesIO
+            from ..etm.core.etm_config import EtmConfig, SolutionOptions
+            from ..etm.core.type_declarations import SolutionType
+            from ..etm.core.etm_engine import EtmEngine
 
-        _sol = SolutionOptions()
-        _sol.solution_type = SolutionType.PPP
-        _sol.stack_name    = 'ppp'
-        _cfg = EtmConfig(nc, sc, cnn=cnn, solution_options=_sol)
-        _cfg.plotting_config.file_io = _BytesIO()
-        _etm = EtmEngine(_cfg, cnn=cnn)
-        _etm.run_adjustment(cnn=cnn, try_save_to_db=False, try_loading_db=True)
-        etm_base64 = _etm.plot()   # returns raw base64 string when file_io is set
-    except Exception as _e:
-        import logging as _log
-        _log.getLogger(__name__).warning(f'ETM plot failed for {nc}.{sc}: {_e}')
+            _sol = SolutionOptions()
+            _sol.solution_type = SolutionType.PPP
+            _sol.stack_name    = 'ppp'
+            _cfg = EtmConfig(nc, sc, cnn=cnn, solution_options=_sol)
+            _cfg.plotting_config.file_io = _BytesIO()
+            _etm = EtmEngine(_cfg, cnn=cnn)
+            _etm.run_adjustment(cnn=cnn, try_save_to_db=False, try_loading_db=True)
+            etm_base64 = _etm.plot()
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger(__name__).warning(f'ETM plot failed for {nc}.{sc}: {_e}')
 
     # ── 9. RINEX data availability plot (base64 PNG) ─────────────────────────
     rinex_base64 = None
-    try:
-        from ..Utils import plot_rinex_completion
-        rinex_base64 = plot_rinex_completion(cnn, nc, sc, landscape=True) or None
-    except Exception as _e:
-        import logging as _log
-        _log.getLogger(__name__).warning(f'RINEX plot failed for {nc}.{sc}: {_e}')
+    if show_rinex:
+        try:
+            from ..Utils import plot_rinex_completion
+            rinex_base64 = plot_rinex_completion(cnn, nc, sc, landscape=True) or None
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger(__name__).warning(f'RINEX plot failed for {nc}.{sc}: {_e}')
 
     # ── Logo (bundled with the package) ──────────────────────────────────────
     _logo = Path(__file__).parent / 'geode_logo.png'

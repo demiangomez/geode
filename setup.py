@@ -17,7 +17,6 @@ if __name__ == "__main__":
     },
     include_package_data=True,
     scripts=[
-        'com/StationInfoEdit.py',
         'com/ArchiveService.py',
         'com/GenerateKml.py',
         'com/PlotETM.py',
