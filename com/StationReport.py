@@ -25,16 +25,12 @@ Usage examples
   # Render to PDF (requires weasyprint)
   StationReport.py ars.at47 --pdf -o /tmp/reports/
 
-  # Skip map tile download (faster, no network needed)
-  StationReport.py ars.at47 --no-maps -o /tmp/reports/
-
   # Omit specific sections
   StationReport.py ars.at47 --no-instruments --no-timeseries -o /tmp/reports/
 """
 
 import argparse
 import configparser
-import os
 import sys
 from pathlib import Path
 
@@ -45,17 +41,10 @@ from geode.Utils import (
     add_version_argument,
 )
 from geode.reports.station_report import (
-    StationReport,
     station_from_db,
     build_report,
     render_pdf,
 )
-
-try:
-    from geode.reports.map_fetch import attach_maps_to_station
-    _MAP_FETCH = True
-except ImportError:
-    _MAP_FETCH = False
 
 
 def main():
@@ -65,7 +54,7 @@ def main():
             'Examples:\n'
             '  StationReport.py ars.at47 -o /tmp/reports/\n'
             '  StationReport.py ars.%    --pdf -o /tmp/reports/\n'
-            '  StationReport.py ars.at47 --no-maps -o /tmp/reports/'
+            '  StationReport.py ars.at47 ars.at48 -o /tmp/reports/'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -81,14 +70,6 @@ def main():
     parser.add_argument(
         '--pdf', action='store_true',
         help='Render reports to PDF instead of HTML (requires weasyprint).',
-    )
-    parser.add_argument(
-        '--no-maps', action='store_true',
-        help='Skip map tile fetching (reports will omit location maps).',
-    )
-    parser.add_argument(
-        '--logo', default=None, metavar='PATH',
-        help='Path to the GeoDE logo PNG to embed in the report header.',
     )
 
     # ── Section visibility ────────────────────────────────────────────────────
@@ -163,23 +144,6 @@ def main():
             print(f' !! {tag}: failed to build report — {exc}', file=sys.stderr)
             errors.append(tag)
             continue
-
-        # Optionally set logo
-        if args.logo and os.path.exists(args.logo):
-            station.logo_path = args.logo
-
-        # Fetch map tiles if not already on disk
-        if not args.no_maps and _MAP_FETCH:
-            needs_maps = not any([
-                station.map_general_path and os.path.exists(station.map_general_path),
-                station.map_detail_path  and os.path.exists(station.map_detail_path),
-                station.satellite_path   and os.path.exists(station.satellite_path),
-            ])
-            if needs_maps:
-                try:
-                    attach_maps_to_station(station)
-                except Exception as exc:
-                    print(f' !! {tag}: map fetch failed — {exc}', file=sys.stderr)
 
         # Render report
         try:
