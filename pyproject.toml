@@ -67,7 +67,6 @@ dependencies = [
 ]
 
 [project.scripts]
-StationReport = "com.StationReport:main"
 
 [project.urls]
 "Homepage" = "https://github.com/demiangomez/geode"

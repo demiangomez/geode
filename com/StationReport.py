@@ -14,22 +14,22 @@ for one or more stations and writes self-contained HTML (or PDF) reports.
 Usage examples
 --------------
   # Single station
-  StationReport ARS.AT47 -o /tmp/reports/
+  StationReport.py ars.at47 -o /tmp/reports/
 
   # All stations in a network
-  StationReport ARS.% -o /tmp/reports/
+  StationReport.py ars.% -o /tmp/reports/
 
   # Multiple explicit stations
-  StationReport ARS.AT47 ARS.AT48 -o /tmp/reports/
+  StationReport.py ars.at47 ars.at48 -o /tmp/reports/
 
   # Render to PDF (requires weasyprint)
-  StationReport ARS.AT47 --pdf -o /tmp/reports/
+  StationReport.py ars.at47 --pdf -o /tmp/reports/
 
   # Skip map tile download (faster, no network needed)
-  StationReport ARS.AT47 --no-maps -o /tmp/reports/
+  StationReport.py ars.at47 --no-maps -o /tmp/reports/
 
   # Omit specific sections
-  StationReport ARS.AT47 --no-instruments --no-timeseries -o /tmp/reports/
+  StationReport.py ars.at47 --no-instruments --no-timeseries -o /tmp/reports/
 """
 
 import argparse
@@ -60,13 +60,12 @@ except ImportError:
 
 def main():
     parser = argparse.ArgumentParser(
-        prog='StationReport',
         description='Generate GeoDE GNSS station reports (HTML or PDF).',
         epilog=(
             'Examples:\n'
-            '  StationReport ARS.AT47 -o /tmp/reports/\n'
-            '  StationReport ARS.%    --pdf -o /tmp/reports/\n'
-            '  StationReport ARS.AT47 --no-maps -o /tmp/reports/'
+            '  StationReport.py ars.at47 -o /tmp/reports/\n'
+            '  StationReport.py ars.%    --pdf -o /tmp/reports/\n'
+            '  StationReport.py ars.at47 --no-maps -o /tmp/reports/'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -113,6 +112,10 @@ def main():
         '--no-visits', action='store_true',
         help='Omit the Visit History section.',
     )
+    parser.add_argument(
+        '--no-geodynamics', action='store_true',
+        help='Omit the Geodynamic Events section.',
+    )
 
     add_version_argument(parser)
     args = parser.parse_args()
@@ -148,12 +151,13 @@ def main():
         try:
             station = station_from_db(
                 cnn, nc, sc,
-                media_path       = media_path,
-                show_instruments = not args.no_instruments,
-                show_timeseries  = not args.no_timeseries,
-                show_rinex       = not args.no_rinex,
-                show_contacts    = not args.no_contacts,
-                show_visits      = not args.no_visits,
+                media_path        = media_path,
+                show_instruments  = not args.no_instruments,
+                show_timeseries   = not args.no_timeseries,
+                show_rinex        = not args.no_rinex,
+                show_contacts     = not args.no_contacts,
+                show_visits       = not args.no_visits,
+                show_geodynamics  = not args.no_geodynamics,
             )
         except Exception as exc:
             print(f' !! {tag}: failed to build report — {exc}', file=sys.stderr)
@@ -181,11 +185,12 @@ def main():
         try:
             html = build_report(
                 station,
-                show_instruments = not args.no_instruments,
-                show_timeseries  = not args.no_timeseries,
-                show_rinex       = not args.no_rinex,
-                show_contacts    = not args.no_contacts,
-                show_visits      = not args.no_visits,
+                show_instruments  = not args.no_instruments,
+                show_timeseries   = not args.no_timeseries,
+                show_rinex        = not args.no_rinex,
+                show_contacts     = not args.no_contacts,
+                show_visits       = not args.no_visits,
+                show_geodynamics  = not args.no_geodynamics,
             )
         except Exception as exc:
             print(f' !! {tag}: render failed — {exc}', file=sys.stderr)

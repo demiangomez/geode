@@ -125,6 +125,7 @@ class StationReport:
 
     # Related data
     instrument_history: list[InstrumentSession] = field(default_factory=list)
+    instrument_history_total: int = 0   # total sessions in DB (may exceed len(instrument_history))
     visits:             list[Visit]             = field(default_factory=list)
     contacts:           list[Contact]           = field(default_factory=list)
 
@@ -139,6 +140,9 @@ class StationReport:
     # Pre-rendered base64 plots (raw base64, no data: prefix)
     etm_base64:   Optional[str] = None   # ETM time-series plot
     rinex_base64: Optional[str] = None   # RINEX data availability plot
+
+    # Geodynamic events (List[Earthquake] from ScoreTable)
+    geodynamic_events: list = field(default_factory=list)
 
 
 # ── Image utilities ────────────────────────────────────────────────────────────
@@ -325,9 +329,9 @@ a { color: #185fa5; text-decoration: none; }
   background:rgba(0,0,0,0.55) !important; color:#fff !important;
   font-size:10.5px; font-weight:500; padding:5px 10px; line-height:1.3;
 }
-.img-grid-2x2 .cell:nth-child(1) { border-right:0.5px solid #e0ded8; border-bottom:0.5px solid #e0ded8; }
-.img-grid-2x2 .cell:nth-child(2) { border-bottom:0.5px solid #e0ded8; }
-.img-grid-2x2 .cell:nth-child(3) { border-right:0.5px solid #e0ded8; }
+.img-grid-2x2 .cell:nth-child(1) { border-right:1px solid #888; border-bottom:1px solid #888; }
+.img-grid-2x2 .cell:nth-child(2) { border-bottom:1px solid #888; }
+.img-grid-2x2 .cell:nth-child(3) { border-right:1px solid #888; }
 
 /* Metric cards */
 .metric-row { display:grid; border:0.5px solid #e0ded8; border-radius:6px; overflow:hidden; margin-bottom:4px; }
@@ -408,11 +412,23 @@ a { color: #185fa5; text-decoration: none; }
 /* Full-width images */
 .full-img-wrap { border:0.5px solid #e0ded8; border-radius:6px; overflow:hidden; }
 .full-img-wrap img { width:100%; display:block; }
+/* Portrait RINEX plot: scale to fit the page, centred */
+.rinex-portrait-wrap {
+  border:0.5px solid #e0ded8; border-radius:6px; overflow:hidden;
+  text-align:center;
+}
+.rinex-portrait-wrap img {
+  display:block; margin:0 auto;
+  max-width:100%; max-height:80vh; width:auto; height:auto;
+}
+@media print {
+  .rinex-portrait-wrap img { max-height:240mm; }
+}
 .img-caption { font-size:10.5px; color:#9b9a96; text-align:center; margin-top:4px; line-height:1.4; }
 .sub-note { font-size:11.5px; color:#6b6a66; margin-bottom:6px; line-height:1.5; }
 
 /* Visit cards */
-.visit-card { border:0.5px solid #e0ded8; border-radius:8px; overflow:hidden; margin-bottom:8px; break-inside:avoid; }
+.visit-card { border:0.5px solid #e0ded8; border-radius:8px; overflow:hidden; margin-bottom:0; break-inside:avoid; }
 .visit-hdr { background:#e6f1fb !important; display:table; width:100%; padding:0; }
 .visit-hdr-date { display:table-cell; font-size:13px; font-weight:700; color:#0c447c !important; padding:8px 14px; vertical-align:middle; }
 .visit-hdr-right { display:table-cell; text-align:right; padding:8px 14px; vertical-align:middle; white-space:nowrap; }
@@ -459,7 +475,39 @@ a { color: #185fa5; text-decoration: none; }
   .page { max-width:100%; box-shadow:none; }
   .info-card, .contact-card, .contact-grid,
   .metric-row, .card-row, .instr-session-card, .meta-block { break-inside:avoid; }
+  .section-header { break-after:avoid; }
 }
+
+/* Geodynamic event cards */
+.geo-card {
+  display:flex; border:0.5px solid #e0ded8; border-radius:8px; overflow:hidden;
+  margin-bottom:7px; break-inside:avoid;
+}
+.geo-card-coseismic  { border-left:3px solid #c0392b !important; }
+.geo-card-postseismic { border-left:3px solid #e67e22 !important; }
+.geo-bb {
+  flex:0 0 110px; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  padding:10px 8px; background:#f5f5f3 !important; border-right:0.5px solid #e0ded8;
+}
+.geo-bb img { width:80px; height:80px; display:block; }
+.geo-bb-placeholder {
+  width:80px; height:80px; display:flex; align-items:center; justify-content:center;
+  background:#e8ecf0 !important; border-radius:50%;
+  font-size:9.5px; color:#9b9a96; text-align:center; line-height:1.4;
+}
+.geo-body { flex:1; padding:10px 14px; min-width:0; }
+.geo-title {
+  font-size:13.5px; font-weight:700; color:#1a1a18; margin-bottom:4px; line-height:1.3;
+}
+.geo-title a { color:#185fa5 !important; text-decoration:none; }
+.geo-meta {
+  font-size:11px; color:#6b6a66; margin-bottom:7px; line-height:1.6;
+  font-family:"SF Mono","Fira Mono","Courier New",monospace;
+}
+.geo-chips { display:flex; gap:5px; flex-wrap:wrap; }
+.geo-chip-cos  { background:#fde8e8 !important; color:#c0392b !important; }
+.geo-chip-post { background:#fef3e2 !important; color:#b35a00 !important; }
 """
 
 
@@ -602,14 +650,18 @@ def _visit_card(v: Visit) -> str:
     else:
         att_html = '<div class="no-data">None found</div>'
 
-    # Photos
+    # Photos — capped at 12 (4 rows × 3) to keep card height predictable for PDF pagination
+    _PHOTO_LIMIT = 12
     photo_html = ""
     valid_photos = list(zip(v.photo_paths, v.photo_captions)) if v.photo_paths else []
     if valid_photos:
+        total_photos   = len(valid_photos)
+        display_photos = valid_photos[:_PHOTO_LIMIT]
+        hidden         = total_photos - len(display_photos)
         # Build rows of 3 cells for table-based layout (weasyprint compatible)
         rows_html = ""
-        for i in range(0, len(valid_photos), 3):
-            chunk = valid_photos[i:i+3]
+        for i in range(0, len(display_photos), 3):
+            chunk = display_photos[i:i+3]
             cells_html = ""
             for path, cap in chunk:
                 uri = _encode_image(path, max_size=(400, 300), quality=82)
@@ -622,19 +674,24 @@ def _visit_card(v: Visit) -> str:
             while cells_html.count('<td') < 3:
                 cells_html += '<td class="visit-photo-cell" style="background:#f5f5f3"></td>'
             rows_html += f'<tr class="visit-photos-row">{cells_html}</tr>'
+        if hidden > 0:
+            rows_html += (
+                f'<tr><td colspan="3" style="text-align:center;padding:7px 12px;'
+                f'font-size:11px;color:#9b9a96;font-style:italic;background:#f5f5f3;'
+                f'border-top:0.5px solid #e0ded8;">'
+                f'+{hidden} more image{"s" if hidden != 1 else ""} not shown</td></tr>'
+            )
         if rows_html:
             photo_html = f'<table class="visit-photos">{rows_html}</table>'
 
-    visit_comment_html = ""
+    # When comments follow, flatten the card's bottom corners and carry the
+    # bottom margin on the comment box instead; otherwise keep the full radius.
     if v.comments:
-        visit_comment_html = (
-            f'<div class="comment-box" style="margin:0;border-radius:0;border-top:0.5px solid #d4a855;">'
-            f'<div class="comment-title">Comments</div>'
-            f'<p>{v.comments}</p></div>'
-        )
-
-    return (
-        f'<div class="visit-card">'
+        card_style = 'margin-bottom:0;border-radius:8px 8px 0 0;'
+    else:
+        card_style = 'margin-bottom:8px;'
+    card_html = (
+        f'<div class="visit-card" style="{card_style}">'
         f'<div class="visit-hdr">'
         f'<div class="visit-hdr-date">{date_str}</div>'
         f'<div class="visit-hdr-right">{right_html}</div>'
@@ -643,7 +700,110 @@ def _visit_card(v: Visit) -> str:
         f'<div class="visit-col"><div class="col-title">Personnel</div>{pers_html}</div>'
         f'<div class="visit-col"><div class="col-title">Observation files</div>{obs_html}</div>'
         f'<div class="visit-col"><div class="col-title">Attached files</div>{att_html}</div>'
-        f'</div>{photo_html}{visit_comment_html}</div>'
+        f'</div>{photo_html}</div>'
+    )
+
+    # Comments are returned separately so they sit outside the card div.
+    # This keeps the card height predictable for PDF page-break control while
+    # still appearing visually attached (no bottom-radius, no gap).
+    comment_html = ""
+    if v.comments:
+        comment_html = (
+            f'<div class="comment-box" style="margin-top:0;margin-bottom:8px;'
+            f'border-radius:0 0 8px 8px;border-top:none;">'
+            f'<div class="comment-title">Comments</div>'
+            f'<p>{v.comments}</p></div>'
+        )
+
+    return card_html, comment_html
+
+
+def _beachball_b64(strike: float, dip: float, rake: float,
+                   facecolor: str = 'k') -> Optional[str]:
+    """Render a focal-mechanism beachball to a base64 PNG string, or None on failure.
+
+    We intentionally avoid obspy's ``outfile`` path because it calls
+    ``fig.savefig(..., transparent=True)`` via PIL, which raises
+    ``SystemError: tile cannot extend outside image`` on some PIL/matplotlib
+    version combinations.  Instead we supply our own figure, let obspy draw
+    into it, then save with FigureCanvasAgg directly.
+    """
+    import warnings
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from obspy.imaging.beachball import beachball
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            fig = plt.figure(figsize=(1.8, 1.8), facecolor='none')
+            beachball([strike, dip, rake], width=180, linewidth=1,
+                      facecolor=facecolor, fig=fig)
+            canvas = FigureCanvasAgg(fig)
+            buf = io.BytesIO()
+            canvas.print_png(buf)
+            plt.close(fig)
+        buf.seek(0)
+        data = buf.read()
+        if not data:
+            return None
+        return base64.b64encode(data).decode()
+    except Exception:
+        return None
+
+
+def _geo_event_card(eq) -> str:
+    """Render one Earthquake (from ScoreTable) as an HTML card."""
+    try:
+        from ..etm.core.type_declarations import JumpType as _JT
+    except Exception:
+        _JT = None
+
+    is_cos = (_JT is not None and eq.jump_type == _JT.COSEISMIC_JUMP_DECAY)
+    card_cls  = 'geo-card-coseismic'  if is_cos else 'geo-card-postseismic'
+    chip_cls  = 'chip geo-chip-cos'   if is_cos else 'chip geo-chip-post'
+    type_lbl  = 'Coseismic + Postseismic' if is_cos else 'Postseismic Only'
+    bb_color  = '#c0392b' if is_cos else '#e67e22'
+
+    # Focal mechanism beachball
+    if eq.strike:
+        bb_b64 = _beachball_b64(eq.strike[0], eq.dip[0], eq.rake[0],
+                                 facecolor=bb_color)
+        if bb_b64:
+            bb_html = f'<img src="data:image/png;base64,{bb_b64}" alt="Focal mechanism">'
+        else:
+            bb_html = '<div class="geo-bb-placeholder"><span>Render<br>error</span></div>'
+    else:
+        bb_html = '<div class="geo-bb-placeholder"><span>No focal<br>mechanism</span></div>'
+
+    # USGS link
+    usgs_url  = f'https://earthquake.usgs.gov/earthquakes/eventpage/{eq.id}'
+    magnitude = f'M&thinsp;{eq.magnitude:.1f}'
+    title_html = (f'<a href="{usgs_url}" target="_blank">'
+                  f'{magnitude} &ndash; {eq.location}</a>')
+
+    # Date + epicenter + depth  (pyDate.Date stores hour/minute/second)
+    try:
+        dt_str = (f'{eq.date.year}-{eq.date.month:02d}-{eq.date.day:02d}'
+                  f' {eq.date.hour:02d}:{eq.date.minute:02d}:{eq.date.second:02d} (UTC)')
+    except Exception:
+        dt_str = str(eq.date)
+    lat_str = _fmt_lat(eq.lat)
+    lon_str = _fmt_lon(eq.lon)
+    meta_html = (f'{dt_str}<br>'
+                 f'{lat_str}&nbsp;&nbsp;{lon_str}&nbsp;&nbsp;'
+                 f'{eq.depth:.1f}&thinsp;km depth')
+
+    dist_chip = f'<span class="chip chip-gray">{eq.distance:.0f}&thinsp;km from station</span>'
+
+    return (
+        f'<div class="geo-card {card_cls}">'
+        f'<div class="geo-bb">{bb_html}</div>'
+        f'<div class="geo-body">'
+        f'<div class="geo-title">{title_html}</div>'
+        f'<div class="geo-meta">{meta_html}</div>'
+        f'<div class="geo-chips">'
+        f'<span class="{chip_cls}">{type_lbl}</span>{dist_chip}'
+        f'</div></div></div>'
     )
 
 
@@ -660,7 +820,8 @@ def build_report(s: StationReport,
                  show_timeseries: bool = True,
                  show_rinex: bool = True,
                  show_contacts: bool = True,
-                 show_visits: bool = True) -> str:
+                 show_visits: bool = True,
+                 show_geodynamics: bool = True) -> str:
     """
     Build the full station report HTML string.
 
@@ -749,7 +910,7 @@ def build_report(s: StationReport,
     # ── Chips ──────────────────────────────────────────────────────────────────
     chips = f"""
 <div class="chips" style="margin-top:6px">
-  {_chip(f"Country: {s.country}", "chip-blue", flag_html)}
+  {_chip(s.country, "chip-blue", flag_html)}
   {_chip(f"Network: {s.network}", "chip-blue")}
   {_chip(f"Station: {s.station}", "chip-blue")}
   {status_chip_html}
@@ -787,11 +948,11 @@ def build_report(s: StationReport,
         )
     cells_html = (
         _cell(map_gen_uri, "General location",
-              "border-right:0.5px solid #e0ded8;border-bottom:0.5px solid #e0ded8;")
+              "border-right:1px solid #888;border-bottom:1px solid #888;")
         + _cell(map_det_uri, "Site detail",
-                "border-bottom:0.5px solid #e0ded8;")
+                "border-bottom:1px solid #888;")
         + _cell(sat_uri,    "Satellite view &middot; station marker visible",
-                "border-right:0.5px solid #e0ded8;")
+                "border-right:1px solid #888;")
         + mon_cell
     )
     if map_gen_uri or map_det_uri or sat_uri or mon_uri:
@@ -846,7 +1007,7 @@ def build_report(s: StationReport,
     comment_html = ""
     if s.comments:
         comment_html = (f'<div class="comment-box">'
-                        f'<div class="comment-title">Comments</div>'
+                        f'<div class="comment-title">General comments</div>'
                         f'<p>{s.comments}</p></div>')
 
     metadata_section = (
@@ -861,10 +1022,17 @@ def build_report(s: StationReport,
     instr_section = ""
     if show_instruments and s.instrument_history:
         cards = ""
-        for i, sess in enumerate(s.instrument_history):
-            is_current = (i == len(s.instrument_history) - 1)
+        for sess in s.instrument_history:
+            is_current = (sess.date_end == 'present')
             cards += _instr_session_card(sess, is_current)
-        instr_section = _section("Instrument History") + cards
+        total = s.instrument_history_total
+        shown = len(s.instrument_history)
+        if total > shown:
+            note = (f'<div style="font-size:11px;color:#9b9a96;font-style:italic;'
+                    f'margin-top:4px;">Showing {shown} most recent of {total} total sessions</div>')
+        else:
+            note = ""
+        instr_section = _section("Instrument History") + cards + note
 
     # ── Contacts ───────────────────────────────────────────────────────────────
     contacts_section = ""
@@ -900,7 +1068,7 @@ def build_report(s: StationReport,
         rinex_section = (
             _section("RINEX Data Availability")
             + (f'<div class="sub-note">{rinex_subtitle}</div>' if rinex_subtitle else "")
-            + f'<div class="full-img-wrap"><img src="{rinex_uri}" alt="RINEX availability"></div>'
+            + f'<div class="rinex-portrait-wrap"><img src="{rinex_uri}" alt="RINEX availability"></div>'
             + (f'<div class="img-caption">{rinex_caption}</div>' if rinex_caption else "")
         )
 
@@ -929,14 +1097,44 @@ def build_report(s: StationReport,
 
     # ── Visit history ──────────────────────────────────────────────────────────
     visits_section = ""
-    if show_visits and s.visits:
-        n_visits = len(s.visits)
-        year_range = f"{s.visits[-1].date[:4]}&ndash;{s.visits[0].date[:4]}"
-        visit_cards = "".join(_visit_card(v) for v in s.visits)
-        visits_section = (
-            _section(f"Visit History &nbsp;&middot;&nbsp; {n_visits} visits &nbsp;&middot;&nbsp; {year_range}")
-            + visit_cards
-        )
+    if show_visits:
+        if s.visits:
+            n_visits = len(s.visits)
+            year_range = f"{s.visits[-1].date[:4]}&ndash;{s.visits[0].date[:4]}"
+            visit_cards = "".join(card + comment for card, comment in
+                                   (_visit_card(v) for v in s.visits))
+            visits_section = (
+                _section(f"Visit History &nbsp;&middot;&nbsp; {n_visits} visits &nbsp;&middot;&nbsp; {year_range}")
+                + visit_cards
+            )
+        else:
+            visits_section = (
+                _section("Visit History")
+                + f'<div class="comment-box" style="background:#f5f5f3 !important;'
+                f'border-color:#d0ced8;border-left-color:#9b9a96;">'
+                f'<p style="color:#9b9a96;font-style:italic;">No visits on record for this station.</p>'
+                f'</div>'
+            )
+
+    # ── Geodynamic events ──────────────────────────────────────────────────────
+    geo_section = ""
+    if show_geodynamics:
+        if s.geodynamic_events:
+            n_geo = len(s.geodynamic_events)
+            cards_html = "".join(_geo_event_card(eq) for eq in s.geodynamic_events)
+            geo_section = (
+                _section(f"Geodynamic Events &nbsp;&middot;&nbsp; {n_geo} event(s)")
+                + cards_html
+            )
+        else:
+            geo_section = (
+                _section("Geodynamic Events")
+                + f'<div class="comment-box" style="background:#f5f5f3 !important;'
+                f'border-color:#d0ced8;border-left-color:#9b9a96;">'
+                f'<p style="color:#9b9a96;font-style:italic;">'
+                f'No significant seismic events (M&thinsp;&ge;&thinsp;6.0) found for the station observation period.</p>'
+                f'</div>'
+            )
 
     # ── Footer ─────────────────────────────────────────────────────────────────
     footer = (f'<div class="footer">'
@@ -956,6 +1154,7 @@ def build_report(s: StationReport,
         etm_section,
         rinex_section,
         visits_section,
+        geo_section,
     ]
 
     return f"""<!DOCTYPE html>
@@ -1007,11 +1206,12 @@ def station_from_db(cnn,
                     network_code: str,
                     station_code: str,
                     media_path: Optional[str] = None,
-                    show_instruments: bool = True,
-                    show_timeseries:  bool = True,
-                    show_rinex:       bool = True,
-                    show_contacts:    bool = True,
-                    show_visits:      bool = True) -> StationReport:
+                    show_instruments:  bool = True,
+                    show_timeseries:   bool = True,
+                    show_rinex:        bool = True,
+                    show_contacts:     bool = True,
+                    show_visits:       bool = True,
+                    show_geodynamics:  bool = True) -> StationReport:
     """
     Build a StationReport from the GeoDE PostgreSQL database.
 
@@ -1119,6 +1319,7 @@ def station_from_db(cnn,
 
     # ── 4. Instrument history (stationinfo) ──────────────────────────────────
     instrument_history = []
+    instrument_history_total = 0
     if show_instruments:
         instr_rows = cnn.query_float(
             f"""SELECT "DateStart", "DateEnd", "ReceiverCode", "ReceiverSerial",
@@ -1127,9 +1328,10 @@ def station_from_db(cnn,
                        "HeightCode", "RadomeCode"
                 FROM stationinfo
                 WHERE "NetworkCode" = '{nc}' AND "StationCode" = '{sc}'
-                ORDER BY "DateStart" """,
+                ORDER BY "DateStart" DESC""",
             as_dict=True)
-        for r in instr_rows:
+        instrument_history_total = len(instr_rows)
+        for r in instr_rows[:4]:
             ds = str(r['DateStart'])[:10] if r.get('DateStart') else ''
             de = str(r['DateEnd'])[:10]   if r.get('DateEnd')   else 'present'
             if de.startswith('9999'):
@@ -1299,10 +1501,30 @@ def station_from_db(cnn,
     if show_rinex:
         try:
             from ..Utils import plot_rinex_completion
-            rinex_base64 = plot_rinex_completion(cnn, nc, sc, landscape=True) or None
+            rinex_base64 = plot_rinex_completion(cnn, nc, sc, landscape=False) or None
         except Exception as _e:
             import logging as _log
             _log.getLogger(__name__).warning(f'RINEX plot failed for {nc}.{sc}: {_e}')
+
+    # ── 10. Geodynamic events (ScoreTable, M ≥ 6.0) ─────────────────────────
+    geodynamic_events = []
+    if show_geodynamics and first_rinex and last_rinex:
+        try:
+            from ..etm.core.s_score import ScoreTable
+            from ..pyDate import Date as _Date
+            _sdate = _Date(year=int(first_rinex[:4]) - 5,
+                           month=int(first_rinex[5:7]),
+                           day=int(first_rinex[8:10]))
+            _edate = _Date(year=int(last_rinex[:4]),
+                           month=int(last_rinex[5:7]),
+                           day=int(last_rinex[8:10]))
+            _score = ScoreTable(cnn, nc, sc, lat, lon, _sdate, _edate,
+                                magnitude_limit=6.0, include_all_events=True)
+            geodynamic_events = _score.table
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                f'Geodynamic events failed for {nc}.{sc}: {_e}')
 
     # ── Logo (bundled with the package) ──────────────────────────────────────
     _logo = Path(__file__).parent / 'geode_logo.png'
@@ -1329,6 +1551,7 @@ def station_from_db(cnn,
         last_rinex         = last_rinex,
         comments           = comments,
         instrument_history = instrument_history,
+        instrument_history_total = instrument_history_total,
         visits             = visits,
         contacts           = contacts,
         monument_path      = monument_path,
@@ -1336,6 +1559,7 @@ def station_from_db(cnn,
         station_images     = station_images,
         etm_base64         = etm_base64,
         rinex_base64       = rinex_base64,
+        geodynamic_events  = geodynamic_events,
         logo_path          = logo_path,
     )
 

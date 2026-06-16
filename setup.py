@@ -44,6 +44,8 @@ if __name__ == "__main__":
         'com/ScanArchive.py',
         'com/Stacker.py',
         'com/StationInfoEdit.py',
+        'com/StationKmz.py',
+        'com/StationReport.py',
         'com/SyncOrbits.py',
         'com/SyncMetadata.py',
         'com/TrajectoryFit.py',
