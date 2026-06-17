@@ -7,9 +7,8 @@ except PackageNotFoundError:
     __version__ = "0.0.0"
 
 __all__ = [
-    'cluster',
+    'clustering',
     'network',
-    'plots',
     'pyRinexName',
     'Utils',
     'pyJobServer',
@@ -32,7 +31,6 @@ __all__ = [
     'pyBunch',
     'pyEvents',
     'pyPPP',
-    'pyProducts',
     'gamit.ztd',
     'pyStack',
     'gamit.gamit_config',
@@ -45,8 +43,10 @@ __all__ = [
 
 from importlib import import_module
 
-for _name in __all__:
-    try:
-        globals()[_name] = import_module(f'.{_name}', __name__)
-    except Exception:
-        pass
+
+def __getattr__(name):
+    if name in __all__:
+        mod = import_module(f'.{name}', __name__)
+        globals()[name] = mod
+        return mod
+    raise AttributeError(f"module 'geode' has no attribute {name!r}")

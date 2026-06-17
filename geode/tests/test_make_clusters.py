@@ -5,7 +5,7 @@ import pytest
 import numpy as np
 
 from .common import gen_variable_density_clusters, generate_clustered_data
-from ..cluster import BisectingQMeans, overcluster
+from ..clustering import BisectingQMeans, overcluster
 
 
 @pytest.mark.parametrize(
