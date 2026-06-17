@@ -18,6 +18,7 @@ if __name__ == "__main__":
     include_package_data=True,
     scripts=[
         'com/ArchiveService.py',
+        'com/CampaignPlanner.py',
         'com/GenerateKml.py',
         'com/PlotETM.py',
         'com/AlterETM.py',

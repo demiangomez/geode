@@ -1,0 +1,18 @@
+{
+    "_comment": "Station IDs are NetworkCode.StationCode as they appear in GeoDE (case-insensitive).",
+    "_comment2": "Remove or add stations, adjust times, and set your start_date before running.",
+    "start_city": "Buenos Aires, Argentina",
+    "end_city": "San Juan, Argentina",
+    "stations": [
+        "arg.unsj",
+        "arg.vmol",
+        "arg.rwsn",
+        "arg.ljar"
+    ],
+    "time_on_site_minutes": 120,
+    "day_start": "08:00",
+    "hard_stop": "20:00",
+    "fuel_cost_per_km": 0.15,
+    "start_date": "2025-09-01",
+    "output_file": "campaign_plan.html"
+}

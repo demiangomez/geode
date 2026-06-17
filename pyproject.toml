@@ -73,7 +73,7 @@ dependencies = [
 "Bug Tracker" = "https://github.com/demiangomez/geode/issues"
 
 [tool.setuptools]
-packages = ["geode", "geode.reports", "com"]
+packages = ["geode", "geode.reports", "geode.campaign_planner", "com"]
 
 [tool.setuptools.package-data]
 "geode.reports" = ["geode_logo.png"]
