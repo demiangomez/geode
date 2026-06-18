@@ -148,11 +148,12 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
     dict  — see spec for full structure:
         {'days': [...], 'summary': {...}}
     """
-    start_date   = datetime.strptime(params['start_date'], '%Y-%m-%d').date()
-    day_start_hm = [int(x) for x in params['day_start'].split(':')]
-    hard_stop_hm = [int(x) for x in params['hard_stop'].split(':')]
-    time_on_site = int(params['time_on_site_minutes'])
-    fuel_per_km  = float(params.get('fuel_cost_per_km', 0.0))
+    start_date    = datetime.strptime(params['start_date'], '%Y-%m-%d').date()
+    day_start_hm  = [int(x) for x in params['day_start'].split(':')]
+    hard_stop_hm  = [int(x) for x in params['hard_stop'].split(':')]
+    time_on_site  = int(params['time_on_site_minutes'])
+    fuel_per_km   = float(params.get('fuel_cost_per_km', 0.0))
+    daily_minutes = (hard_stop_hm[0] * 60 + hard_stop_hm[1]) - (day_start_hm[0] * 60 + day_start_hm[1])
 
     legs = list(deepcopy(legs))   # may be patched with re-fetched legs
 
@@ -323,8 +324,9 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
         departure = arrival + timedelta(minutes=time_on_site)
 
         if departure > hard_stop_dt:
-            # Work cannot be completed today: stop at hard_stop, carry the
-            # remaining minutes to the first thing next morning.
+            # Work cannot finish today.  Record what gets done today, then
+            # advance through as many full work days as needed before the
+            # remaining work fits within a single day's window.
             work_done_min = int((hard_stop_dt - arrival).total_seconds() // 60)
             remaining_min = time_on_site - work_done_min
             current_day_stops.append({
@@ -347,7 +349,28 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
             overnight_pos  = dest_wp
             _close_day()
             _advance_day()
-            # Finish the remaining work at the start of the new day before driving.
+
+            # Burn through any additional full work days needed.
+            while remaining_min > daily_minutes:
+                remaining_min -= daily_minutes
+                current_day_stops.append({
+                    'type':              dest_wp['type'],
+                    'name':              dest_wp['name'],
+                    'code':              dest_wp.get('id', ''),
+                    'lat':               dest_wp['lat'],
+                    'lon':               dest_wp['lon'],
+                    'arrival':           None,
+                    'departure':         _hhmm(hard_stop_dt),
+                    'leg_km':            0.0,
+                    'leg_drive_minutes': 0,
+                    'leg_fuel_cost':     0.0,
+                    'warning':           'Work continues next day',
+                    'geometry':          [],
+                })
+                _close_day()
+                _advance_day()
+
+            # Final partial (or exact) work period — fits within today.
             finish_time = current_time + timedelta(minutes=remaining_min)
             current_day_stops.append({
                 'type':              dest_wp['type'],
@@ -394,11 +417,11 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
     total_min  = sum(d['day_total_drive_minutes']   for d in days)
     total_fuel = sum(d['day_total_fuel_cost']       for d in days)
 
-    # Count only actual station visits (arrival is not None).
-    # Overnight/day-start positions also have type='station' but arrival=None.
+    # Count actual field stops (arrival is not None).
+    # Overnight/day-start positions also appear in stops but have arrival=None.
     total_stns = sum(
         1 for d in days for s in d['stops']
-        if s['type'] == 'station' and s['arrival'] is not None
+        if s['type'] in ('station', 'new_site') and s['arrival'] is not None
     )
 
     n_nights         = max(len(days) - 1, 0)   # last day you sleep at home

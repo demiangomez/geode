@@ -1,13 +1,13 @@
 
 ![GeoDE log](logos/Highres-GeoDe-Logo-final-05-Black.png)
 
-# GeoDE (Geodesy Database Engine)
+# GeoDE (Geodetic Database Engine)
 
 A comprehensive Python framework for automated GNSS data processing, analysis, and management. GeoDE integrates multiple geodetic software packages (GAMIT/GLOBK, GPSPACE, and soon M-PAGES) with PostgreSQL database management and web-based visualization tools.
 
 ## Overview
 
-**GeoDE (Geodesy Database Engine)** provides a complete solution for processing and managing large-scale GNSS datasets for geodetic applications. Originally developed by [Demian Gomez](https://github.com/demiangomez) and contributors, GeoDE handles the entire workflow from raw data ingestion to time series analysis, offering parallelized processing capabilities, robust metadata tracking, and comprehensive quality control tools.
+**GeoDE (Geodetic Database Engine)** provides a complete solution for processing and managing large-scale GNSS datasets for geodetic applications. Originally developed by [Demian Gomez](https://github.com/demiangomez) and contributors, GeoDE handles the entire workflow from raw data ingestion to time series analysis, offering parallelized processing capabilities, robust metadata tracking, and comprehensive quality control tools.
 
 ### Key Features
 
@@ -154,7 +154,7 @@ AlterETM.py igs.pwro -fun j + 1 2024/02/15 30,60
 
 If you use GeoDE in your research, please cite:
 
-> Gomez, D.D., et al. (2024). GeoDE: Geodesy Database Engine for automated GNSS processing and analysis. *GitHub repository*. https://github.com/demiangomez/geode
+> Gomez, D.D., et al. (2024). GeoDE: Geodetic Database Engine for automated GNSS processing and analysis. *GitHub repository*. https://github.com/demiangomez/geode
 
 ## License
 

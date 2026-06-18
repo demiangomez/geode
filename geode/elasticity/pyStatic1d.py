@@ -8,8 +8,8 @@ import os
 import shutil
 import uuid
 
-from . import dbConnection
-from . import pyRunWithRetry
+from geode import dbConnection
+from geode import pyRunWithRetry
 
 
 class Static1d(object):

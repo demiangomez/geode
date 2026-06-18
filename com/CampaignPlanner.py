@@ -25,6 +25,10 @@ Usage examples
       --start-date 2025-09-01 \\
       --time-on-site 120 \\
       --fuel-cost 0.15
+
+  # Mix existing stations with planned new sites (city name or lat,lon)
+  CampaignPlanner.py --config example_campaign.json \\
+      --new-sites "Mendoza, Argentina" "-34.1667,-69.7167"
 """
 
 import argparse
@@ -42,16 +46,17 @@ from geode.campaign_planner import services, report
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
 DEFAULT_CONFIG = {
-    'time_on_site_minutes':  120,
-    'day_start':             '08:00',
-    'hard_stop':             '20:00',
-    'fuel_cost_per_km':      0.0,
+    'time_on_site_minutes':   120,
+    'day_start':              '08:00',
+    'hard_stop':              '20:00',
+    'fuel_cost_per_km':       0.0,
     'lodging_cost_per_night': 70.0,
-    'start_date':            None,
-    'output_file':           'campaign_plan.html',
+    'start_date':             None,
+    'output_file':            'campaign_plan.html',
+    'new_sites':              [],
 }
 
-_REQUIRED = ('start_city', 'end_city', 'stations', 'start_date')
+_REQUIRED = ('start_city', 'end_city', 'start_date')
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -108,6 +113,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=station_list_help(),
     )
     parser.add_argument(
+        '--new-sites', metavar='SPEC', nargs='+',
+        help=(
+            'Planned installation sites not yet in the GeoDE database.\n'
+            'Each value is either a "lat,lon" pair (e.g. -34.1667,-69.7167)\n'
+            'or a place name to geocode (e.g. "Mendoza, Argentina").\n'
+            'For a custom display name with coordinates, use the JSON config\n'
+            'with {"name": "My Site", "lat": ..., "lon": ...}.'
+        ),
+    )
+    parser.add_argument(
         '--time-on-site', metavar='MINUTES', type=int,
         help='Time spent at each station in minutes (default: 120).',
     )
@@ -162,16 +177,17 @@ def _merge_config(args: argparse.Namespace) -> dict:
         config.update({k: v for k, v in json_cfg.items() if not k.startswith('_')})
 
     # Apply CLI switches (only if explicitly provided)
-    if args.start_city   is not None: config['start_city']           = args.start_city
-    if args.end_city     is not None: config['end_city']             = args.end_city
-    if args.stations     is not None: config['stations']             = args.stations
-    if args.time_on_site is not None: config['time_on_site_minutes'] = args.time_on_site
-    if args.day_start    is not None: config['day_start']            = args.day_start
-    if args.hard_stop    is not None: config['hard_stop']            = args.hard_stop
+    if args.start_city   is not None: config['start_city']            = args.start_city
+    if args.end_city     is not None: config['end_city']              = args.end_city
+    if args.stations     is not None: config['stations']              = args.stations
+    if args.new_sites    is not None: config['new_sites']             = args.new_sites
+    if args.time_on_site is not None: config['time_on_site_minutes']  = args.time_on_site
+    if args.day_start    is not None: config['day_start']             = args.day_start
+    if args.hard_stop    is not None: config['hard_stop']             = args.hard_stop
     if args.fuel_cost    is not None: config['fuel_cost_per_km']      = args.fuel_cost
     if args.lodging_cost is not None: config['lodging_cost_per_night'] = args.lodging_cost
     if args.start_date   is not None: config['start_date']            = args.start_date
-    if args.output       is not None: config['output_file']          = args.output
+    if args.output       is not None: config['output_file']           = args.output
 
     return config
 
@@ -183,6 +199,11 @@ def _validate_config(config: dict) -> list:
     for key in _REQUIRED:
         if not config.get(key):
             errors.append(f'Missing required field: {key!r}')
+
+    if not config.get('stations') and not config.get('new_sites'):
+        errors.append(
+            'At least one of "stations" or "new_sites" must be provided.'
+        )
 
     for field in ('day_start', 'hard_stop'):
         val = config.get(field, '')
@@ -251,6 +272,73 @@ def _fetch_stations(cnn, station_specs: list) -> list:
     return result
 
 
+# ── New-site resolver ─────────────────────────────────────────────────────────
+
+def _resolve_new_sites(new_sites: list, logger) -> list:
+    """
+    Convert new_sites entries to waypoint dicts with type='new_site'.
+
+    Each entry may be:
+      str "lat,lon"               → direct coordinates, auto-generated name
+      str "City, Country"         → geocoded via Nominatim
+      dict {name, lat, lon}       → direct coordinates with custom name
+      dict {name, city}           → geocoded with custom name
+    """
+    result = []
+    for entry in new_sites:
+        if isinstance(entry, dict):
+            if 'lat' in entry and 'lon' in entry:
+                lat  = float(entry['lat'])
+                lon  = float(entry['lon'])
+                name = entry.get('name') or f'Site ({lat:.4f}°, {lon:.4f}°)'
+                result.append({'name': name, 'lat': lat, 'lon': lon,
+                                'type': 'new_site', 'id': None})
+            elif 'city' in entry:
+                city = entry['city']
+                logger.info('Geocoding new site: %s...', entry.get('name') or city)
+                try:
+                    loc = services.geocode_city(city)
+                except ValueError as exc:
+                    print(f' !! {exc}', file=sys.stderr)
+                    sys.exit(1)
+                result.append({'name': entry.get('name') or city,
+                                'lat': loc['lat'], 'lon': loc['lon'],
+                                'type': 'new_site', 'id': None})
+            else:
+                print(f' !! new_site entry missing both lat/lon and city: {entry}',
+                      file=sys.stderr)
+                sys.exit(1)
+        elif isinstance(entry, str):
+            # Try to parse as "lat,lon"
+            parts = entry.split(',')
+            if len(parts) == 2:
+                try:
+                    lat = float(parts[0].strip())
+                    lon = float(parts[1].strip())
+                    result.append({
+                        'name': f'Site ({lat:.4f}°, {lon:.4f}°)',
+                        'lat':  lat, 'lon': lon,
+                        'type': 'new_site', 'id': None,
+                    })
+                    continue
+                except ValueError:
+                    pass
+            # Geocode as place name
+            logger.info('Geocoding new site: %s...', entry)
+            try:
+                loc = services.geocode_city(entry)
+            except ValueError as exc:
+                print(f' !! {exc}', file=sys.stderr)
+                sys.exit(1)
+            result.append({'name': entry, 'lat': loc['lat'], 'lon': loc['lon'],
+                           'type': 'new_site', 'id': None})
+        else:
+            print(f' !! Unsupported new_site entry type: {type(entry).__name__}',
+                  file=sys.stderr)
+            sys.exit(1)
+    return result
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -275,8 +363,15 @@ def main():
         sys.exit(1)
 
     # ── Fetch station coordinates from DB ─────────────────────────────────────
-    logger.info('Resolving station list from database...')
-    stations = _fetch_stations(cnn, config['stations'])
+    if config.get('stations'):
+        logger.info('Resolving station list from database...')
+        stations = _fetch_stations(cnn, config['stations'])
+    else:
+        stations = []
+
+    # ── Resolve new (planned) sites ───────────────────────────────────────────
+    new_site_waypoints = _resolve_new_sites(config.get('new_sites', []), logger)
+    all_stops = stations + new_site_waypoints
 
     # ── Geocode start and end cities ──────────────────────────────────────────
     logger.info('Geocoding %s...', config['start_city'])
@@ -298,8 +393,8 @@ def main():
         sys.exit(1)
 
     # ── TSP ordering ─────────────────────────────────────────────────────────
-    logger.info('Ordering %d station(s) using nearest-neighbour TSP...', len(stations))
-    ordered_stations  = services.order_stations_tsp(origin, stations)
+    logger.info('Ordering %d stop(s) using nearest-neighbour TSP...', len(all_stops))
+    ordered_stations  = services.order_stations_tsp(origin, all_stops)
     ordered_waypoints = [origin] + ordered_stations + [destination]
 
     # ── Fetch OSRM driving legs ───────────────────────────────────────────────

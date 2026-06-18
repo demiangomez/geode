@@ -59,9 +59,13 @@ def _generate_static_map(plan: dict, width: int = 900, height: int = 420) -> str
                     coords = [(c[0], c[1]) for c in stop['geometry']]
                     m.add_line(SLine(coords, color, 3))
                 if stop.get('lat') is not None and stop.get('lon') is not None:
-                    is_station = stop['type'] == 'station'
-                    fill = '#dc2626' if is_station else '#2563eb'
-                    size = 12 if is_station else 16
+                    stype = stop['type']
+                    if stype == 'station':
+                        fill, size = '#dc2626', 12
+                    elif stype == 'new_site':
+                        fill, size = '#f59e0b', 12
+                    else:
+                        fill, size = '#2563eb', 16
                     m.add_marker(CircleMarker((stop['lon'], stop['lat']), fill, size))
 
         image = m.render()
@@ -137,10 +141,18 @@ def _stop_rows(day: dict, fuel_per_km: float) -> str:
             name_cell = f'{s["name"]} <span style="color:#9b9a96">({code.upper()})</span>'
         else:
             name_cell = s['name']
+        type_labels = {
+            'station':     'Station',
+            'new_site':    'New site',
+            'origin':      'Origin',
+            'destination': 'Destination',
+            'intermediate': 'Overnight',
+        }
+        type_label = type_labels.get(s['type'], s['type'].capitalize())
         rows.append(
             f'<tr{warn_style}>'
             f'<td>{name_cell}</td>'
-            f'<td class="center">{s["type"].capitalize()}</td>'
+            f'<td class="center">{type_label}</td>'
             f'<td class="center">{_fmt_time(s["arrival"])}</td>'
             f'<td class="center">{_fmt_time(s["departure"])}</td>'
             f'<td class="center">{drive_cell}</td>'
@@ -610,10 +622,13 @@ const PLAN_DATA = {plan_json};
       }}
       // Circle marker (skip intermediate stops — no coordinates)
       if (stop.lat !== null && stop.lon !== null) {{
-        const isStation = stop.type === 'station';
+        const markerColor = stop.type === 'station'  ? '#dc2626'
+                          : stop.type === 'new_site' ? '#f59e0b'
+                          : '#2563eb';
+        const markerRadius = (stop.type === 'origin' || stop.type === 'destination') ? 9 : 7;
         L.circleMarker([stop.lat, stop.lon], {{
-          radius:      isStation ? 7 : 9,
-          fillColor:   isStation ? '#dc2626' : '#2563eb',
+          radius:      markerRadius,
+          fillColor:   markerColor,
           color:       '#ffffff',
           weight:      2,
           fillOpacity: 0.9

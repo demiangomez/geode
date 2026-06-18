@@ -1,5 +1,5 @@
 # GeoDE User Manual
-## Geodesy Database Engine - Complete Operations Guide
+## Geodetic Database Engine - Complete Operations Guide
 
 ### Version 1.0
 
