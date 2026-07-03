@@ -212,9 +212,8 @@ class EtmStacker:
         try:
             if etm is None:
                 tqdm.write(f'Estimating etm for {network_code}.{station_code}')
-                config = EtmConfig(network_code, station_code, cnn=cnn)
+                config = self._apply_config(network_code, station_code, cnn)
                 config.solution.solution_type = SolutionType.PPP
-                config = self._apply_config(config, cnn)
                 etm = EtmEngine(config, cnn=cnn, silent=True)
 
             # Apply mechanical jump prefit before running the adjustment
@@ -305,18 +304,20 @@ class EtmStacker:
 
         return etm
 
-    def _apply_config(self, config: EtmConfig, cnn: Cnn):
-        config.validation.max_condition_number = self.config.max_condition_number
-        config.modeling.check_jump_collisions = False  # turn off jump collision check. Add all jumps.
+    def _apply_config(self, network_code: str, station_code: str, cnn: Cnn) -> EtmConfig:
         # Set an impossibly high magnitude limit so the ScoreTable SQL "mag >= limit" branch
         # never fires. Only events in earthquakes_cherry_picked (the pre-computed canonical
         # list) will be admitted via the "id IN cherry_picked" branch of the query.
-        config.modeling.earthquake_magnitude_limit = 10
-        config.modeling.post_seismic_back_lim = self.config.post_seismic_back_lim
+        # Passed at construction (rather than set afterwards + refresh_config) so the
+        # earthquake jump query in EtmConfig.__init__ runs once with the final values.
+        config = EtmConfig(network_code, station_code, cnn=cnn,
+                           post_seismic_back_lim=self.config.post_seismic_back_lim,
+                           earthquake_magnitude_limit=10,
+                           earthquakes_cherry_picked=self.config.earthquakes_cherry_picked)
+        config.validation.max_condition_number = self.config.max_condition_number
+        config.modeling.check_jump_collisions = False  # turn off jump collision check. Add all jumps.
         config.modeling.relaxation = self.config.relaxation
-        config.modeling.earthquakes_cherry_picked = self.config.earthquakes_cherry_picked
         config.plotting_config.plot_show_outliers = True
-        config.refresh_config(cnn)
 
         # @todo: implement a permanent fix for this. The clean solution is Option A:
         #   add a `force_relaxation: bool = False` flag to ModelingParameters
@@ -324,10 +325,11 @@ class EtmStacker:
         #   (jumps.py) to skip the user_jumps lookup entirely. This would make the
         #   stacker's relaxation authoritative without mutating the loaded user_jumps.
         #
-        # Workaround: refresh_config reloads per-jump relaxation from the DB via
-        # user_jumps, which silently overrides config.modeling.relaxation in
-        # JumpFunction._setup_relaxation(). Overwrite the relaxation field on all
-        # geophysical user_jumps here so the stacker's values are actually used.
+        # Workaround: _load_jump_config (run during EtmConfig construction above) reloads
+        # per-jump relaxation from the DB via user_jumps, which silently overrides
+        # config.modeling.relaxation in JumpFunction._setup_relaxation(). Overwrite the
+        # relaxation field on all geophysical user_jumps here so the stacker's values
+        # are actually used.
         for jp in config.modeling.user_jumps:
             if jp.jump_type >= JumpType.COSEISMIC_JUMP_DECAY:
                 jp.relaxation = self.config.relaxation.copy()
@@ -1191,8 +1193,7 @@ class EtmStacker:
 
         tqdm.write(f'Estimating constrained etm for {stationID(stn)}')
 
-        config = EtmConfig(stn.network_code, stn.station_code, cnn=cnn)
-        config = self._apply_config(config, cnn)
+        config = self._apply_config(stn.network_code, stn.station_code, cnn)
         config.solution.solution_type = SolutionType.PPP
         config.modeling.least_squares_strategy.constraints = stn.etm_constraints
         # add the prefit models that got removed from the ETM when we did the stack

@@ -30,7 +30,10 @@ class EtmConfig:
                  cnn: Cnn = None,
                  solution_options: SolutionOptions = None,
                  json_file: Union[str, dict] = None,
-                 silent: bool = False):
+                 silent: bool = False,
+                 post_seismic_back_lim: Optional[Union[int, Date]] = None,
+                 earthquake_magnitude_limit: Optional[float] = None,
+                 earthquakes_cherry_picked: Optional[List[str]] = None):
         """
         Initialize ETM configuration
 
@@ -40,6 +43,11 @@ class EtmConfig:
             network_code: Station network code (if loading from database)
             station_code: Station code (if loading from database)
             json_file: either a json file path or a json dict or string to load data from
+            post_seismic_back_lim: overrides ModelingParameters default; applied before
+                the database load so the earthquake jump query (ScoreTable) runs once
+                with the final value instead of needing a later refresh_config() reload
+            earthquake_magnitude_limit: same as above, for the s-score magnitude cutoff
+            earthquakes_cherry_picked: same as above, for the forced-event id list
         """
         setup_etm_logging(level=logging.CRITICAL if silent else logging.INFO)
 
@@ -56,6 +64,13 @@ class EtmConfig:
             self.metadata = StationMetadata()
         else:
             self.load_from_json(json_file)
+
+        if post_seismic_back_lim is not None:
+            self.modeling.post_seismic_back_lim = post_seismic_back_lim
+        if earthquake_magnitude_limit is not None:
+            self.modeling.earthquake_magnitude_limit = earthquake_magnitude_limit
+        if earthquakes_cherry_picked is not None:
+            self.modeling.earthquakes_cherry_picked = earthquakes_cherry_picked
 
         # Language support
         self.language = 'eng'

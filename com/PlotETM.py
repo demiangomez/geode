@@ -151,12 +151,24 @@ def process_etm_station(stn, args_dict, from_kmz):
             solution_options.filename      = fname
             no_save_db = True
 
+        psb = args_dict['post_seismic_back']
+        if isinstance(psb, str) and any(c in psb for c in ('_', '.', '/')):
+            time_back = process_date_str(psb)
+        else:
+            time_back = int(psb) * 365
+
         if from_kmz:
             config = EtmConfig(net, stnm, json_file=stn,
-                               solution_options=solution_options)
+                               solution_options=solution_options,
+                               post_seismic_back_lim=time_back,
+                               earthquake_magnitude_limit=args_dict['s_score_mag_limit'],
+                               earthquakes_cherry_picked=args_dict['force_earthquakes'])
         else:
             config = EtmConfig(net, stnm, cnn=cnn,
-                               solution_options=solution_options)
+                               solution_options=solution_options,
+                               post_seismic_back_lim=time_back,
+                               earthquake_magnitude_limit=args_dict['s_score_mag_limit'],
+                               earthquakes_cherry_picked=args_dict['force_earthquakes'])
 
         config.language = args_dict['language'].lower()
         config.plotting_config.plot_time_window = args_dict['_plot_dates']
@@ -270,18 +282,6 @@ def process_etm_station(stn, args_dict, from_kmz):
         os.makedirs(args_dict['directory'], exist_ok=True)
 
         config.validation.max_condition_number = args_dict['max_condition_number']
-
-        psb = args_dict['post_seismic_back']
-        if isinstance(psb, str) and any(c in psb for c in ('_', '.', '/')):
-            time_back = process_date_str(psb)
-        else:
-            time_back = int(psb) * 365
-        config.modeling.post_seismic_back_lim        = time_back
-        config.modeling.earthquake_magnitude_limit    = args_dict['s_score_mag_limit']
-        config.modeling.earthquakes_cherry_picked     = args_dict['force_earthquakes']
-
-        if not from_kmz:
-            config.refresh_config(cnn)
 
         # --- custom relaxations (inlined from process_custom_relaxations) ---
         events, cur_event, cur_relax = [], None, []
