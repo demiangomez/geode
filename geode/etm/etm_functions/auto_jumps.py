@@ -33,10 +33,19 @@ class AutoJumps:
         logger.info('Detecting jumps using method ' + method)
 
     def detect(self, time_vector: np.ndarray, observations: List[np.ndarray]):
+        # `observations` come from SolutionData.transform_to_local(), which already
+        # applies the fit-window mask, so it can be shorter than the full time_vector
+        # (the caller passes the full vector so JumpFunction design matrices built
+        # elsewhere stay consistently shaped). Window time_vector the same way here
+        # so the break-detection regression sees matching lengths, but keep the full
+        # time_vector around to build the resulting JumpFunction objects.
+        mask = self.config.modeling.get_observation_mask(time_vector)
+        windowed_time_vector = time_vector[mask]
+
         if self.method.lower() == 'angry':
-            self._angry_search(time_vector, observations)
+            self._angry_search(windowed_time_vector, observations, time_vector)
         elif self.method.lower() == 'dbscan':
-            self._dbscan(time_vector, observations)
+            self._dbscan(windowed_time_vector, observations, time_vector)
         else:
             raise TypeError('auto detection method not implemented')
 
@@ -44,6 +53,7 @@ class AutoJumps:
 
     def _angry_search(self, time_vector: np.ndarray,
                       observations: List[np.ndarray],
+                      full_time_vector: np.ndarray,
                       ftest: float = 300.):
         # Initialize
         I = []
@@ -106,12 +116,13 @@ class AutoJumps:
             self.jumps.append(JumpFunction(
                 self.config,
                 metadata='auto-jump',
-                time_vector=time_vector,
+                time_vector=full_time_vector,
                 date=Date(fyear=j),
                 jump_type=JumpType.AUTO_DETECTED
             ))
 
-    def _dbscan(self, time_vector: np.ndarray, observations: List[np.ndarray], eps_value: float = 0.003):
+    def _dbscan(self, time_vector: np.ndarray, observations: List[np.ndarray],
+               full_time_vector: np.ndarray, eps_value: float = 0.003):
         # scale the time to match the scale of the gnss positions
         time_scaled = (time_vector - time_vector.min()) / (1 / 365.25) * 0.0001
 
@@ -136,7 +147,7 @@ class AutoJumps:
             self.jumps.append(JumpFunction(
                 self.config,
                 metadata='auto-jump',
-                time_vector=time_vector,
+                time_vector=full_time_vector,
                 date=Date(fyear=j),
                 jump_type=JumpType.AUTO_DETECTED
             ))
