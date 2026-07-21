@@ -54,7 +54,7 @@ from geode.Utils import (add_version_argument,
 
 error_message = False
 
-ERRORS_LOG = 'errors_pyScanArchive.log'
+ERRORS_LOG = 'errors_ScanArchive.log'
 
 
 class Encoder(json.JSONEncoder):

@@ -375,7 +375,7 @@ class EtmEngine:
                                                                    'parameters', 'covariance_matrix',
                                                                    'lat', 'lon', 'params', 'sigmas',
                                                                    'periodogram_frequencies',
-                                                                   'periodogram_amplitudes']))
+                                                                   'periodogram_power']))
 
             #binary_data = bson.encode(etm_dump, cls)
             #with open(filename + '.bson', 'wb') as f:

@@ -38,6 +38,26 @@ def haversine_km(a: dict, b: dict) -> float:
     return R * 2 * math.asin(math.sqrt(h))
 
 
+def _resolve_time_overrides(raw_overrides: dict) -> dict:
+    """Normalize a station_time_overrides mapping to lowercase, stripped keys."""
+    return {str(k).strip().lower(): int(v) for k, v in (raw_overrides or {}).items()}
+
+
+def _time_for_stop(stop: dict, default_minutes: int, overrides: dict) -> int:
+    """
+    Look up the time-on-site (minutes) for a single stop.
+    Tries the stop's station id first (e.g. "net.stnm"), then its display
+    name (new sites have no id), falling back to default_minutes.
+    """
+    stop_id = stop.get('id')
+    if stop_id and str(stop_id).strip().lower() in overrides:
+        return overrides[str(stop_id).strip().lower()]
+    name = stop.get('name')
+    if name and str(name).strip().lower() in overrides:
+        return overrides[str(name).strip().lower()]
+    return default_minutes
+
+
 def order_stations_tsp(origin: dict, stations: list) -> list:
     """
     Nearest-neighbour greedy TSP starting from *origin*.
@@ -135,6 +155,9 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
     params : dict
         Validated config values. Required keys:
         start_date, day_start, hard_stop, time_on_site_minutes, fuel_cost_per_km.
+        Optional keys: station_time_overrides (dict of station id/name -> minutes,
+        takes precedence over time_on_site_minutes for matching stops),
+        num_participants (int, default 1), per_diem_cost_per_day (float, default 0.0).
     ordered_waypoints : list of dicts
         [origin] + [stations in TSP order] + [destination].
         Each dict: {'name', 'lat', 'lon', 'type'}.
@@ -151,7 +174,8 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
     start_date    = datetime.strptime(params['start_date'], '%Y-%m-%d').date()
     day_start_hm  = [int(x) for x in params['day_start'].split(':')]
     hard_stop_hm  = [int(x) for x in params['hard_stop'].split(':')]
-    time_on_site  = int(params['time_on_site_minutes'])
+    default_time_on_site = int(params['time_on_site_minutes'])
+    time_overrides       = _resolve_time_overrides(params.get('station_time_overrides'))
     fuel_per_km   = float(params.get('fuel_cost_per_km', 0.0))
     daily_minutes = (hard_stop_hm[0] * 60 + hard_stop_hm[1]) - (day_start_hm[0] * 60 + day_start_hm[1])
 
@@ -321,7 +345,8 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
             continue
 
         # ── GNSS station ──────────────────────────────────────────────────────
-        departure = arrival + timedelta(minutes=time_on_site)
+        time_on_site = _time_for_stop(dest_wp, default_time_on_site, time_overrides)
+        departure    = arrival + timedelta(minutes=time_on_site)
 
         if departure > hard_stop_dt:
             # Work cannot finish today.  Record what gets done today, then
@@ -392,18 +417,19 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
 
         # Work fits within the day — record station normally.
         current_day_stops.append({
-            'type':              dest_wp['type'],
-            'name':              dest_wp['name'],
-            'code':              dest_wp.get('id', ''),
-            'lat':               dest_wp['lat'],
-            'lon':               dest_wp['lon'],
-            'arrival':           _hhmm_day(arrival),
-            'departure':         _hhmm_day(departure),
-            'leg_km':            round(leg_km, 2),
-            'leg_drive_minutes': leg['drive_minutes'],
-            'leg_fuel_cost':     leg_fuel,
-            'warning':           None,
-            'geometry':          leg['geometry'],
+            'type':                 dest_wp['type'],
+            'name':                 dest_wp['name'],
+            'code':                 dest_wp.get('id', ''),
+            'lat':                  dest_wp['lat'],
+            'lon':                  dest_wp['lon'],
+            'arrival':              _hhmm_day(arrival),
+            'departure':            _hhmm_day(departure),
+            'leg_km':               round(leg_km, 2),
+            'leg_drive_minutes':    leg['drive_minutes'],
+            'leg_fuel_cost':        leg_fuel,
+            'time_on_site_minutes': time_on_site,
+            'warning':              None,
+            'geometry':             leg['geometry'],
         })
         day_km        += leg_km
         day_drive_min += leg['drive_minutes']
@@ -424,9 +450,13 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
         if s['type'] in ('station', 'new_site') and s['arrival'] is not None
     )
 
-    n_nights         = max(len(days) - 1, 0)   # last day you sleep at home
+    n_nights          = max(len(days) - 1, 0)   # last day you sleep at home
+    num_participants  = int(params.get('num_participants', 1))
     lodging_per_night = float(params.get('lodging_cost_per_night', 0.0))
-    total_lodging    = round(lodging_per_night * n_nights, 2)
+    total_lodging     = round(lodging_per_night * n_nights * num_participants, 2)
+
+    per_diem_per_day  = float(params.get('per_diem_cost_per_day', 0.0))
+    total_per_diem    = round(per_diem_per_day * len(days) * num_participants, 2)
 
     return {
         'days': days,
@@ -435,7 +465,9 @@ def compute_plan(params: dict, ordered_waypoints: list, legs: list) -> dict:
             'total_drive_minutes':  total_min,
             'total_fuel_cost':      round(total_fuel, 2),
             'total_lodging_cost':   total_lodging,
+            'total_per_diem_cost':  total_per_diem,
             'total_days':           len(days),
             'total_stations':       total_stns,
+            'num_participants':     num_participants,
         },
     }

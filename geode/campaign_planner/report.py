@@ -223,14 +223,17 @@ def _cost_summary_html(plan: dict, config: dict) -> str:
     summary           = plan['summary']
     fuel_per_km       = float(config.get('fuel_cost_per_km', 0.0))
     lodging_per_night = float(config.get('lodging_cost_per_night', 0.0))
+    per_diem_per_day  = float(config.get('per_diem_cost_per_day', 0.0))
     time_on_site_min  = int(config.get('time_on_site_minutes', 120))
     n_stations        = summary['total_stations']
     n_nights          = max(summary['total_days'] - 1, 0)
+    n_participants    = summary.get('num_participants', 1)
     total_km          = summary['total_km']
     fuel_cost         = summary['total_fuel_cost']
     lodging_cost      = summary['total_lodging_cost']
+    per_diem_cost     = summary.get('total_per_diem_cost', 0.0)
     total_on_site_min = n_stations * time_on_site_min
-    grand_total       = fuel_cost + lodging_cost
+    grand_total       = fuel_cost + lodging_cost + per_diem_cost
 
     def _row(label, qty, rate, amount):
         amt = f'${amount:,.2f}' if amount is not None else '&mdash;'
@@ -240,6 +243,8 @@ def _cost_summary_html(plan: dict, config: dict) -> str:
                 f'<td class="center">{rate}</td>'
                 f'<td class="right">{amt}</td>'
                 f'</tr>')
+
+    participants_label = f'{n_participants} participant{"s" if n_participants != 1 else ""}'
 
     rows = [
         _row('Driving distance',
@@ -264,13 +269,20 @@ def _cost_summary_html(plan: dict, config: dict) -> str:
     nights_label = f'{n_nights} night{"s" if n_nights != 1 else ""}'
     if lodging_per_night:
         rows.append(_row('Lodging',
-                         nights_label,
-                         f'${lodging_per_night:.2f}/night',
+                         f'{nights_label} &times; {participants_label}',
+                         f'${lodging_per_night:.2f}/person/night',
                          lodging_cost))
     else:
         rows.append(_row('Nights away', nights_label, '&mdash;', None))
 
-    if fuel_per_km or lodging_per_night:
+    if per_diem_per_day:
+        days_label = f'{summary["total_days"]} day{"s" if summary["total_days"] != 1 else ""}'
+        rows.append(_row('Per diem',
+                         f'{days_label} &times; {participants_label}',
+                         f'${per_diem_per_day:.2f}/person/day',
+                         per_diem_cost))
+
+    if fuel_per_km or lodging_per_night or per_diem_per_day:
         rows.append(
             f'<tr class="totals-row">'
             f'<td colspan="3">Total estimated cost</td>'
@@ -309,6 +321,7 @@ def generate_html(plan: dict, config: dict) -> str:
     summary         = plan['summary']
     fuel_per_km     = float(config.get('fuel_cost_per_km', 0.0))
     lodging_per_night = float(config.get('lodging_cost_per_night', 0.0))
+    per_diem_per_day  = float(config.get('per_diem_cost_per_day', 0.0))
     start_date      = config['start_date']
     end_date_dt     = (datetime.strptime(start_date, '%Y-%m-%d')
                        + timedelta(days=summary['total_days'] - 1))
@@ -339,6 +352,10 @@ def generate_html(plan: dict, config: dict) -> str:
                    f'<div class="box"><div class="box-label">Lodging</div>'
                    f'<div class="box-value">N/A</div></div>')
 
+    per_diem_box = (f'<div class="box"><div class="box-label">Per diem</div>'
+                    f'<div class="box-value">${summary.get("total_per_diem_cost", 0.0):.2f}</div></div>'
+                    if per_diem_per_day else '')
+
     summary_bar = f'''
 <div class="summary-bar">
   <div class="box">
@@ -351,6 +368,7 @@ def generate_html(plan: dict, config: dict) -> str:
   </div>
   {fuel_box}
   {lodging_box}
+  {per_diem_box}
   <div class="box">
     <div class="box-label">Days</div>
     <div class="box-value">{summary["total_days"]}</div>
@@ -359,18 +377,24 @@ def generate_html(plan: dict, config: dict) -> str:
     <div class="box-label">Stations</div>
     <div class="box-value">{summary["total_stations"]}</div>
   </div>
+  <div class="box">
+    <div class="box-label">Participants</div>
+    <div class="box-value">{summary.get("num_participants", 1)}</div>
+  </div>
 </div>'''
 
     day_sections      = _day_sections(plan, fuel_per_km)
     cost_summary      = _cost_summary_html(plan, config)
 
     # Grand totals footer
-    fuel_total_str    = (f'${summary["total_fuel_cost"]:.2f}' if fuel_per_km else 'N/A')
-    lodging_total_str = (f'${summary["total_lodging_cost"]:.2f}' if lodging_per_night else 'N/A')
+    fuel_total_str     = (f'${summary["total_fuel_cost"]:.2f}' if fuel_per_km else 'N/A')
+    lodging_total_str  = (f'${summary["total_lodging_cost"]:.2f}' if lodging_per_night else 'N/A')
+    per_diem_total_str = f'${summary.get("total_per_diem_cost", 0.0):.2f}'
     footer_totals  = (f'{summary["total_km"]:,.0f} km &nbsp;·&nbsp; '
                       f'{_fmt_minutes(summary["total_drive_minutes"])} driving &nbsp;·&nbsp; '
                       f'{fuel_total_str} fuel &nbsp;·&nbsp; '
-                      f'{lodging_total_str} lodging')
+                      f'{lodging_total_str} lodging'
+                      + (f' &nbsp;·&nbsp; {per_diem_total_str} per diem' if per_diem_per_day else ''))
 
     plan_json = json.dumps(plan, ensure_ascii=False)
 

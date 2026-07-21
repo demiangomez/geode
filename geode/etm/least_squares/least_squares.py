@@ -426,7 +426,7 @@ class RobustLeastSquares(AdjustmentStrategy):
         si, fvec, pxx = self.compute_plomb(results.residuals[results.outlier_flags], time_vector_mjd[results.outlier_flags])
         results.spectral_index_random_noise  = si
         results.periodogram_frequencies      = fvec
-        results.periodogram_amplitudes       = pxx
+        results.periodogram_power            = pxx
         logger.info(f'Spectral index of residuals: {si:.4f}')
 
         # declare the origin of the fit
@@ -500,7 +500,7 @@ class LeastSquaresCollocation(AdjustmentStrategy):
         si, fvec, pxx = self.compute_plomb(results.residuals[results.outlier_flags], time_vector_mjd[results.outlier_flags])
         results.spectral_index_random_noise  = si
         results.periodogram_frequencies      = fvec
-        results.periodogram_amplitudes       = pxx
+        results.periodogram_power            = pxx
         logger.info(f'Spectral index of residuals: {si:.4f}')
 
         si, _, _ = self.compute_plomb(results.stochastic_signal, time_vector_cont_mjd)

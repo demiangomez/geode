@@ -44,7 +44,7 @@ class AdjustmentResults(BaseDataClass):
     spectral_index_random_noise: float = 0
     spectral_index_stochastic_noise: float = 0
     periodogram_frequencies: np.ndarray = field(default_factory=lambda: np.array([]))
-    periodogram_amplitudes: np.ndarray = field(default_factory=lambda: np.array([]))
+    periodogram_power: np.ndarray = field(default_factory=lambda: np.array([]))
     variance_factor: float = 0
     wrms: float = 0
     obs_sigmas: np.ndarray = field(default_factory=lambda: np.array([]))

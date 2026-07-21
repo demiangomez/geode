@@ -36,27 +36,12 @@ import json
 import logging
 import os
 import sys
-import time
 from pathlib import Path
 
-from geode import dbConnection
-from geode.Utils import add_version_argument, process_stnlist, station_list_help
-from geode.campaign_planner import services, report
-
-# ── Defaults ──────────────────────────────────────────────────────────────────
-
-DEFAULT_CONFIG = {
-    'time_on_site_minutes':   120,
-    'day_start':              '08:00',
-    'hard_stop':              '20:00',
-    'fuel_cost_per_km':       0.0,
-    'lodging_cost_per_night': 70.0,
-    'start_date':             None,
-    'output_file':            'campaign_plan.html',
-    'new_sites':              [],
-}
-
-_REQUIRED = ('start_city', 'end_city', 'start_date')
+from geode.Utils import add_version_argument, station_list_help
+from geode.campaign_planner.planner import (
+    DEFAULT_CONFIG, CampaignPlannerError, plan_campaign,
+)
 
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -127,6 +112,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help='Time spent at each station in minutes (default: 120).',
     )
     parser.add_argument(
+        '--station-time', metavar='ID=MINUTES', nargs='+',
+        help=(
+            'Override time-on-site for specific stops (repeatable).\n'
+            'ID is a station code (net.stnm) or a new site\'s display name,\n'
+            'matched case-insensitively. Takes precedence over --time-on-site\n'
+            'for the matching stop(s) only.\n'
+            'Example: --station-time arg.unsj=180 "Mendoza, Argentina=90"'
+        ),
+    )
+    parser.add_argument(
+        '--num-participants', metavar='N', type=int,
+        help='Number of people on the campaign (default: 1). Used to compute '
+             'per diem and lodging cost.',
+    )
+    parser.add_argument(
+        '--per-diem', metavar='COST_PER_PERSON_PER_DAY', type=float,
+        help='Per diem cost per person per day in local currency '
+             '(default: 0.0 = omit per diem column).',
+    )
+    parser.add_argument(
         '--day-start', metavar='HH:MM',
         help='Time to start driving each day (default: 08:00).',
     )
@@ -139,8 +144,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help='Fuel cost per km in local currency (default: 0.0 = omit fuel column).',
     )
     parser.add_argument(
-        '--lodging-cost', metavar='COST_PER_NIGHT', type=float,
-        help='Lodging cost per night in local currency (default: 70.0).',
+        '--lodging-cost', metavar='COST_PER_PERSON_PER_NIGHT', type=float,
+        help='Lodging cost per person per night in local currency (default: 70.0).',
     )
     parser.add_argument(
         '--start-date', metavar='YYYY-MM-DD',
@@ -154,10 +159,37 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _parse_station_time_overrides(entries: list) -> dict:
+    """
+    Parse ['id=minutes', ...] (as given to --station-time) into
+    {id: minutes}. Raises CampaignPlannerError on any malformed entry.
+    """
+    overrides = {}
+    for entry in entries:
+        if '=' not in entry:
+            raise CampaignPlannerError(
+                f'--station-time entry must be ID=MINUTES, got: {entry!r}')
+        key, _, val = entry.rpartition('=')
+        key = key.strip()
+        try:
+            minutes = int(val.strip())
+        except ValueError:
+            raise CampaignPlannerError(
+                f'--station-time minutes must be an integer, got: {entry!r}')
+        if minutes <= 0:
+            raise CampaignPlannerError(
+                f'--station-time minutes must be positive, got: {entry!r}')
+        overrides[key] = minutes
+    return overrides
+
+
 def _merge_config(args: argparse.Namespace) -> dict:
     """
     Build the final config dict.
     Priority: CLI switches  >  JSON file  >  DEFAULT_CONFIG
+
+    Raises CampaignPlannerError if the config file is missing/invalid or a
+    --station-time entry is malformed.
     """
     config = DEFAULT_CONFIG.copy()
 
@@ -165,14 +197,12 @@ def _merge_config(args: argparse.Namespace) -> dict:
     if args.config:
         cfg_path = args.config
         if not os.path.exists(cfg_path):
-            print(f' !! Config file not found: {cfg_path}', file=sys.stderr)
-            sys.exit(1)
+            raise CampaignPlannerError(f'Config file not found: {cfg_path}')
         try:
             with open(cfg_path, encoding='utf-8') as f:
                 json_cfg = json.load(f)
         except json.JSONDecodeError as exc:
-            print(f' !! Invalid JSON in {cfg_path}: {exc}', file=sys.stderr)
-            sys.exit(1)
+            raise CampaignPlannerError(f'Invalid JSON in {cfg_path}: {exc}') from exc
         # Merge (strip comment keys)
         config.update({k: v for k, v in json_cfg.items() if not k.startswith('_')})
 
@@ -186,157 +216,17 @@ def _merge_config(args: argparse.Namespace) -> dict:
     if args.hard_stop    is not None: config['hard_stop']             = args.hard_stop
     if args.fuel_cost    is not None: config['fuel_cost_per_km']      = args.fuel_cost
     if args.lodging_cost is not None: config['lodging_cost_per_night'] = args.lodging_cost
+    if args.num_participants is not None: config['num_participants']  = args.num_participants
+    if args.per_diem     is not None: config['per_diem_cost_per_day'] = args.per_diem
     if args.start_date   is not None: config['start_date']            = args.start_date
     if args.output       is not None: config['output_file']           = args.output
 
+    if args.station_time is not None:
+        overrides = dict(config.get('station_time_overrides') or {})
+        overrides.update(_parse_station_time_overrides(args.station_time))
+        config['station_time_overrides'] = overrides
+
     return config
-
-
-def _validate_config(config: dict) -> list:
-    """Return a list of error strings (empty = valid)."""
-    errors = []
-
-    for key in _REQUIRED:
-        if not config.get(key):
-            errors.append(f'Missing required field: {key!r}')
-
-    if not config.get('stations') and not config.get('new_sites'):
-        errors.append(
-            'At least one of "stations" or "new_sites" must be provided.'
-        )
-
-    for field in ('day_start', 'hard_stop'):
-        val = config.get(field, '')
-        parts = str(val).split(':')
-        if len(parts) != 2 or not all(p.isdigit() for p in parts):
-            errors.append(f'{field!r} must be HH:MM, got: {val!r}')
-
-    if config.get('start_date'):
-        try:
-            from datetime import datetime
-            datetime.strptime(config['start_date'], '%Y-%m-%d')
-        except ValueError:
-            errors.append(f'"start_date" must be YYYY-MM-DD, got: {config["start_date"]!r}')
-
-    return errors
-
-
-# ── Database helpers ──────────────────────────────────────────────────────────
-
-def _fetch_stations(cnn, station_specs: list) -> list:
-    """
-    Resolve station specifications via process_stnlist, then fetch coordinates.
-    Accepts any format supported by the GeoDE station parser (wildcards, country
-    codes, geographic filters, etc.).
-    Returns a list of dicts with name, lat, lon, type='station', id.
-    Exits cleanly if no stations resolve or none have valid coordinates.
-    """
-    resolved = process_stnlist(cnn, station_specs, print_summary=True)
-    if not resolved:
-        print(' !! No stations matched the provided specification.', file=sys.stderr)
-        sys.exit(1)
-
-    null_coords = []
-    result      = []
-
-    for stn in resolved:
-        nc = stn['NetworkCode']
-        sc = stn['StationCode']
-        rows = cnn.query_float(
-            f"""SELECT "StationName", lat, lon
-                FROM stations
-                WHERE "NetworkCode" = '{nc}' AND "StationCode" = '{sc}'""",
-            as_dict=True,
-        )
-        if not rows:
-            continue
-        row = rows[0]
-        if row.get('lat') is None or row.get('lon') is None:
-            null_coords.append(f'{nc}.{sc}')
-            continue
-        result.append({
-            'name': (str(row.get('StationName') or '') or f'{nc.upper()}.{sc.upper()}'),
-            'lat':  float(row['lat']),
-            'lon':  float(row['lon']),
-            'type': 'station',
-            'id':   f'{nc}.{sc}',
-        })
-
-    if null_coords:
-        print(f' !! Stations skipped (null coordinates): {", ".join(null_coords)}',
-              file=sys.stderr)
-    if not result:
-        print(' !! No stations with valid coordinates found.', file=sys.stderr)
-        sys.exit(1)
-
-    return result
-
-
-# ── New-site resolver ─────────────────────────────────────────────────────────
-
-def _resolve_new_sites(new_sites: list, logger) -> list:
-    """
-    Convert new_sites entries to waypoint dicts with type='new_site'.
-
-    Each entry may be:
-      str "lat,lon"               → direct coordinates, auto-generated name
-      str "City, Country"         → geocoded via Nominatim
-      dict {name, lat, lon}       → direct coordinates with custom name
-      dict {name, city}           → geocoded with custom name
-    """
-    result = []
-    for entry in new_sites:
-        if isinstance(entry, dict):
-            if 'lat' in entry and 'lon' in entry:
-                lat  = float(entry['lat'])
-                lon  = float(entry['lon'])
-                name = entry.get('name') or f'Site ({lat:.4f}°, {lon:.4f}°)'
-                result.append({'name': name, 'lat': lat, 'lon': lon,
-                                'type': 'new_site', 'id': None})
-            elif 'city' in entry:
-                city = entry['city']
-                logger.info('Geocoding new site: %s...', entry.get('name') or city)
-                try:
-                    loc = services.geocode_city(city)
-                except ValueError as exc:
-                    print(f' !! {exc}', file=sys.stderr)
-                    sys.exit(1)
-                result.append({'name': entry.get('name') or city,
-                                'lat': loc['lat'], 'lon': loc['lon'],
-                                'type': 'new_site', 'id': None})
-            else:
-                print(f' !! new_site entry missing both lat/lon and city: {entry}',
-                      file=sys.stderr)
-                sys.exit(1)
-        elif isinstance(entry, str):
-            # Try to parse as "lat,lon"
-            parts = entry.split(',')
-            if len(parts) == 2:
-                try:
-                    lat = float(parts[0].strip())
-                    lon = float(parts[1].strip())
-                    result.append({
-                        'name': f'Site ({lat:.4f}°, {lon:.4f}°)',
-                        'lat':  lat, 'lon': lon,
-                        'type': 'new_site', 'id': None,
-                    })
-                    continue
-                except ValueError:
-                    pass
-            # Geocode as place name
-            logger.info('Geocoding new site: %s...', entry)
-            try:
-                loc = services.geocode_city(entry)
-            except ValueError as exc:
-                print(f' !! {exc}', file=sys.stderr)
-                sys.exit(1)
-            result.append({'name': entry, 'lat': loc['lat'], 'lon': loc['lon'],
-                           'type': 'new_site', 'id': None})
-        else:
-            print(f' !! Unsupported new_site entry type: {type(entry).__name__}',
-                  file=sys.stderr)
-            sys.exit(1)
-    return result
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -346,96 +236,16 @@ def main():
     args   = parser.parse_args()
     logger = _setup_logging()
 
-    # ── Config ────────────────────────────────────────────────────────────────
-    config = _merge_config(args)
-    errors = _validate_config(config)
-    if errors:
-        for e in errors:
-            print(f' !! {e}', file=sys.stderr)
-        sys.exit(1)
-
-    # ── Database connection ───────────────────────────────────────────────────
     try:
-        cnn = dbConnection.Cnn('gnss_data.cfg', write_cfg_file=True)
-    except Exception as exc:
-        logger.debug('DB connection failed', exc_info=True)
-        print(f' !! Could not connect to database: {exc}', file=sys.stderr)
-        sys.exit(1)
-
-    # ── Fetch station coordinates from DB ─────────────────────────────────────
-    if config.get('stations'):
-        logger.info('Resolving station list from database...')
-        stations = _fetch_stations(cnn, config['stations'])
-    else:
-        stations = []
-
-    # ── Resolve new (planned) sites ───────────────────────────────────────────
-    new_site_waypoints = _resolve_new_sites(config.get('new_sites', []), logger)
-    all_stops = stations + new_site_waypoints
-
-    # ── Geocode start and end cities ──────────────────────────────────────────
-    logger.info('Geocoding %s...', config['start_city'])
-    try:
-        origin = services.geocode_city(config['start_city'])
-        origin['type'] = 'origin'
-    except ValueError as exc:
-        logger.debug('Geocoding failed', exc_info=True)
+        config = _merge_config(args)
+        result = plan_campaign(config, logger=logger)
+    except CampaignPlannerError as exc:
         print(f' !! {exc}', file=sys.stderr)
         sys.exit(1)
-
-    logger.info('Geocoding %s...', config['end_city'])
-    try:
-        destination = services.geocode_city(config['end_city'])
-        destination['type'] = 'destination'
-    except ValueError as exc:
-        logger.debug('Geocoding failed', exc_info=True)
-        print(f' !! {exc}', file=sys.stderr)
-        sys.exit(1)
-
-    # ── TSP ordering ─────────────────────────────────────────────────────────
-    logger.info('Ordering %d stop(s) using nearest-neighbour TSP...', len(all_stops))
-    ordered_stations  = services.order_stations_tsp(origin, all_stops)
-    ordered_waypoints = [origin] + ordered_stations + [destination]
-
-    # ── Fetch OSRM driving legs ───────────────────────────────────────────────
-    legs = []
-    n_legs = len(ordered_waypoints) - 1
-    for i in range(n_legs):
-        a = ordered_waypoints[i]
-        b = ordered_waypoints[i + 1]
-        logger.info('Routing: %s → %s (leg %d/%d)...', a['name'], b['name'], i + 1, n_legs)
-        try:
-            leg = services.fetch_osrm_leg(a, b)
-            legs.append(leg)
-        except RuntimeError as exc:
-            logger.debug('OSRM failed', exc_info=True)
-            print(f' !! {exc}', file=sys.stderr)
-            sys.exit(1)
-        if i < n_legs - 1:
-            time.sleep(0.5)   # respect public API rate limits
-
-    # ── Compute multi-day plan ────────────────────────────────────────────────
-    logger.info('Computing campaign schedule...')
-    try:
-        plan = services.compute_plan(config, ordered_waypoints, legs)
-    except RuntimeError as exc:
-        logger.debug('compute_plan failed', exc_info=True)
-        print(f' !! {exc}', file=sys.stderr)
-        sys.exit(1)
-
-    summary = plan['summary']
-    logger.info(
-        'Plan: %d day(s), %d station(s), %.1f km total.',
-        summary['total_days'], summary['total_stations'], summary['total_km'],
-    )
-
-    # ── Generate HTML report ──────────────────────────────────────────────────
-    logger.info('Generating HTML report...')
-    html = report.generate_html(plan, config)
 
     out_path = config['output_file']
     try:
-        Path(out_path).write_text(html, encoding='utf-8')
+        Path(out_path).write_text(result['html'], encoding='utf-8')
     except OSError as exc:
         logger.debug('Write failed', exc_info=True)
         print(f' !! Could not write output file "{out_path}": {exc}', file=sys.stderr)
