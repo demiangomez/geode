@@ -398,7 +398,9 @@ class JumpFunction(EtmFunction):
              override_time_vector: np.ndarray = None,
              override_params: np.ndarray = None,
              remove_postseismic = False):
-        """Implementation only removed jumps, not decay"""
+        """Evaluate jump signal. For COSEISMIC_JUMP_DECAY with remove_postseismic=False,
+        only the coseismic offset (step function column) is returned so that the postseismic
+        decay remains visible when removing jump offsets in visualization."""
 
         if (self.p.jump_type == JumpType.POSTSEISMIC_ONLY and not remove_postseismic or
                 np.all(np.isnan(self.p.params[component])) or
@@ -410,16 +412,13 @@ class JumpFunction(EtmFunction):
         else:
             design = self.design
 
-        if self.p.jump_type not in (JumpType.COSEISMIC_ONLY, JumpType.MECHANICAL_MANUAL,
-                                    JumpType.MECHANICAL_ANTENNA, JumpType.REFERENCE_FRAME, JumpType.UNDETERMINED):
-            # to return a 2d array
-            #design = design[:,[0]]
-            pass
+        params = override_params[component] if override_params is not None else self.p.params[component]
 
-        if override_params is not None:
-            return design @ override_params[component]
-        else:
-            return design @ self.p.params[component]
+        if self.p.jump_type == JumpType.COSEISMIC_JUMP_DECAY and not remove_postseismic:
+            # Only subtract the coseismic offset (step, column 0), leave postseismic decay visible
+            return design[:, 0] * params[0]
+
+        return design @ params
 
     def __lt__(self, other: 'JumpFunction') -> bool:
         """Enable sorting of user_jumps by date"""

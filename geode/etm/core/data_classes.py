@@ -59,7 +59,7 @@ class AdjustmentResults(BaseDataClass):
         # Convert lists to numpy arrays if needed
         array_fields = ['parameters', 'parameter_sigmas', 'residuals', 'empirical_covariance',
                         'covariance_function_params', 'stochastic_signal', 'obs_sigmas', 'covariance_matrix',
-                        'outlier_flags', 'periodogram_frequencies', 'periodogram_amplitudes']
+                        'outlier_flags', 'periodogram_frequencies', 'periodogram_power']
         for field_name in array_fields:
             value = getattr(self, field_name)
             if isinstance(value, list):
