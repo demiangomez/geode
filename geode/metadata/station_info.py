@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Union
 
@@ -23,6 +24,36 @@ from ..Utils import (
 )
 
 from ..metadata import igslog
+
+# Characters that NFKD decomposition cannot reduce to ASCII on their own.
+# Maps each to its closest ASCII equivalent (lower and upper case).
+_NON_DECOMPOSABLE = str.maketrans({
+    'ø': 'o', 'Ø': 'O',
+    'ł': 'l', 'Ł': 'L',
+    'ð': 'd', 'Ð': 'D',
+    'þ': 'th', 'Þ': 'Th',
+    'ß': 'ss',
+    'æ': 'ae', 'Æ': 'Ae',
+    'œ': 'oe', 'Œ': 'Oe',
+    'ĸ': 'k',
+    'ŋ': 'n', 'Ŋ': 'N',
+    'ĳ': 'ij', 'Ĳ': 'IJ',
+})
+
+
+def _to_ascii(text: str) -> str:
+    """Transliterate a Unicode string to its closest ASCII representation.
+
+    Accented letters (á, é, ü, ñ, …) are reduced to their base letter.
+    Characters that do not decompose under NFKD (ø, ł, ß, …) are replaced
+    via an explicit mapping table.  Any remaining non-ASCII bytes are dropped.
+    """
+    if not text:
+        return text
+    # Step 1: replace characters that NFKD cannot reduce
+    text = text.translate(_NON_DECOMPOSABLE)
+    # Step 2: decompose combining characters (accents, umlauts, …) and keep ASCII
+    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
 
 
 class StationInfoException(Exception):
@@ -333,25 +364,25 @@ class StationInfoRecord:
         return data
 
     def __str__(self) -> str:
-        """Format record as station info string."""
+        """Format record as station info string (ASCII only, for GAMIT compatibility)."""
         return self.RECORD_FORMAT.format(
-            (self.StationCode or '').upper(),
-            (self.StationName or ''),
+            _to_ascii((self.StationCode or '').upper()),
+            _to_ascii(self.StationName or ''),
             str(self.DateStart) if self.DateStart else '',
             str(self.DateEnd) if self.DateEnd else '',
             self.AntennaHeight,
-            str(self.HeightCode),
+            _to_ascii(str(self.HeightCode)),
             self.AntennaNorth,
             self.AntennaEast,
-            str(self.ReceiverCode),
-            str(self.ReceiverVers),
-            str(self.ReceiverFirmware),
-            str(self.ReceiverSerial),
-            str(self.AntennaCode),
-            str(self.RadomeCode),
-            str(self.AntennaSerial),
+            _to_ascii(str(self.ReceiverCode)),
+            _to_ascii(str(self.ReceiverVers)),
+            _to_ascii(str(self.ReceiverFirmware)),
+            _to_ascii(str(self.ReceiverSerial)),
+            _to_ascii(str(self.AntennaCode)),
+            _to_ascii(str(self.RadomeCode)),
+            _to_ascii(str(self.AntennaSerial)),
             self.AntennaDAZ,
-            str(self.Comments.replace('\n', ' ') if self.Comments else '')
+            _to_ascii(str(self.Comments.replace('\n', ' ') if self.Comments else ''))
         )
 
     def __repr__(self) -> str:
