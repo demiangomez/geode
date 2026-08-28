@@ -236,6 +236,13 @@ class EtmConfig:
             self.metadata.last_obs = Date(fyear=stn[0]['DateEnd'])
         self.metadata.max_dist = 20.0 if not stn[0]['max_dist'] else stn[0]['max_dist']
 
+        # DateStart/DateEnd drive the earthquake search window in _load_jump_config: if these
+        # are wrong (e.g. hand-edited in the stations table) the ETM will silently miss
+        # geophysical jumps outside the resulting window, so log them here for easy diagnosis
+        logger.info(f"Loaded station metadata for {self.get_station_id()}: "
+                    f"lat={self.metadata.lat[0]:.8f} lon={self.metadata.lon[0]:.8f} "
+                    f"DateStart={self.metadata.first_obs} DateEnd={self.metadata.last_obs}")
+
         # as part of the metadata, load the station info
         from ...metadata.station_info import StationInfo, StationInfoException
         try:
@@ -268,6 +275,9 @@ class EtmConfig:
                     ref_date = pyDate.Date(year=int(row['Year']), doy=int(row['DOY']))
                     self.modeling.reference_epoch = ref_date.fyear
 
+                logger.info(f"Loaded custom polynomial config from database: "
+                           f"terms={self.modeling.poly_terms} reference_epoch={self.modeling.reference_epoch}")
+
         except EtmException as e:
             logger.debug(f"No polynomial config in database: {e}")
 
@@ -289,6 +299,9 @@ class EtmConfig:
                 if isinstance(freqs, (list, tuple)):
                     self.modeling.frequencies = np.array(freqs)
                     self.modeling.periodic_status = PeriodicStatus.ADDED_BY_USER
+
+                    logger.info(f"Loaded custom periodic config from database: "
+                               f"periods={[round(1 / f, 2) for f in freqs]} days")
 
         except EtmException as e:
             logger.debug(f"No periodic config in database: {e}")
@@ -335,12 +348,18 @@ class EtmConfig:
             else:
                 self.modeling.user_jumps = []
 
+            logger.info(f"Loaded {len(self.modeling.user_jumps)} manual jump override(s) "
+                       f"from etm_params for soln={sol}")
+
             if isinstance(self.modeling.post_seismic_back_lim, Date):
                 sdate = self.modeling.post_seismic_back_lim
             else:
                 sdate = self.metadata.first_obs - self.modeling.post_seismic_back_lim
             # now earthquakes
             # no information yet of data dates, load everything that is possible
+            # NOTE: this window is anchored on metadata.first_obs/last_obs (stations.DateStart/
+            # DateEnd) -- if those are wrong, earthquakes outside the resulting window are
+            # dropped here and never reach JumpManager, regardless of magnitude_limit
             score = ScoreTable(cnn, self.network_code, self.station_code,
                                self.metadata.lat[0], self.metadata.lon[0],
                                sdate, self.metadata.last_obs,
@@ -348,6 +367,10 @@ class EtmConfig:
                                force_events=self.modeling.earthquakes_cherry_picked)
 
             self.modeling.earthquake_jumps = score.table
+
+            logger.info(f"Earthquake catalog window (post_seismic_back_lim={self.modeling.post_seismic_back_lim}): "
+                       f"{len(self.modeling.earthquake_jumps)} candidate earthquake(s) found "
+                       f"(magnitude_limit={self.modeling.earthquake_magnitude_limit})")
 
         except EtmException as e:
             logger.debug(f"No jump config in database: {e}")

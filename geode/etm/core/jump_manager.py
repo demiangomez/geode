@@ -71,12 +71,22 @@ class JumpManager:
     def _load_earthquake_jumps(self, time_vector: np.ndarray) -> None:
         """Load earthquake-based user_jumps from catalog"""
 
-        for eq in self.config.modeling.earthquake_jumps:
-            if isinstance(self.config.modeling.post_seismic_back_lim, Date):
-                sdate = self.config.modeling.post_seismic_back_lim
-            else:
-                sdate = self.date_min - self.config.modeling.post_seismic_back_lim
+        if isinstance(self.config.modeling.post_seismic_back_lim, Date):
+            sdate = self.config.modeling.post_seismic_back_lim
+        else:
+            sdate = self.date_min - self.config.modeling.post_seismic_back_lim
 
+        # this is the second (and final) filter applied to the catalog earthquakes already
+        # fetched into config.modeling.earthquake_jumps (see EtmConfig._load_jump_config): an
+        # earthquake only becomes a jump here if it falls within the actual observation window
+        # [date_min, date_max], or -- for M>=7 events -- within the wider [sdate, date_max]
+        # back-limit window. anything else is silently skipped, so log what gets through.
+        logger.info(f"Earthquake jump window: observations span {self.date_min} to {self.date_max}, "
+                   f"M>=7 back-limit {sdate}; evaluating {len(self.config.modeling.earthquake_jumps)} "
+                   f"catalog earthquake(s)")
+
+        added = 0
+        for eq in self.config.modeling.earthquake_jumps:
             if (self.date_min <= eq.date <= self.date_max or (sdate <= eq.date <= self.date_max
                     and eq.magnitude >= 7)):
 
@@ -93,12 +103,17 @@ class JumpManager:
                 )
 
                 self.add_jump(jump, self.config.modeling.check_jump_collisions)
+                added += 1
+
+        logger.info(f"Added {added} of {len(self.config.modeling.earthquake_jumps)} "
+                   f"catalog earthquake(s) to the jump table")
 
     def _load_mechanical_jumps(self, time_vector: np.ndarray) -> None:
         """Load mechanical user_jumps from station metadata and database"""
         # Load antenna changes from station info
         try:
             records = self.config.metadata.station_information
+            added = 0
 
             for i, record in enumerate(records[1:], 1):
                 prev_record = records[i - 1]
@@ -132,6 +147,10 @@ class JumpManager:
                         jump.remove_from_fit()
 
                     self.add_jump(jump)
+                    added += 1
+
+            logger.info(f"Added {added} mechanical (antenna/radome) jump(s) from station info "
+                       f"({len(records)} station info record(s) checked)")
 
         except Exception as e:
             logger.warning(f"Could not load station info for mechanical jumps: {e}")
@@ -271,6 +290,7 @@ class JumpManager:
         """Load manually specified user_jumps from database"""
         # Implementation for loading manual user_jumps
         jump_dates = [jump.date for jump in self.jumps]
+        added = 0
         for j in self.config.modeling.user_jumps:
             # if jump date not in table already, then add it
             if j.date not in jump_dates:
@@ -297,6 +317,10 @@ class JumpManager:
                     earthquake=earthquake
                 )
                 self.add_jump(jump)
+                added += 1
+
+        logger.info(f"Added {added} of {len(self.config.modeling.user_jumps)} "
+                   f"manual jump override(s) (rest already covered by an existing jump)")
 
     def validate_all_jumps(self) -> List[str]:
         """Validate all user_jumps and return issues"""

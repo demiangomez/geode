@@ -174,6 +174,8 @@ class EtmEngine:
 
         if config.solution.solution_type == SolutionType.DRA:
             # DRA, turn off models
+            logger.info('DRA solution type: disabling metadata/generic/earthquake/auto jump '
+                       'fitting and forcing auto_x/y/z to zero')
             self.config.modeling.fit_metadata_jumps = False
             self.config.modeling.fit_generic_jumps = False
             self.config.modeling.fit_earthquakes = False
