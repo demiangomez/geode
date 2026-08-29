@@ -881,7 +881,7 @@ def main():
                              "residuals -> show only residuals (remove all ETM functions); "
                              "missing -> show missing solution days as magenta lines in the plot "
                              "(only visible with -out activated); "
-                             "no-model -> plot time series without fitting a model (do not estimate parameters); "
+                             "no-model -> plot time series without plotting the fitted model (parameters are still estimated); "
                              "no-plots -> to use for querying, do not produce plots but estimate parameters")
 
     parser.add_argument('-dir', '--directory', type=str, default='production/',
