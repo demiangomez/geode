@@ -164,6 +164,9 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
                 fix_coordinate=None, solve_troposphere=105, copy_results=None, backward_substitution=False,
                 elevation_mask=5, code_only=False, save_residuals=False):
 
+    if isinstance(solve_troposphere, list):
+        solve_troposphere = solve_troposphere[0]
+
     # put the correct APR coordinates in the header.
     # stninfo = pyStationInfo.StationInfo(None, allow_empty=True)
     brdc = pyProducts.GetBrdcOrbits(brdc_path, rinexinfo.date, rinexinfo.rootdir)
