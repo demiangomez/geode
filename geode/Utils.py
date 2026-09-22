@@ -1083,9 +1083,14 @@ grdtab = [absolute_path]/gamit/gamit/bin/grdtab
 otlgrid = [absolute_path]/gamit/tables/otl.grid
 
 [ppp]
+# engine used by RunPPP(): 'gpspace' (default, NRCAN PPP) or 'pride' (PRIDE PPP-AR, pdp3)
+ppp_engine = gpspace
 ppp_path = [absolute_path]/PPP_NRCAN
 ppp_exe = [absolute_path]/PPP_NRCAN/source/ppp34613
 # ppp_remote_local are the locations, remote and local on each node, where the PPP software lives
+# pride_exe/pride_table are only required when ppp_engine = pride
+pride_exe = [absolute_path]/PRIDE-PPPAR/bin/pdp3
+pride_table = [absolute_path]/PRIDE-PPPAR/table
 institution = [institution]
 info = [Address, zip code, etc]
 # comma separated frames, defined with time interval (see below)

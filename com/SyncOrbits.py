@@ -150,20 +150,32 @@ def main():
                                     replace('{INT}', '[0-3][0-5][SM]').replace('{PER}', '01D') + 'CLK.CLK')
                     eop_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
                                     replace('{INT}', '01D').replace('{PER}', '07D') + '(?:ERP|ORB).ERP')
+                    # DDG: ATT.OBX / OSB.BIA are the satellite attitude and code/phase bias products
+                    # required by PRIDE PPP-AR. Only published in long-name (MGEX) format.
+                    obx_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
+                                    replace('{INT}', '[0-3][0-5][SM]').replace('{PER}', '01D') + 'ATT.OBX')
+                    bia_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
+                                    replace('{INT}', '01D').replace('{PER}', '01D') + 'OSB.BIA')
                 else:
-                    # short name IGS format
+                    # short name IGS format -- no short-name convention for OBX/BIA
                     sp3_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.sp3.Z'
                     clk_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk.Z'
                     eop_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk.Z'
+                    obx_filename = None
+                    bia_filename = None
 
-                tqdm.write(' -- Checking in %s and %s for sp3, clock, and erp files' % (opera_folder, repro_folder))
+                tqdm.write(' -- Checking in %s and %s for sp3, clock, erp, obx, and bia files' %
+                          (opera_folder, repro_folder))
 
                 for folder, ftp_list in [(opera_folder, opera_list), (repro_folder, repro_list)]:
                     # try to download SP3 files
                     try:
                         ftp.cwd(folder)
 
-                        for ext, recmp in [('SP3', sp3_filename), ('CLK', clk_filename), ('ERP', eop_filename)]:
+                        for ext, recmp in [('SP3', sp3_filename), ('CLK', clk_filename), ('ERP', eop_filename),
+                                          ('OBX', obx_filename), ('BIA', bia_filename)]:
+                            if recmp is None:
+                                continue
                             r = re.compile('(' + recmp + ')')
                             match = list(filter(r.match, ftp_list))
                             for file in match:
@@ -195,6 +207,50 @@ def main():
                                                   15).run_shell()
             except Exception as e:
                 tqdm.write(' -- BRDC ERROR: %s' % str(e))
+
+            # ##### now the GLONASS-only broadcast nav file, an optional PRIDE PPP-AR fallback #####
+            folder = "/pub/gps/data/daily/%s/%s/%sg" % (date.yyyy(), date.ddd(), date.yyyy()[2:])
+            tqdm.write(' -- Changing folder to ' + folder)
+            try:
+                ftp.cwd(folder)
+                ftp_list = set(ftp.nlst())
+            except Exception:
+                ftp_list = ()
+
+            try:
+                filename = 'brdc%s0.%sg' % (str(date.doy).zfill(3), str(date.year)[2:4])
+                for ext in ('.Z', '.gz'):
+                    ftp_filename = filename + ext
+                    if downloadIfMissing(ftp_list, ftp_filename, filename, brdc_archive, 'BRDG'):
+                        tqdm.write('  -> Download succeeded %s' % os.path.join(brdc_archive, ftp_filename))
+                        pyRunWithRetry.RunCommand('gunzip -f ' + os.path.join(brdc_archive, ftp_filename),
+                                                  15).run_shell()
+            except Exception as e:
+                tqdm.write(' -- BRDG ERROR: %s' % str(e))
+
+            # ##### now the merged multi-GNSS broadcast nav file (BRDM), needed by PRIDE PPP-AR #####
+            folder = "/pub/gps/data/daily/%s/%s/%sp" % (date.yyyy(), date.ddd(), date.yyyy()[2:])
+            tqdm.write(' -- Changing folder to ' + folder)
+            try:
+                ftp.cwd(folder)
+                ftp_list = set(ftp.nlst())
+            except Exception:
+                ftp_list = ()
+
+            try:
+                for prefix in ('BRDM00DLR_S_', 'BRDC00IGS_R_', 'BRDC00IGN_R_'):
+                    filename = prefix + date.yyyyddd(space=False) + '0000_01D_MN.rnx'
+                    for ext in ('.gz', '.Z'):
+                        ftp_filename = filename + ext
+                        if downloadIfMissing(ftp_list, ftp_filename, filename, brdc_archive, 'BRDM'):
+                            tqdm.write('  -> Download succeeded %s' % os.path.join(brdc_archive, ftp_filename))
+                            pyRunWithRetry.RunCommand('gunzip -f ' + os.path.join(brdc_archive, ftp_filename),
+                                                      15).run_shell()
+                            break
+                    if os.path.isfile(os.path.join(brdc_archive, filename)):
+                        break
+            except Exception as e:
+                tqdm.write(' -- BRDM ERROR: %s' % str(e))
 
             # ##### now the ionex files #########
             folder = "/pub/gps/products/ionex/%s/%s" % (date.yyyy(), date.ddd())

@@ -52,6 +52,22 @@ class pyBrdcException(pyProductsException):
     pass
 
 
+class pyBrdgException(pyProductsException):
+    pass
+
+
+class pyBrdmException(pyProductsException):
+    pass
+
+
+class pyObxException(pyProductsException):
+    pass
+
+
+class pyBiaException(pyProductsException):
+    pass
+
+
 class OrbitalProduct:
     def __init__(self, archive, date, filename, copyto, short_name=True):
         """
@@ -111,6 +127,9 @@ class OrbitalProduct:
                 snm = self.archive_filename[0:3].lower() + date.wwwwd() + cnt
                 # replace the filename with the short name version
                 self.filename = snm
+            else:
+                # keep the original long IGS filename as the destination file too
+                self.filename = self.archive_filename
         else:
             # short name version, do nothing
             self.filename = filename
@@ -137,7 +156,7 @@ class OrbitalProduct:
 
 class GetSp3Orbits(OrbitalProduct):
 
-    def __init__(self, sp3archive, date, sp3types, copyto, no_cleanup=False):
+    def __init__(self, sp3archive, date, sp3types, copyto, no_cleanup=False, short_name=True):
 
         # try both compressed and non-compressed sp3 files
         # loop through the types of sp3 files to try
@@ -158,7 +177,7 @@ class GetSp3Orbits(OrbitalProduct):
                 self.sp3_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.sp3'
 
             try:
-                OrbitalProduct.__init__(self, sp3archive, date, self.sp3_filename, copyto)
+                OrbitalProduct.__init__(self, sp3archive, date, self.sp3_filename, copyto, short_name)
                 self.sp3_path = self.file_path
                 self.type     = sp3type
                 break
@@ -202,7 +221,7 @@ class GetSp3Orbits(OrbitalProduct):
 
 class GetClkFile(OrbitalProduct):
 
-    def __init__(self, clk_archive, date, sp3types, copyto, no_cleanup=False):
+    def __init__(self, clk_archive, date, sp3types, copyto, no_cleanup=False, short_name=True):
 
         # try both compressed and non-compressed sp3 files
         # loop through the types of sp3 files to try
@@ -222,7 +241,7 @@ class GetClkFile(OrbitalProduct):
                 self.clk_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk'
 
             try:
-                OrbitalProduct.__init__(self, clk_archive, date, self.clk_filename, copyto)
+                OrbitalProduct.__init__(self, clk_archive, date, self.clk_filename, copyto, short_name)
                 self.clk_path = self.file_path
                 break
             except pyProductsExceptionUnreasonableDate:
@@ -253,7 +272,7 @@ class GetClkFile(OrbitalProduct):
 
 class GetEOP(OrbitalProduct):
 
-    def __init__(self, sp3archive, date, sp3types, copyto):
+    def __init__(self, sp3archive, date, sp3types, copyto, short_name=True):
 
         # try both compressed and non-compressed sp3 files
         # loop through the types of sp3 files to try
@@ -277,7 +296,7 @@ class GetEOP(OrbitalProduct):
                 self.eop_filename = sp3type.replace('{WWWWD}', week.wwww()) + '7.erp'
 
             try:
-                OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto)
+                OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto, short_name)
                 self.eop_path = self.file_path
                 self.type     = sp3type
                 break
@@ -333,6 +352,218 @@ class GetBrdcOrbits(OrbitalProduct):
             # delete files
             if os.path.isfile(self.brdc_path):
                 os.remove(self.brdc_path)
+
+    def __del__(self):
+        self.cleanup()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def __enter__(self):
+        return self
+
+
+class GetBrdgOrbits(OrbitalProduct):
+    """
+    Fetch the GLONASS-only broadcast navigation file (brdc<doy>0.<yy>g). Used as a fallback by
+    PRIDE PPP-AR (alongside the GPS-only brdc<doy>0.<yy>n from GetBrdcOrbits) when the pre-merged
+    multi-GNSS BRDM product (GetBrdmOrbits) isn't available for the requested date -- e.g. for any
+    date before the MGEX-era merged product existed (~2013). Optional: PRIDE runs single-GNSS
+    (GPS-only) if this is missing.
+    """
+
+    def __init__(self, brdc_archive, date, copyto, no_cleanup=False):
+
+        self.brdc_archive = brdc_archive
+        self.brdg_path    = None
+        self.no_cleanup   = no_cleanup
+        self.type         = 'brdg'
+
+        self.brdg_filename = 'brdc' + str(date.doy).zfill(3) + '0.' + str(date.year)[2:4] + 'g'
+
+        try:
+            OrbitalProduct.__init__(self, self.brdc_archive, date, self.brdg_filename, copyto)
+            self.brdg_path = self.file_path
+
+        except pyProductsExceptionUnreasonableDate:
+            raise
+        except pyProductsException:
+            raise pyBrdgException(
+                'Could not find the GLONASS broadcast ephemeris file for ' + str(date.year) + ' ' + str(date.doy))
+
+    def cleanup(self):
+        if self.brdg_path and not self.no_cleanup:
+            if os.path.isfile(self.brdg_path):
+                os.remove(self.brdg_path)
+
+    def __del__(self):
+        self.cleanup()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def __enter__(self):
+        return self
+
+
+class GetBrdmOrbits:
+    """
+    Fetch the merged multi-GNSS broadcast navigation file (long-name IGS/MGEX '..._MN.rnx' product)
+    required by PRIDE PPP-AR. Tries the DLR, IGS and IGN naming conventions used by CDDIS/IGS in
+    turn. PRIDE's own pdp3 script looks for any of these three literal filenames directly in the
+    RINEX processing directory (not a products/orbits subdirectory) and renames whichever it finds
+    to brdm<doy>0.<yy>p itself, so the local copy is kept under its original long name here.
+
+    Deliberately does not go through OrbitalProduct: that class's long-name branch assumes the IGS
+    AC+version+campaign convention (a digit at filename position 3) to pick the best version/
+    interval, which does not hold for this filename convention (a literal 4-character product id,
+    e.g. 'BRDM') and would raise trying to parse it as a version number.
+    """
+
+    BRDM_NAMES = ('BRDM00DLR_S_', 'BRDC00IGS_R_', 'BRDC00IGN_R_')
+
+    def __init__(self, archive, date, copyto, no_cleanup=False):
+
+        if date.gpsWeek < 0 or date > pyDate.Date(datetime=datetime.now()):
+            raise pyProductsExceptionUnreasonableDate('Broadcast navigation requested for an unreasonable date: '
+                                                      'week ' + str(date.gpsWeek) +
+                                                      ' day ' + str(date.gpsWeekDay) +
+                                                      ' (' + date.yyyyddd() + ')')
+
+        archive = archive.replace('$year',     str(date.year)) \
+                         .replace('$doy',      str(date.doy).zfill(3)) \
+                         .replace('$gpsweek',  str(date.gpsWeek).zfill(4)) \
+                         .replace('$gpswkday', str(date.gpsWeekDay))
+
+        self.brdm_path  = None
+        self.no_cleanup = no_cleanup
+
+        for prefix in self.BRDM_NAMES:
+            self.brdm_filename = prefix + date.yyyyddd(space=False) + '0000_01D_MN.rnx'
+
+            archive_file_path = os.path.join(archive, self.brdm_filename)
+            copy_path         = os.path.join(copyto,  self.brdm_filename)
+
+            if os.path.isfile(archive_file_path):
+                copyfile(archive_file_path, copy_path)
+                self.brdm_path = copy_path
+                break
+
+            for ext in ('.Z', '.gz', '.zip'):
+                if os.path.isfile(archive_file_path + ext):
+                    copyfile(archive_file_path + ext, copy_path + ext)
+                    pyRunWithRetry.RunCommand('gunzip -f ' + copy_path + ext, 15).run_shell()
+                    self.brdm_path = copy_path
+                    break
+
+            if self.brdm_path:
+                break
+
+        if self.brdm_path is None:
+            raise pyBrdmException('Could not find a valid merged multi-GNSS broadcast navigation '
+                                  '(*_MN.rnx) file for ' + date.yyyymmdd() +
+                                  ' using any of the known naming conventions (' +
+                                  ', '.join(self.BRDM_NAMES) + ')')
+
+    def cleanup(self):
+        if self.brdm_path and not self.no_cleanup:
+            file_try_remove(self.brdm_path)
+
+    def __del__(self):
+        self.cleanup()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def __enter__(self):
+        return self
+
+
+class GetObxFile(OrbitalProduct):
+    """
+    Fetch the satellite attitude quaternion product (ATT.OBX) required by PRIDE PPP-AR.
+    Only exists in long-name IGS/MGEX format -- no short-name convention is defined for it.
+    """
+
+    def __init__(self, archive, date, sp3types, copyto, no_cleanup=False):
+
+        self.obx_path   = None
+        self.no_cleanup = no_cleanup
+
+        for sp3type in sp3types:
+            if not sp3type[0].isupper():
+                # no short-name convention for attitude quaternion products
+                continue
+
+            self.obx_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
+                                 replace('{INT}', '[0-3][0-5][SM]').
+                                 replace('{PER}', '01D') + 'ATT.OBX')
+
+            try:
+                OrbitalProduct.__init__(self, archive, date, self.obx_filename, copyto, short_name=False)
+                self.obx_path = self.file_path
+                self.type     = sp3type
+                break
+            except pyProductsExceptionUnreasonableDate:
+                raise
+            except pyProductsException:
+                # if the file was not found, go to next
+                continue
+
+        if self.obx_path is None:
+            raise pyObxException('Could not find a valid satellite attitude (ATT.OBX) file for ' +
+                                 date.yyyymmdd() + ' using any of the provided sp3 types')
+
+    def cleanup(self):
+        if self.obx_path and not self.no_cleanup:
+            file_try_remove(self.obx_path)
+
+    def __del__(self):
+        self.cleanup()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def __enter__(self):
+        return self
+
+
+class GetBiaFile(OrbitalProduct):
+    """
+    Fetch the code/phase bias product (OSB.BIA) required by PRIDE PPP-AR for ambiguity resolution.
+    Only exists in long-name IGS/MGEX format -- no short-name convention is defined for it.
+    """
+
+    def __init__(self, archive, date, sp3types, copyto, no_cleanup=False):
+
+        self.bia_path   = None
+        self.no_cleanup = no_cleanup
+
+        for sp3type in sp3types:
+            if not sp3type[0].isupper():
+                continue
+
+            self.bia_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
+                                 replace('{INT}', '01D').
+                                 replace('{PER}', '01D') + 'OSB.BIA')
+
+            try:
+                OrbitalProduct.__init__(self, archive, date, self.bia_filename, copyto, short_name=False)
+                self.bia_path = self.file_path
+                self.type     = sp3type
+                break
+            except pyProductsExceptionUnreasonableDate:
+                raise
+            except pyProductsException:
+                continue
+
+        if self.bia_path is None:
+            raise pyBiaException('Could not find a valid code/phase bias (OSB.BIA) file for ' +
+                                 date.yyyymmdd() + ' using any of the provided sp3 types')
+
+    def cleanup(self):
+        if self.bia_path and not self.no_cleanup:
+            file_try_remove(self.bia_path)
 
     def __del__(self):
         self.cleanup()

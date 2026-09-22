@@ -68,7 +68,7 @@ def main():
                              'apriori coordinates as a list starting with the station name '
                              'and the X Y Z coordinates. For example: OSU1  595355.1776 -4856629.7091  4077991.9857')
 
-    parser.add_argument('-st', '--solve_troposphere', type=int, nargs=1, default=105,
+    parser.add_argument('-st', '--solve_troposphere', type=int, default=105,
                         choices=(1, 2, 3, 4, 5, 102, 103, 104, 105),
                         help='Solve for the tropospheric wet delay. Possible options are 1: do not solve, 2-5: solve '
                              'without gradients (number determine the random walk in mm/hr), +100: solve gradients.')
@@ -90,6 +90,11 @@ def main():
                         help="Save elevation-dependent phase residuals to [station]_[doy]_residuals.txt "
                              "in the current working directory. Uses BWD epochs if available, otherwise FWD.")
 
+    parser.add_argument('-pres', '--print_residuals', action='store_true', default=False,
+                        help="Print the elevation-dependent phase residuals table to the screen "
+                             "(elevation in degrees, mean residual in mm). Bins with no observations "
+                             "are skipped.")
+
     parser.add_argument('-nocfg', '--no_config_file', type=str, nargs=3,
                         metavar=('sp3_directory', 'sp3_types', 'brdc_directory'),
                         help='Do not attempt to open gnss_data.cfg. Append [sp3_directory], [sp3_types] '
@@ -98,6 +103,10 @@ def main():
                              'appropriate values (based on the date in the RINEX file). Grdtab and otl_grid should '
                              'have the standard names if -otl is invoked and ppp should be in the PATH '
                              '(with executable name = ppp).')
+
+    parser.add_argument('-eng', '--engine', type=str, choices=('gpspace', 'pride'), default=None,
+                        help='Override the ppp_engine set in gnss_data.cfg for this run, without editing the '
+                             'config file (e.g. to run both engines back to back and compare results).')
 
     add_version_argument(parser)
 
@@ -109,6 +118,9 @@ def main():
     # DDG: now there is no sp3altrn anymore
     # sp3altrn = Config.sp3altrn
     brdc_path = Config.brdc_path
+
+    if args.engine is not None:
+        options['ppp_engine'] = args.engine
 
     if args.no_config_file is not None:
         # options['ppp_path'] = ''
@@ -153,7 +165,7 @@ def main():
                     execute_ppp(rnx, args, stnm, options, sp3types, (), brdc_path, erase,
                                 not args.no_met, args.decimate, args.fix_coordinate, args.solve_troposphere,
                                 args.copy_results, args.backward_substitution, args.elevation_mask, args.code_only,
-                                args.residuals)
+                                args.residuals, args.print_residuals)
 
         except pyRinex.pyRinexException as e:
             print(str(e))
@@ -162,18 +174,24 @@ def main():
 
 def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, erase, apply_met=True, decimate=True,
                 fix_coordinate=None, solve_troposphere=105, copy_results=None, backward_substitution=False,
-                elevation_mask=5, code_only=False, save_residuals=False):
+                elevation_mask=5, code_only=False, save_residuals=False, print_residuals=False):
 
     # put the correct APR coordinates in the header.
     # stninfo = pyStationInfo.StationInfo(None, allow_empty=True)
     brdc = pyProducts.GetBrdcOrbits(brdc_path, rinexinfo.date, rinexinfo.rootdir)
 
     try:
-        # inflate the chi**2 limit
         rinexinfo.purge_comments()
-        rinexinfo.auto_coord(brdc = brdc, chi_limit = 1000)
-        stninfo = {}
-        rinexinfo.normalize_header(stninfo)  # empty dict: only applies the coordinate change
+
+        # DDG: auto_coord() bootstraps an approximate coordinate into the RINEX header via an extra
+        # code-only GPSPACE PPP run -- GPSPACE benefits from/needs that a-priori coordinate, but
+        # PRIDE computes its own initial position (SPP) regardless of the RINEX header, so skip this
+        # extra PPP run entirely when using PRIDE to save the processing time.
+        if str(options.get('ppp_engine', 'gpspace')).strip().lower() != 'pride':
+            # inflate the chi**2 limit
+            rinexinfo.auto_coord(brdc = brdc, chi_limit = 1000)
+            stninfo = {}
+            rinexinfo.normalize_header(stninfo)  # empty dict: only applies the coordinate change
     except pyRinex.pyRinexException as e:
         print(str(e))
 
@@ -234,18 +252,37 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
         if save_residuals and ppp.elevation_residuals is not None:
             fname = '%s_%i_%03i_residuals.txt' % (stnm, rinexinfo.date.year, rinexinfo.date.doy)
             numpy.savetxt(fname,
-                          numpy.column_stack((ppp.elevation_bins, ppp.elevation_residuals)),
-                          fmt=['%3i', '%14.6f'],
-                          header='elev_deg  mean_vcp_mm')
+                          numpy.column_stack((ppp.elevation_bins, ppp.elevation_residuals,
+                                              ppp.elevation_residuals_std)),
+                          fmt=['%3i', '%14.6f', '%14.6f'],
+                          header='elev_deg  mean_vcp_mm  std_vcp_mm')
             print('Residuals saved to %s' % fname)
+
+        if print_residuals:
+            if ppp.elevation_residuals is not None:
+                print('elev_deg  mean_vcp_mm    std_vcp_mm')
+                for deg, res, std in zip(ppp.elevation_bins, ppp.elevation_residuals,
+                                         ppp.elevation_residuals_std):
+                    if not numpy.isnan(res):
+                        print('%8i  %12.6f  %12.6f' % (deg, res, std))
+            else:
+                print('No elevation-binned residuals available for this engine/run.')
 
         if not ppp.check_phase_center(ppp.proc_parameters):
             print('WARNING: phase center parameters not found for declared antenna!')
 
         if not args.insert_sql:
-            print('%s %10.5f %13.4f %13.4f %13.4f %14.9f %14.9f %8.3f %8.3f %8.3f %8.3f %8.3f %8.3f' % (
-                stnm, rinexinfo.date.fyear, ppp.x, ppp.y, ppp.z, ppp.lat[0], ppp.lon[0], ppp.h[0],
-                ppp.clock_phase, ppp.clock_phase_sigma, ppp.phase_drift, ppp.phase_drift_sigma, ppp.clock_rms))
+            # DDG: clock_phase/phase_drift/clock_rms are GPSPACE's NRCAN-style receiver clock
+            # polynomial -- not reported by every engine (e.g. PRIDE leaves them None rather than
+            # fabricating a value), so only print them when the engine actually populated them.
+            if ppp.clock_phase is not None:
+                print('%s %10.5f %13.4f %13.4f %13.4f %14.9f %14.9f %8.3f %8.3f %8.3f %8.3f %8.3f %8.3f' % (
+                    stnm, rinexinfo.date.fyear, ppp.x, ppp.y, ppp.z, ppp.lat[0], ppp.lon[0], ppp.h[0],
+                    ppp.clock_phase, ppp.clock_phase_sigma, ppp.phase_drift, ppp.phase_drift_sigma,
+                    ppp.clock_rms))
+            else:
+                print('%s %10.5f %13.4f %13.4f %13.4f %14.9f %14.9f %8.3f' % (
+                    stnm, rinexinfo.date.fyear, ppp.x, ppp.y, ppp.z, ppp.lat[0], ppp.lon[0], ppp.h[0]))
         else:
             from geopy.geocoders import Nominatim
             import country_converter as coco

@@ -49,7 +49,10 @@ class ReadOptions:
                         'atx'                  : None,
                         'height_codes'         : None,
                         'ppp_exe'              : None,
-                        'ppp_remote_local'     : ()}
+                        'ppp_remote_local'     : (),
+                        'ppp_engine'           : 'gpspace',
+                        'pride_exe'            : None,
+                        'pride_table'          : None}
 
         config = configparser.ConfigParser()
 

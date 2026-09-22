@@ -973,7 +973,12 @@ class ReadRinex(RinexRecord):
 
         config = pyOptions.ReadOptions('gnss_data.cfg')  # type: pyOptions.ReadOptions
 
-        ppp = pyPPP.RunPPP(rnx, '', config.options, '', '', 0,
+        # DDG: code-only bootstrap coordinate is only implemented for GPSPACE -- force it here regardless
+        # of the configured ppp_engine (e.g. 'pride'), which does not support code-only PPP yet.
+        options = dict(config.options)
+        options['ppp_engine'] = 'gpspace'
+
+        ppp = pyPPP.RunPPP(rnx, '', options, '', '', 0,
                            clock_interpolation=True, strict=False, apply_met=False, observations=pyPPP.OBSERV_CODE_ONLY)
 
         ppp.exec_ppp()
