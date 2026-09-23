@@ -279,43 +279,54 @@ class GetEOP(OrbitalProduct):
         self.eop_path = None
 
         for sp3type in sp3types:
-            # determine the date of the first day of the week
-            # DDG: COD products give the ERP at the end of the week, IGS at the beginning
+            # determine the date of the reference day of the week used in the ERP filename.
+            # DDG: this has historically differed by AC (e.g. COD used to date its weekly ERP to
+            # the END of the week, gpsWeekDay=6, while IGS dates it to the START, gpsWeekDay=0) --
+            # but AC naming/dating conventions do change over time (e.g. COD's own long-name
+            # products now date it to gpsWeekDay=0, matching the modern/IGS-wide convention, for
+            # at least some date ranges). Try every known convention for this AC rather than
+            # assuming a single one, so both older and newer archives resolve correctly.
             if sp3type[0:3] == 'COD':
-                week = pyDate.Date(gpsWeek=date.gpsWeek, gpsWeekDay=6)
+                candidate_days = (0, 6)
             else:
-                week = pyDate.Date(gpsWeek=date.gpsWeek, gpsWeekDay=0)
+                candidate_days = (0,)
 
-            if sp3type[0].isupper():
-                # long name IGS format
-                self.eop_filename = (sp3type.replace('{YYYYDDD}', week.yyyyddd(space=False)).
-                                     replace('{INT}', '01D').
-                                     replace('{PER}', '07D') + '(?:ERP|ORB).ERP')
-            else:
-                # short name IGS format
-                self.eop_filename = sp3type.replace('{WWWWD}', week.wwww()) + '7.erp'
+            for gpsWeekDay in candidate_days:
+                week = pyDate.Date(gpsWeek=date.gpsWeek, gpsWeekDay=gpsWeekDay)
 
-            try:
-                OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto, short_name)
-                self.eop_path = self.file_path
-                self.type     = sp3type
+                if sp3type[0].isupper():
+                    # long name IGS format
+                    self.eop_filename = (sp3type.replace('{YYYYDDD}', week.yyyyddd(space=False)).
+                                         replace('{INT}', '01D').
+                                         replace('{PER}', '07D') + '(?:ERP|ORB).ERP')
+                else:
+                    # short name IGS format
+                    self.eop_filename = sp3type.replace('{WWWWD}', week.wwww()) + '7.erp'
+
+                try:
+                    OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto, short_name)
+                    self.eop_path = self.file_path
+                    self.type     = sp3type
+                    break
+
+                except pyProductsExceptionUnreasonableDate:
+                    raise
+
+                # rapid EOP files do not work in NRCAN PPP
+                # except pyProducts.pyProductsException:
+                #    # rapid orbits do not have 7.erp, try wwwwd.erp
+
+                #    self.eop_filename = sp3type + date.wwwwd() + '.erp'
+
+                #    pyProducts.OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto)
+                #    self.eop_path = self.file_path
+
+                except pyProductsException:
+                    # if the file was not found, try the next candidate day (or next sp3type)
+                    continue
+
+            if self.eop_path is not None:
                 break
-
-            except pyProductsExceptionUnreasonableDate:
-                raise
-
-            # rapid EOP files do not work in NRCAN PPP
-            # except pyProducts.pyProductsException:
-            #    # rapid orbits do not have 7.erp, try wwwwd.erp
-
-            #    self.eop_filename = sp3type + date.wwwwd() + '.erp'
-
-            #    pyProducts.OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto)
-            #    self.eop_path = self.file_path
-
-            except pyProductsException:
-                # if the file was not found, go to next
-                pass
 
         # if we get here and self.sp3_path is still none, then no type of sp3 file was found
         if self.eop_path is None:

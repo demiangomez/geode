@@ -226,6 +226,21 @@ class PPPEngine(PPPSpatialCheck, ABC):
         self.elevation_residuals     = None
         self.elevation_residuals_std = None
 
+        # DDG: 'FLOAT' or 'FIXED' (integer-fixed ambiguities). GPSPACE (ionosphere-free code+phase,
+        # no ambiguity resolution) is always FLOAT, so 'FLOAT' is left as the default here rather
+        # than set explicitly in that subclass; PRIDE overrides this in parse_summary() once it
+        # knows whether ambiguity resolution was actually attempted and succeeded (depends on
+        # ATT.OBX/OSB.BIA product availability, which varies per date/AC -- see PRIDE.get_orbits()).
+        self.solution_type = 'FLOAT'
+
+        # DDG: GNSS system letters (IGS convention: G/R/E/C/J) actually used in the solution. 'G'
+        # is only a fallback default for the (unlikely) case a subclass's own parsing finds
+        # nothing -- both engines override this once parsed: GPSPACE.parse_summary() (this build
+        # is not GPS-only; it's an OSU-customized GPSPACE that also handles GLONASS/Galileo, per
+        # section 3.2's per-constellation breakdown) and PRIDE.parse_res_file() (from the actual
+        # satellite list of contributing PRNs).
+        self.systems_used = 'G'
+
         assert isinstance(in_rinex, pyRinex.ReadRinex)
 
         rinexobj = self.prepare_rinex(in_rinex)
@@ -630,6 +645,25 @@ class GPSPACE(PPPEngine):
 
         return int(processed), rejected
 
+    # DDG: maps the constellation names this (OSU-customized) GPSPACE build prints in section 3.2
+    # to IGS single-letter system codes, matching PRIDE's convention (systems_used).
+    _CONSTELLATION_CODES = {'GPS': 'G', 'GLONASS': 'R', 'GALILEO': 'E', 'BEIDOU': 'C', 'QZSS': 'J'}
+
+    @classmethod
+    def get_systems_used(cls, section):
+        systems = set()
+        for line in section.split('\n'):
+            if 'Number of satellites processed' not in line or ':' not in line:
+                continue
+            tokens = line.split(':', 1)[1].split()
+            # the first (aggregate, all-systems) occurrence has no trailing constellation name
+            if len(tokens) < 2:
+                continue
+            count, constellation = tokens[0], tokens[1]
+            if constellation in cls._CONSTELLATION_CODES and count.isdigit() and int(count) > 0:
+                systems.add(cls._CONSTELLATION_CODES[constellation])
+        return ''.join(sorted(systems)) if systems else 'G'
+
     @staticmethod
     def check_phase_center(section):
         return not len(re.findall(r'Antenna phase center.+NOT AVAILABLE', section)) > 0
@@ -696,6 +730,12 @@ class GPSPACE(PPPEngine):
 
         if self.processed_obs == 0:
             raise pyRunPPPExceptionZeroProcEpochs('PPP returned zero processed epochs')
+
+        # DDG: this OSU build of GPSPACE is not GPS-only -- section 3.2 repeats "Number of
+        # satellites processed" once per constellation actually processed (the very first such
+        # line, with no trailing constellation name, is the all-systems aggregate and is skipped
+        # here). Only count a system as used if it actually processed at least one satellite.
+        self.systems_used = self.get_systems_used(self.observation_session)
 
         # if self.strict and (self.processed_obs == 0 or self.rejected_obs > 0.95 * self.processed_obs):
         #    raise pyRunPPPExceptionTooFewAcceptedObs('The processed observations (' + str(self.processed_obs) +
@@ -1124,18 +1164,17 @@ class PRIDE(PPPEngine):
     required) and GLONASS (.g, optional) broadcast nav files next to the RINEX file instead --
     pdp3 merges them itself locally, or runs single-GNSS (GPS-only) if GLONASS isn't available.
 
-    Fixed-coordinate PPP (solve_coordinates=False): PRIDE calls this "quasi-fixed", not hard-fixed --
-    confirmed by the pos_ output file's own "POS MODE/PRIORI" header line, which echoes back the
-    a-priori position sigma (PoXEm/PoYNm/PoZHm, Option-line trailing columns) as e.g.
-    "Quasi-fixed 10.000000 10.000000 10.000000". The coordinate still gets estimated with that
-    sigma as its prior, so it is set tight (1 mm, see config_session()) when fixed rather than
-    static mode's loose 10 m default -- but this is a seed/weight, not an absolute pin, so the
-    output should be expected to converge close to but not bit-identical to the input.
+    Fixed-coordinate PPP (solve_coordinates=False): PRIDE calls this "quasi-fixed", not hard-fixed.
+    Confirmed directly by PRIDE's developers (pride@whu.edu.cn): "F" mode does not pin the position
+    to sit.xyz -- it gives the seed coordinate a small a-priori sigma, READ FROM sit.xyz itself
+    (not from the Option-line's PoXEm/PoYNm/PoZHm, which they confirmed only applies when the mode
+    is NOT "F"). To approximate a hard fix, they recommend a very tight sigma, e.g. 1 micrometer
+    (1e-6 m) -- see _SIT_XYZ_FIXED_SIGMA below.
 
     pdp3's "F" mode normally tries to download a position-SINEX product to seed the coordinate, but
-    falls back to a local sit.xyz file (site + X Y Z, per the PRIDE manual) in its per-day work
-    directory if present -- we stage that ourselves (from self.x/y/z) to avoid the network call
-    entirely, same pattern as the BRDM navigation fallback.
+    falls back to a local sit.xyz file in its per-day work directory if present -- we stage that
+    ourselves (from self.x/y/z, with the tight sigma) to avoid the network call entirely, same
+    pattern as the BRDM navigation fallback.
 
     Zenith troposphere delay gradients (solve_troposphere, same values/meaning as GPSPACE: 1 = do
     not solve troposphere at all, 2-5 = solve without gradients, 102-105 = solve with gradients)
@@ -1214,9 +1253,16 @@ class PRIDE(PPPEngine):
         We can't just overwrite the real pride_table directory in place -- concurrent PRIDE runs
         for different stations would race on the same shared file. Instead, build a process-
         isolated overlay under self.rootdir that symlinks every entry from the real table
-        directory, except *.atx/*.ATX entries, which are redirected to GeoDE's own ATX file --
-        covering whichever filename pdp3's internal resolution lands on without having to
-        replicate that logic (and its edge cases, e.g. CODE MGEX's M14.ATX/M20.ATX convention).
+        directory, except *.atx/*.ATX entries, which are redirected to GeoDE's own ATX file.
+
+        Mirroring existing *.atx entries alone isn't enough: pdp3 resolves the specific filename
+        it wants (e.g. 'igs20_2388.atx') from the CLK product's own header, and that exact
+        version may not already exist as a file in the real table dir (e.g. a newer ATX version
+        than what's locally cached) -- in that case pdp3 falls straight to a network download
+        attempt, bypassing our override entirely. So this also replicates pdp3's own extraction
+        (pdp3.sh: grep "SYS / PCVS APPLIED" $clk | cut -c21-34 | tr A-Z a-z | sed 's/r3/R3/') from
+        our own already-staged CLK file, and stages that exact filename too. Known gap: doesn't
+        replicate the CODE-MGEX special case (COD0MGX/COM clock + label "igs14" -> M14.ATX/M20.ATX).
         """
         local_table = os.path.join(self.rootdir, 'table')
         os.makedirs(local_table)
@@ -1231,7 +1277,39 @@ class PRIDE(PPPEngine):
             else:
                 os.symlink(os.path.join(real_table, entry), link_path)
 
+        clk_atx_name = self._resolve_clk_atx_name()
+        if clk_atx_name:
+            link_path = os.path.join(local_table, clk_atx_name)
+            if os.path.lexists(link_path):
+                os.remove(link_path)
+            os.symlink(real_atx, link_path)
+
         return local_table
+
+    def _resolve_clk_atx_name(self):
+        """
+        Replicate pdp3.sh's own ANTEX filename resolution from the staged CLK product's "SYS /
+        PCVS APPLIED" header line, so stage_table_dir() can stage GeoDE's ATX under that exact
+        name. Returns None if the CLK file has no such header (pdp3 would then fall back to its
+        own table_dir scan, already covered by mirroring existing *.atx entries).
+        """
+        if self.clocks1 is None or not os.path.isfile(self.clocks1.clk_path):
+            return None
+
+        try:
+            with open(self.clocks1.clk_path, 'r', errors='ignore') as f:
+                for line in f:
+                    if 'SYS / PCVS APPLIED' in line:
+                        label = line[20:34].strip().lower()
+                        if not label:
+                            return None
+                        if 'r3' in label:
+                            label = label.replace('r3', 'R3', 1)
+                        return label if label.endswith('.atx') else label + '.atx'
+        except OSError:
+            return None
+
+        return None
 
     def get_orbits(self, orbit_type):
 
@@ -1302,39 +1380,34 @@ class PRIDE(PPPEngine):
         else:
             ztd_model, htg_model = 'STO', 'NON'
 
-        # DDG: PoXEm/PoYNm/PoZHm (Option-line trailing columns) is the a-priori position sigma
-        # (meters). Confirmed by the pos_ output file itself: its "POS MODE/PRIORI" header line
-        # reads "Quasi-fixed 10.000000 10.000000 10.000000" in F mode -- pdp3 literally calls it
-        # "quasi-fixed" and echoes these exact three values back, i.e. sit.xyz only seeds the
-        # coordinate, and this sigma is what actually controls how tightly it's held during
-        # estimation. 10 m (same as static mode's a-priori) barely constrains it at all. An earlier
-        # attempt at 0.0001 m (0.1 mm) appeared to have no effect, but that comparison was drawn
-        # across runs with other differences too and wasn't a controlled test; 0.1 mm may also have
-        # been numerically unstable (it visibly slowed processing down). Trying 0.001 m (1 mm) --
-        # tight enough to dominate over noisy real observations without being as extreme.
+        # DDG: PoXEm/PoYNm/PoZHm (Option-line trailing columns) is the a-priori position sigma, but
+        # per PRIDE's developers it is only applied when the mode is NOT "F" -- it's a no-op for
+        # fixed-coordinate runs, hence always the static-mode default here regardless of mode.
         pos_sigma = '10.00'
 
         if self.solve_coordinates:
             mode = 'S'
         else:
             mode = 'F'
-            pos_sigma = '0.001'
 
             # DDG: pdp3's "F" mode tries to download a position-SINEX product to seed the fixed
             # coordinate, but falls back to a local sit.xyz in its per-day work directory
             # (self.rootdir/<year>/<doy>/) if already present -- stage it ourselves from self.x/y/z
             # (same site/network-avoidance pattern as the BRDM navigation fallback).
             #
-            # Per the PRIDE PPP-AR manual (5.4.1, "-m" option): "you need to create a new sit.xyz
-            # file in the working directory and add 'staname posx posy posz' data to the file" --
-            # four fields, no sigma. An earlier attempt added three extra sigma columns based on a
-            # misreading of pdp3.sh's internal field indexing (awk reads $2..$7 into a 6-element
-            # array, but that reflects the script's own bookkeeping after its first rewrite of the
-            # file, not the documented user-supplied format) -- reverted, it had no effect anyway.
+            # Per PRIDE's developers (pride@whu.edu.cn), "F" mode does not hard-fix the position --
+            # it gives the seed coordinate a small a-priori sigma read FROM sit.xyz itself (not from
+            # PoXEm/PoYNm/PoZHm, which they confirmed is ignored in F mode). They recommend a very
+            # tight sigma, e.g. 1e-6 m, to approximate a hard fix. This corrects two earlier wrong
+            # turns: the manual's own -m section (5.4.1) only documents "staname posx posy posz"
+            # (4 fields, no sigma) with no mention that a sigma is read from the file at all, and an
+            # interim attempt guessed 1e-4/1e-3 m from pdp3.sh's internal field indexing without
+            # confirmation -- neither actually constrained the solution in testing.
             year_doy = os.path.join(self.rootdir, str(self.rinex.date.year), str(self.rinex.date.doy).zfill(3))
             os.makedirs(year_doy, exist_ok=True)
             file_write(os.path.join(year_doy, 'sit.xyz'),
-                      ' %s %.4f %.4f %.4f\n' % (site, self.x, self.y, self.z))
+                      ' %s%16.4f%16.4f%16.4f%10.6f%10.6f%10.6f\n' %
+                      (site, self.x, self.y, self.z, 1e-6, 1e-6, 1e-6))
 
         self.path_cfg_file = os.path.join(self.rootdir, 'config.' + site)
 
@@ -1408,6 +1481,22 @@ class PRIDE(PPPEngine):
         if not data_lines:
             raise pyRunPPPExceptionZeroProcEpochs('PRIDE PPP-AR returned zero processed epochs')
 
+        # DDG: the header's "AMB FIXING" line reports whether ambiguity resolution was attempted at
+        # all ("NO" if e.g. no OSB.BIA product was available -- see PRIDE.get_orbits()) and, if so,
+        # the number of ambiguities actually fixed per GNSS system, e.g.
+        # "YES  GPS    67  GAL     0  ...". Attempted-but-nothing-fixed (all-zero counts) is still
+        # effectively a float solution, so only count it FIXED if at least one system has a
+        # nonzero count.
+        for line in self.out[:header_end]:
+            if 'AMB FIXING' in line:
+                fixing_fields = line.split()
+                if fixing_fields and fixing_fields[0] == 'YES':
+                    counts = [int(v) for v in fixing_fields[2::2] if v.isdigit()]
+                    self.solution_type = 'FIXED' if any(c > 0 for c in counts) else 'FLOAT'
+                else:
+                    self.solution_type = 'FLOAT'
+                break
+
         # static mode -> a single data row spanning the whole day
         fields = data_lines[-1].split()
 
@@ -1466,6 +1555,20 @@ class PRIDE(PPPEngine):
             header_end = lines.index([l for l in lines if 'END OF HEADER' in l][0]) + 1
         except IndexError:
             return
+
+        # DDG: the header's (possibly wrapped) "SATELLITE LIST" lines enumerate every PRN that
+        # actually contributed an observation to the solution -- a direct, per-run indicator of
+        # which GNSS systems were used, sourced from the same file already fetched for residuals
+        # rather than guessing from the RINEX header or the (requested, not necessarily used)
+        # Frequency combination config line.
+        systems = set()
+        for line in lines[:header_end]:
+            if 'SATELLITE LIST' in line:
+                for prn in line.split()[:-2]:
+                    if prn and prn[0].isalpha():
+                        systems.add(prn[0])
+        if systems:
+            self.systems_used = ''.join(sorted(systems))
 
         elevations, residuals = [], []
 
