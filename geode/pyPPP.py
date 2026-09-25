@@ -246,8 +246,14 @@ class PPPEngine(PPPSpatialCheck, ABC):
         rinexobj = self.prepare_rinex(in_rinex)
 
         # DDG: issue with JPL orbits: some files with one epoch after midnight of next day make PPP
-        # crash when using JPL orbits. Window the data
-        rinexobj.window_data(rinexobj.date.first_epoch('datetime'), rinexobj.date.last_epoch('datetime'))
+        # crash when using JPL orbits. Clip to the nominal calendar day -- but clamp against (not
+        # reset to) the day bounds, so a narrower window already applied upstream (e.g. LocateRinex's
+        # -win) survives. A plain window_data(day_start, day_end) here would unconditionally stretch
+        # any pre-windowed file back out to the full day.
+        day_start = rinexobj.date.first_epoch('datetime')
+        day_end   = rinexobj.date.last_epoch('datetime')
+        rinexobj.window_data(max(rinexobj.datetime_firstObs, day_start),
+                             min(rinexobj.datetime_lastObs, day_end))
 
         PPPSpatialCheck.__init__(self)
 
@@ -952,7 +958,7 @@ Code/phase bias        = {bia_filename}
 LEO quaternions        = NONE
 
 ## Data processing strategies
-Strict editing         = {strict_editing}
+Strict editing         = YES
 RCK model              = WNO
 ISB model              = NO
 ZTD model              = {ztd_model}
@@ -962,10 +968,10 @@ Tides                  = SOLID/OCEAN/POLE
 Multipath              = NO
 
 ## Ambiguity fixing options
-Ambiguity co-var        = NO
+Ambiguity co-var        = YES
 Ambiguity duration      = 600                    ! time duration in seconds for a resolvable ambiguity
 AI Ambiguity validation = YES
-Cutoff elevation        = {amb_cutoff:g}                     ! cutoff mean elevation for eligible ambiguities to be resolved
+Cutoff elevation        = 15                     ! cutoff mean elevation for eligible ambiguities to be resolved
 PCO on wide-lane        = YES
 Widelane decision       = 0.20 0.15 1000.        ! deviation (cycle), sigma (cycle) and decision threshold for WL ambiguities
 Narrowlane decision     = 0.15 0.15 1000.        ! deviation (cycle), sigma (cycle) and decision threshold for NL ambiguities
@@ -1215,6 +1221,17 @@ class PRIDE(PPPEngine):
         # PRIDE PPP-AR supports RINEX 3/4 natively -- no version downgrade needed
         return in_rinex
 
+    def check_phase_center(self, section):
+        # DDG: overrides PPPEngine's unconditional-True default. PRIDE reports the antenna type it
+        # actually matched (from the RINEX header + ANTEX) directly in the pos_ file's own header;
+        # "SITE ANTENNA TYPE = NONE" means it could not match one -- mirrors GPSPACE's
+        # "Antenna phase center ... NOT AVAILABLE" check. section is unused (kept for interface
+        # parity with GPSPACE/callers like LocateRinex.py's ppp.check_phase_center(ppp.proc_parameters)).
+        for line in self.out:
+            if 'SITE ANTENNA TYPE' in line:
+                return line.split('SITE ANTENNA TYPE')[0].strip().upper() != 'NONE'
+        return True
+
     def stage(self, decimate):
 
         os.makedirs(os.path.join(self.rootdir, 'products'))
@@ -1364,8 +1381,8 @@ class PRIDE(PPPEngine):
     def config_session(self):
 
         site  = self.rinex.StationCode.lower()
-        first = self.rinex.date.first_epoch('datetime')
-        last  = self.rinex.date.last_epoch('datetime')
+        first = self.rinex.datetime_firstObs
+        last  = self.rinex.datetime_lastObs
         span  = (last - first).total_seconds()
 
         session_time = '%04d %02d %02d %02d %02d %05.2f %.2f' % \
@@ -1427,21 +1444,39 @@ class PRIDE(PPPEngine):
             erp_filename   = self.erp.filename,
             obx_filename   = self.obx.filename if self.obx else 'NONE',
             bia_filename   = self.bia.filename if self.bia else 'NONE',
-            strict_editing = 'YES' if self.strict else 'NO',
             ztd_model      = ztd_model,
             htg_model      = htg_model,
-            amb_cutoff     = self.elev_mask,
             site           = site,
             mode           = mode,
             pos_sigma      = pos_sigma,
+            # DDG: EV (Option-line field 6, general observation/editing elevation mask) stays
+            # user-configurable via elev_mask/-elv (default 10) -- confirmed in pdp3.sh (lines
+            # 1108-1125) to be the value actually passed as -elev to tedit/lsq, read straight from
+            # this config field (CLI -c is just an optional override on top of it, which we don't
+            # need since we write the field directly). The ambiguity-fixing "Cutoff elevation"
+            # above is a genuinely separate parameter -- never read by the bash wrapper at all
+            # (must be consumed directly by the AR binary), used only to gate which observations
+            # are eligible for ambiguity resolution -- so it's deliberately NOT tied to elev_mask
+            # and kept at PRIDE's own factory default (15) instead.
             ev             = self.elev_mask))
 
     def __exec_ppp__(self, raise_error=True):
 
         site = self.rinex.StationCode.lower()
         mode = 'S' if self.solve_coordinates else 'F'
-        cmd = '%s -cfg %s -m %s -n %s %s' % (self.ppp, os.path.basename(self.path_cfg_file),
-                                             mode, site, self.rinex.rinex)
+        cmd = '%s -cfg %s -m %s -n %s' % (self.ppp, os.path.basename(self.path_cfg_file), mode, site)
+
+        # DDG TEMPORARY: ambiguity-fixing is unstable below ~1h of data -- a thin/marginal LAMBDA
+        # search can land on a weak, barely-accepted integer combination (ratio close to 1) instead
+        # of the correct one, biasing the coordinate by decimeters even though PRIDE reports SUCCESS.
+        # Disable ambiguity resolution entirely (float solution) for sessions under 1 hour until this
+        # is revisited. Must be appended before the RINEX filename -- pdp3 treats its last argument
+        # as the positional RINEX file and only parses options before it.
+        span = (self.rinex.datetime_lastObs - self.rinex.datetime_firstObs).total_seconds()
+        if span < 3600:
+            cmd += ' -f'
+
+        cmd += ' %s' % self.rinex.rinex
 
         try:
             # PRIDE PPP-AR (ambiguity resolution over a full day) runs considerably longer than GPSPACE
@@ -1480,6 +1515,19 @@ class PRIDE(PPPEngine):
 
         if not data_lines:
             raise pyRunPPPExceptionZeroProcEpochs('PRIDE PPP-AR returned zero processed epochs')
+
+        # DDG: strict mode means the same thing here as in GPSPACE -- if the antenna model
+        # couldn't be resolved, do not accept the run. Only the antenna half is implemented: I
+        # don't have a verified way to detect "OTL could not be determined" for PRIDE specifically
+        # (it computes OTL internally via its own grid rather than taking our HARPOS coefficient,
+        # and I have no confirmed real-world example of what a failed OTL lookup looks like in its
+        # output -- as opposed to GPSPACE's explicit "Ocean loading coefficients ... NOT FOUND"
+        # text). Flagging this as a known gap rather than guessing at a check I can't verify.
+        if self.strict and not self.check_phase_center(None):
+            raise pyRunPPPException(
+                'Error while running PPP: could not find the antenna model in the ANTEX file '
+                '(PRIDE pos file reports SITE ANTENNA TYPE = NONE). Check RINEX header for '
+                'formatting issues in the ANT # / TYPE field.')
 
         # DDG: the header's "AMB FIXING" line reports whether ambiguity resolution was attempted at
         # all ("NO" if e.g. no OSB.BIA product was available -- see PRIDE.get_orbits()) and, if so,

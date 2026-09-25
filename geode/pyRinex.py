@@ -969,7 +969,11 @@ class ReadRinex(RinexRecord):
         # use NRCAN PPP in code-only mode to obtain a coordinate of the station
         from geode import pyPPP, pyOptions
 
-        rnx = ReadRinex(self.NetworkCode, self.StationCode, self.rinex_path, allow_multiday=True)
+        # DDG: min_time_seconds=0 -- this just re-opens a file the caller already validated once
+        # (e.g. a -win-windowed file under 1h); re-applying the default 3600s minimum here raises
+        # a spurious pyRinexExceptionBadFile for short windows even though the bootstrap is fine.
+        rnx = ReadRinex(self.NetworkCode, self.StationCode, self.rinex_path, allow_multiday=True,
+                        min_time_seconds=0)
 
         config = pyOptions.ReadOptions('gnss_data.cfg')  # type: pyOptions.ReadOptions
 

@@ -221,7 +221,8 @@ class GetSp3Orbits(OrbitalProduct):
 
 class GetClkFile(OrbitalProduct):
 
-    def __init__(self, clk_archive, date, sp3types, copyto, no_cleanup=False, short_name=True):
+    def __init__(self, clk_archive, date, sp3types, copyto, no_cleanup=False, short_name=True,
+                interval_regex='[0-3][0-5][SM]'):
 
         # try both compressed and non-compressed sp3 files
         # loop through the types of sp3 files to try
@@ -234,7 +235,7 @@ class GetClkFile(OrbitalProduct):
             if sp3type[0].isupper():
                 # long name IGS format
                 self.clk_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
-                                     replace('{INT}', '[0-3][0-5][SM]').
+                                     replace('{INT}', interval_regex).
                                      replace('{PER}', '01D') + 'CLK.CLK')
             else:
                 # short name IGS format
@@ -279,29 +280,33 @@ class GetEOP(OrbitalProduct):
         self.eop_path = None
 
         for sp3type in sp3types:
-            # determine the date of the reference day of the week used in the ERP filename.
-            # DDG: this has historically differed by AC (e.g. COD used to date its weekly ERP to
-            # the END of the week, gpsWeekDay=6, while IGS dates it to the START, gpsWeekDay=0) --
-            # but AC naming/dating conventions do change over time (e.g. COD's own long-name
-            # products now date it to gpsWeekDay=0, matching the modern/IGS-wide convention, for
-            # at least some date ranges). Try every known convention for this AC rather than
-            # assuming a single one, so both older and newer archives resolve correctly.
+            # determine the reference date used in the ERP filename.
+            # DDG: this has historically differed by AC -- e.g. COD used to date its weekly ERP to
+            # the END of the week, gpsWeekDay=6, while IGS dates it to the START, gpsWeekDay=0, and
+            # AC conventions do change over time (COD's own long-name products now use
+            # gpsWeekDay=0, matching the modern/IGS-wide convention, for at least some date
+            # ranges). More fundamentally, some ACs (e.g. WUM) don't publish a WEEKLY ERP file at
+            # all -- they publish one DAILY, dated to the actual processing day, with PER=01D
+            # instead of 07D (confirmed against a real WUM0MGXRAP filename). Try every known
+            # (period, reference date) combination for this AC rather than assuming one, so
+            # archives from different ACs/eras all resolve correctly.
             if sp3type[0:3] == 'COD':
-                candidate_days = (0, 6)
+                weekday_candidates = (0, 6)
             else:
-                candidate_days = (0,)
+                weekday_candidates = (0,)
 
-            for gpsWeekDay in candidate_days:
-                week = pyDate.Date(gpsWeek=date.gpsWeek, gpsWeekDay=gpsWeekDay)
+            candidates = [('07D', pyDate.Date(gpsWeek=date.gpsWeek, gpsWeekDay=d)) for d in weekday_candidates]
+            candidates.append(('01D', date))
 
+            for period, ref_date in candidates:
                 if sp3type[0].isupper():
                     # long name IGS format
-                    self.eop_filename = (sp3type.replace('{YYYYDDD}', week.yyyyddd(space=False)).
+                    self.eop_filename = (sp3type.replace('{YYYYDDD}', ref_date.yyyyddd(space=False)).
                                          replace('{INT}', '01D').
-                                         replace('{PER}', '07D') + '(?:ERP|ORB).ERP')
+                                         replace('{PER}', period) + '(?:ERP|ORB).ERP')
                 else:
                     # short name IGS format
-                    self.eop_filename = sp3type.replace('{WWWWD}', week.wwww()) + '7.erp'
+                    self.eop_filename = sp3type.replace('{WWWWD}', ref_date.wwwwd()) + '7.erp'
 
                 try:
                     OrbitalProduct.__init__(self, sp3archive, date, self.eop_filename, copyto, short_name)

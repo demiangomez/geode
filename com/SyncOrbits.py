@@ -148,8 +148,17 @@ def main():
                                     replace('{INT}', '[0-1]5M').replace('{PER}', '01D') + 'ORB.SP3')
                     clk_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
                                     replace('{INT}', '[0-3][0-5][SM]').replace('{PER}', '01D') + 'CLK.CLK')
-                    eop_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
-                                    replace('{INT}', '01D').replace('{PER}', '07D') + '(?:ERP|ORB).ERP')
+                    # DDG: some ACs (e.g. COD, IGS) publish one ERP file per week (PER=07D); others
+                    # (e.g. WUM) publish one per day instead (PER=01D, confirmed against a real
+                    # WUM0MGXRAP filename) -- try both. Unlike GetEOP (a single point lookup), this
+                    # loop already sweeps every day in the sync range and matches by regex against
+                    # the live FTP listing, so no day-of-week juggling is needed here for the
+                    # weekly convention: whichever day a weekly file is actually dated to, that
+                    # iteration's {YYYYDDD} will match it.
+                    eop_filename_weekly = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
+                                           replace('{INT}', '01D').replace('{PER}', '07D') + '(?:ERP|ORB).ERP')
+                    eop_filename_daily  = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
+                                           replace('{INT}', '01D').replace('{PER}', '01D') + '(?:ERP|ORB).ERP')
                     # DDG: ATT.OBX / OSB.BIA are the satellite attitude and code/phase bias products
                     # required by PRIDE PPP-AR. Only published in long-name (MGEX) format.
                     obx_filename = (sp3type.replace('{YYYYDDD}', date.yyyyddd(space=False)).
@@ -158,9 +167,10 @@ def main():
                                     replace('{INT}', '01D').replace('{PER}', '01D') + 'OSB.BIA')
                 else:
                     # short name IGS format -- no short-name convention for OBX/BIA
-                    sp3_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.sp3.Z'
-                    clk_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk.Z'
-                    eop_filename = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk.Z'
+                    sp3_filename        = sp3type.replace('{WWWWD}', date.wwwwd()) + '.sp3.Z'
+                    clk_filename        = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk.Z'
+                    eop_filename_weekly = sp3type.replace('{WWWWD}', date.wwwwd()) + '.clk.Z'
+                    eop_filename_daily  = None
                     obx_filename = None
                     bia_filename = None
 
@@ -172,7 +182,8 @@ def main():
                     try:
                         ftp.cwd(folder)
 
-                        for ext, recmp in [('SP3', sp3_filename), ('CLK', clk_filename), ('ERP', eop_filename),
+                        for ext, recmp in [('SP3', sp3_filename), ('CLK', clk_filename),
+                                          ('ERP', eop_filename_weekly), ('ERP', eop_filename_daily),
                                           ('OBX', obx_filename), ('BIA', bia_filename)]:
                             if recmp is None:
                                 continue

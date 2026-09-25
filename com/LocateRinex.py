@@ -24,6 +24,18 @@ from geode.pyPPP import PPPSpatialCheck
 from geode.Utils import file_readlines, add_version_argument
 
 
+def parse_window_start(value):
+    """Parse a time-of-day offset like '0h15m', '6h', or '45m' into a timedelta from midnight
+    of the observation day (used by -ws/--window_start)."""
+    m = re.fullmatch(r'(?:(\d+)h)?(?:(\d+)m)?', value)
+    if not m or not any(m.groups()):
+        raise argparse.ArgumentTypeError(
+            "invalid window start time '%s' -- expected format like 0h15m, 6h, or 45m" % value)
+    hours = int(m.group(1) or 0)
+    minutes = int(m.group(2) or 0)
+    return timedelta(hours=hours, minutes=minutes)
+
+
 def main():
 
     parser = argparse.ArgumentParser(description='Simple PPP python wrapper. Calculate a coordinate for a RINEX file. '
@@ -117,11 +129,18 @@ def main():
                              "PlotETM.py). Requires gnss_data.cfg in the working directory.")
 
     parser.add_argument('-win', '--window', type=float, nargs='+', metavar='hours', default=None,
-                        help="Process each file windowed to the given length(s) in hours, counted backwards "
-                             "from the end of the observed session (e.g. -win 24 12 6 3 2 1 0.5 0.25 for a "
-                             "convergence study). Each (file, window) combination is processed independently "
-                             "-- one task per window when run with --parallel -- and its output is prefixed "
-                             "with the window length. If not given, each file is processed once, unwindowed.")
+                        help="Process each file windowed to the given length(s) in hours, counted forward "
+                             "from the start of the observed session (or from --window_start, if given; "
+                             "e.g. -win 24 12 6 3 2 1 0.5 0.25 for a convergence study). Each (file, window) "
+                             "combination is processed independently -- one task per window when run with "
+                             "--parallel -- and its output is prefixed with the window length. If not given, "
+                             "each file is processed once, unwindowed.")
+
+    parser.add_argument('-ws', '--window_start', type=parse_window_start, default=None, metavar='HHhMMm',
+                        help="Time of day (from midnight of the observation day) at which windowing should "
+                             "start, e.g. 0h15m for 00:15. Only meaningful together with -win/--window. If "
+                             "not given, each window starts at the beginning of the observed session (the "
+                             "RINEX file's first epoch).")
 
     add_version_argument(parser)
 
@@ -223,7 +242,7 @@ def process_rinex_task(rinex_path, window_hours, args_dict, options, sp3types, b
     stnm = os.path.basename(rinex_path)[0:4].lower()
     args = argparse.Namespace(**args_dict)
 
-    label = ('%04.1fh' % window_hours) if window_hours is not None else None
+    label = ('%05.2fh' % window_hours) if window_hours is not None else None
 
     try:
         output = []
@@ -240,7 +259,8 @@ def process_rinex_task(rinex_path, window_hours, args_dict, options, sp3types, b
                 text = execute_ppp(rnx, args, stnm, options, sp3types, (), brdc_path, erase,
                                    not args.no_met, args.decimate, args.fix_coordinate, args.solve_troposphere,
                                    args.copy_results, args.backward_substitution, args.elevation_mask,
-                                   args.code_only, args.residuals, args.print_residuals, window_hours)
+                                   args.code_only, args.residuals, args.print_residuals, window_hours,
+                                   args.window_start)
 
                 if label and text:
                     text = '\n'.join('%s %s' % (label, line) for line in text.splitlines())
@@ -259,7 +279,7 @@ def process_rinex_task(rinex_path, window_hours, args_dict, options, sp3types, b
 def callback_locate_rinex(job):
     if job.result is not None:
         error_msg, output_text, rinex_path, window_hours = job.result
-        label = ('%04.1fh ' % window_hours) if window_hours is not None else ''
+        label = ('%05.2fh ' % window_hours) if window_hours is not None else ''
         if error_msg:
             tqdm.write(' -- %s%s: %s' % (label, rinex_path, error_msg))
         elif output_text:
@@ -270,13 +290,14 @@ def callback_locate_rinex(job):
 
 def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, erase, apply_met=True, decimate=True,
                 fix_coordinate=None, solve_troposphere=105, copy_results=None, backward_substitution=False,
-                elevation_mask=5, code_only=False, save_residuals=False, print_residuals=False, window_hours=None):
+                elevation_mask=5, code_only=False, save_residuals=False, print_residuals=False, window_hours=None,
+                window_start=None):
     # DDG: self-contained local imports -- this function is shipped to dispy workers as a
     # dependency of process_rinex_task() (see JobServer.create_cluster's deps= argument), so it
     # can't rely on the caller module's own top-level imports being present in that namespace.
     import re
     import shutil
-    from datetime import timedelta
+    from datetime import timedelta, datetime
     from geode import pyRinex, pyPPP, pyOTL, pyProducts, dbConnection
     from geode.Utils import file_readlines
     import numpy
@@ -297,11 +318,17 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
         # reconstructs the file from the object's own cached header/body, which silently undoes any
         # windowing done earlier (confirmed empirically: file size reverts to the pre-window size).
         if window_hours is not None:
-            # window relative to the end of the observed session (e.g. -win 6 = the last 6 hours of
-            # data), mutating this task's own private working copy in place (ReadRinex already
-            # operates on an isolated copy, never the source file).
-            end   = rinexinfo.datetime_lastObs
-            start = end - timedelta(hours=window_hours)
+            # window relative to the start of the observed session (e.g. -win 6 = the first 6 hours
+            # of data), mutating this task's own private working copy in place (ReadRinex already
+            # operates on an isolated copy, never the source file). window_start, if given, overrides
+            # the anchor with a specific time of day (offset from midnight of the observation day)
+            # instead of the file's actual first epoch.
+            if window_start is not None:
+                first = rinexinfo.datetime_firstObs
+                start = datetime(first.year, first.month, first.day) + window_start
+            else:
+                start = rinexinfo.datetime_firstObs
+            end = start + timedelta(hours=window_hours)
             rinexinfo.window_data(start, end)
 
         # DDG: auto_coord() bootstraps an approximate coordinate into the RINEX header via an extra
