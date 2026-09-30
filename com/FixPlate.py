@@ -243,7 +243,7 @@ def euler_pole(args, cnn):
                                                  (\'{network}\', \'{station}\', \'ppp\',
                                                  \'polynomial\')''', as_dict=True)
 
-        if len(rs):
+        if len(rs) and len(rs[0]['params']):
             lla = xyz2sphere_lla([rs[0]['auto_x'], rs[0]['auto_y'], rs[0]['auto_z']])
             params = np.array(rs[0]['params'])
             hdata.append({'NetworkCode': stn['NetworkCode'],
@@ -252,6 +252,9 @@ def euler_pole(args, cnn):
                           'lon': lla[0][1],
                           'plate': rs[0]['plate'],
                           'v': params[:, 1]})
+        else:
+            tqdm.write(' -- WARNING: no polynomial ETM parameters found for '
+                       + stationID(stn) + ', station skipped')
 
     # now gather the data for the VREF, if any
     vdata = []
@@ -282,7 +285,7 @@ def euler_pole(args, cnn):
                                                      (\'{network}\', \'{station}\', \'ppp\',
                                                      \'polynomial\')''', as_dict=True)
 
-            if len(rs):
+            if len(rs) and len(rs[0]['params']):
                 lla = xyz2sphere_lla([rs[0]['auto_x'], rs[0]['auto_y'], rs[0]['auto_z']])
                 params = np.array(rs[0]['params'])
                 vdata.append({'NetworkCode': stn['NetworkCode'],
@@ -295,6 +298,9 @@ def euler_pole(args, cnn):
                 # VU=vu_external), as opposed to the residual computed below
                 vdata[-1]['vu_external'] = float(stn['parameters'][0]) / 1000.
                 vdata[-1]['v'][2] -= vdata[-1]['vu_external']
+            else:
+                tqdm.write(' -- WARNING: no polynomial ETM parameters found for '
+                           + stationID(stn) + ', station skipped')
 
     A, L = build_design(hdata, vdata)
 

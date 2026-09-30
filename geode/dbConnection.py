@@ -93,7 +93,30 @@ def debug(s):
         file_append('/tmp/db.log', "DB: %s\n" % s)
 
 
+# arbitrary constant used as the key for a session-level postgres advisory
+# lock (see run_db_migrations below). Any unique bigint works; it just needs
+# to not collide with other advisory locks taken elsewhere in the codebase.
+MIGRATIONS_LOCK_ID = 837462910
+
+
 def run_db_migrations(cnn: 'Cnn'):
+    # every new Cnn() runs migrations, including several statements
+    # (CREATE OR REPLACE FUNCTION, COMMENT ON, ...) that are executed
+    # unconditionally on every connection rather than being gated behind an
+    # existence check. When many connections are opened at once (e.g. a
+    # parallel job cluster with one worker process per station), those DDL
+    # statements can race against each other and postgres raises
+    # "tuple concurrently updated" instead of just serializing them. An
+    # advisory lock forces concurrent connections to run migrations one at
+    # a time instead of racing on the same system catalog rows.
+    cnn.query("SELECT pg_advisory_lock(%d)" % MIGRATIONS_LOCK_ID)
+    try:
+        _run_db_migrations(cnn)
+    finally:
+        cnn.query("SELECT pg_advisory_unlock(%d)" % MIGRATIONS_LOCK_ID)
+
+
+def _run_db_migrations(cnn: 'Cnn'):
     ##################################################################
     # New field in table api_visitgnssdatafiles
     if 'rinexed' not in cnn.get_columns('api_visitgnssdatafiles').keys():

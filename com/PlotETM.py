@@ -8,8 +8,18 @@ Author: Demian D. Gomez
 User interface to plot and save JSON files of ETM objects.
 Type python pyPlotETM.py -h for usage help
 """
-import argparse
 import os, sys
+
+# limit BLAS/OpenMP threading to 1 so this script can be run in parallel
+# (multiple processes) without each process spawning its own thread pool
+# and oversubscribing the CPU. Must be set before numpy/scipy are imported.
+os.environ['OMP_NUM_THREADS'] = '1'           # OpenMP (general)
+os.environ['MKL_NUM_THREADS'] = '1'           # Intel MKL
+os.environ['OPENBLAS_NUM_THREADS'] = '1'      # OpenBLAS
+os.environ['NUMEXPR_NUM_THREADS'] = '1'       # NumExpr
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'    # macOS Accelerate framework
+
+import argparse
 import logging
 from dataclasses import asdict
 from datetime import datetime
@@ -785,6 +795,20 @@ def process_custom_relaxations(cnn:dbConnection.Cnn, config: EtmConfig, custom_r
 
 
 def main():
+    # open (and immediately discard) a database connection before anything else.
+    # Cnn.__init__ runs any pending schema migrations synchronously (see
+    # dbConnection.run_db_migrations), so doing this first forces them to
+    # complete here, in the main process, before --parallel forks off worker
+    # processes below. Each worker opens its own Cnn() to talk to the database,
+    # which re-triggers a migrations check every time it does; some of those
+    # migration statements (CREATE OR REPLACE FUNCTION, COMMENT ON, ...) run
+    # unconditionally on every connection rather than being gated behind an
+    # existence check, so without this warm-up call, many workers starting
+    # near-simultaneously could still race each other running them (see
+    # MIGRATIONS_LOCK_ID in dbConnection.py, which serializes but does not
+    # prevent that redundant work).
+    dbConnection.Cnn('gnss_data.cfg', write_cfg_file=True)
+
     parser = argparse.ArgumentParser(description='Plot extended trajectory models (ETMs) '
                                                  'for station data stored in the database, json files, or text files',
                                      formatter_class=argparse.RawTextHelpFormatter)
