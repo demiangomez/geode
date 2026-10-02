@@ -201,24 +201,32 @@ class EarthquakeTable(object):
         displacements = []
 
         for etm in etms:
-            if etm['params'] is None:
+            if not etm['params']:
                 continue
 
             if isinstance(etm['params'][0], list):
-                etm['params'] = [item for sublist in etm['params'] for item in sublist]
-
-            if etm['jump_type'] == CO_SEISMIC_JUMP:
-                displacements.append({"NetworkCode": etm['NetworkCode'],
-                                      "StationCode": etm['StationCode'],
-                                      "n": etm['params'][0],
-                                      "e": etm['params'][1],
-                                      "u": etm['params'][2]})
+                # new ETM module (etm/): params stored per component [[n...], [e...], [u...]]
+                # the co-seismic jump is always the first element of each component
+                if len(etm['params']) != 3 or any(not comp for comp in etm['params']):
+                    continue
+                neu = [comp[0] for comp in etm['params']]
             else:
-                displacements.append({"NetworkCode": etm['NetworkCode'],
-                                      "StationCode": etm['StationCode'],
-                                      "n": etm['params'][0],
-                                      "e": etm['params'][1 + etm['len']],
-                                      "u": etm['params'][2 + 2 * etm['len']]})
+                # old ETM module (pyETM.py): params stored flattened [n..., e..., u...]. Do not rely on the
+                # relaxation length since it might not match the stored params (e.g. decays removed)
+                if len(etm['params']) % 3:
+                    continue
+                k = len(etm['params']) // 3
+                neu = [etm['params'][0], etm['params'][k], etm['params'][2 * k]]
+
+            # skip functions that were not fit (stored as NaN)
+            if any(v is None or np.isnan(v) for v in neu):
+                continue
+
+            displacements.append({"NetworkCode": etm['NetworkCode'],
+                                  "StationCode": etm['StationCode'],
+                                  "n": neu[0],
+                                  "e": neu[1],
+                                  "u": neu[2]})
 
         return sorted(displacements, key=lambda x: x['StationCode'])
 
