@@ -1205,6 +1205,8 @@ class PRIDE(PPPEngine):
         self.ppp_path = options['pride_table']
         self.ppp      = options['pride_exe']
 
+        self._ensure_offline(self.ppp)
+
         self.erp  = None
         self.brdm = None
         self.obx  = None
@@ -1216,6 +1218,25 @@ class PRIDE(PPPEngine):
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
                            solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
                            observations)
+
+    @staticmethod
+    def _ensure_offline(pdp3_path):
+        # DDG: pdp3 hardcodes `readonly OFFLINE=NO` near the top of the script -- left at its
+        # factory default, it reaches out to PRIDE's own servers mid-run (e.g. for an ANTEX file),
+        # which we never want. This is normally a one-line manual edit after installing/updating
+        # PRIDE, but it's easy to forget on a freshly deployed cluster node, so patch it here
+        # automatically every time instead. Idempotent (no-op once already YES) and deliberately
+        # silent on failure (e.g. read-only install, unwritable by this user) -- this is a
+        # best-effort convenience, not something that should block PPP processing.
+        try:
+            with open(pdp3_path, 'r') as f:
+                content = f.read()
+            patched = re.sub(r'(readonly\s+OFFLINE\s*=\s*)NO\b', r'\1YES', content, count=1)
+            if patched != content:
+                with open(pdp3_path, 'w') as f:
+                    f.write(patched)
+        except (IOError, OSError):
+            pass
 
     def prepare_rinex(self, in_rinex):
         # PRIDE PPP-AR supports RINEX 3/4 natively -- no version downgrade needed
