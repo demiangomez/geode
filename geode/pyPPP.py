@@ -1324,8 +1324,9 @@ class PRIDE(PPPEngine):
         than what's locally cached) -- in that case pdp3 falls straight to a network download
         attempt, bypassing our override entirely. So this also replicates pdp3's own extraction
         (pdp3.sh: grep "SYS / PCVS APPLIED" $clk | cut -c21-34 | tr A-Z a-z | sed 's/r3/R3/') from
-        our own already-staged CLK file, and stages that exact filename too. Known gap: doesn't
-        replicate the CODE-MGEX special case (COD0MGX/COM clock + label "igs14" -> M14.ATX/M20.ATX).
+        our own already-staged CLK file, and stages that exact filename too -- including pdp3's
+        CODE-MGEX special case (COD0MGX/COM clock + label "igs14" -> M14.ATX/M20.ATX), see
+        _resolve_clk_atx_name() for details.
         """
         local_table = os.path.join(self.rootdir, 'table')
         os.makedirs(local_table)
@@ -1355,6 +1356,14 @@ class PRIDE(PPPEngine):
         PCVS APPLIED" header line, so stage_table_dir() can stage GeoDE's ATX under that exact
         name. Returns None if the CLK file has no such header (pdp3 would then fall back to its
         own table_dir scan, already covered by mirroring existing *.atx entries).
+
+        Also replicates pdp3.sh's CODE-MGEX special case: when the clock product is CODE's
+        combined MGEX solution (filename starting with COD0MGX or COM) and the header-derived
+        label is the generic "igs14" (no specific realization), pdp3 overrides the filename to
+        M14.ATX or M20.ATX (depending on whether the processing date is before/after MJD 59336,
+        the IGS14->IGS20 frame switch) and fetches it from CODE's own FTP mirror instead of the
+        usual IGS ANTEX naming -- a path that pdp3.sh does NOT gate behind OFFLINE at all, so it
+        must be pre-staged locally or it'll attempt a network download regardless.
         """
         if self.clocks1 is None or not os.path.isfile(self.clocks1.clk_path):
             return None
@@ -1366,6 +1375,11 @@ class PRIDE(PPPEngine):
                         label = line[20:34].strip().lower()
                         if not label:
                             return None
+
+                        clk_name = os.path.basename(self.clocks1.clk_path)
+                        if label == 'igs14' and clk_name.startswith(('COD0MGX', 'COM')):
+                            return 'M14.ATX' if self.rinex.date.mjd <= 59336 else 'M20.ATX'
+
                         if 'r3' in label:
                             label = label.replace('r3', 'R3', 1)
                         return label if label.endswith('.atx') else label + '.atx'
