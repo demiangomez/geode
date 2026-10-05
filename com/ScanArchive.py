@@ -598,7 +598,13 @@ def execute_ppp(record, rinex_path, h_tolerance):
                                 cnn.insert_event(event)
 
                         # DDG: Eric's request to generate a date of PPP solution
-                        event = pyEvents.Event(Description = 'A new PPP solution was created for frame ' + ppp.frame,
+                        event = pyEvents.Event(Description = f'A new PPP solution was created using RINEX with '
+                                                             f'completion {Rinex.completion} and '
+                                                             f'sampling interval {Rinex.sampling_interval} for '
+                                                             f'frame {ppp.frame} using engine {ppp.engine}. '
+                                                             f'At the time of execution, station information '
+                                                             f'was:\n{stninfo.current_record}',
+                                               EventType   = 'ppp',
                                                NetworkCode = NetworkCode,
                                                StationCode = StationCode,
                                                Year        = int(year),

@@ -357,6 +357,7 @@ class GPSPACE(PPPEngine):
 
         self.ppp_path = options['ppp_path']
         self.ppp      = options['ppp_exe']
+        self.engine   = 'GPSPACE'
 
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
@@ -1213,6 +1214,7 @@ class PRIDE(PPPEngine):
         self.bia  = None
         self.path_cfg_file = None
         self.local_table   = None
+        self.engine = 'PRIDE'
 
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
