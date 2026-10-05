@@ -1207,6 +1207,7 @@ class PRIDE(PPPEngine):
         self.ppp      = options['pride_exe']
 
         self._ensure_offline(self.ppp)
+        self._ensure_tmp_config_fix(self.ppp)
 
         self.erp  = None
         self.brdm = None
@@ -1234,6 +1235,28 @@ class PRIDE(PPPEngine):
             with open(pdp3_path, 'r') as f:
                 content = f.read()
             patched = re.sub(r'(readonly\s+OFFLINE\s*=\s*)NO\b', r'\1YES', content, count=1)
+            if patched != content:
+                with open(pdp3_path, 'w') as f:
+                    f.write(patched)
+        except (IOError, OSError):
+            pass
+
+    @staticmethod
+    def _ensure_tmp_config_fix(pdp3_path):
+        # DDG: pdp3 builds its per-run temp config path with `mktemp -u | sed "s/tmp\./config\./"`,
+        # an unanchored substitution that's supposed to rename the basename (tmp.XXXXXXXXXX ->
+        # config.XXXXXXXXXX) but instead replaces whatever "tmp." it finds FIRST in the full path.
+        # On HPC schedulers whose $TMPDIR itself contains "tmp." (e.g. OSC's SLURM-assigned
+        # /tmp/slurmtmp.<jobid>), that's the directory name, not the basename -- e.g.
+        # /tmp/slurmtmp.12345/tmp.XXXXXXXXXX becomes /tmp/slurmCONFIG.12345/tmp.XXXXXXXXXX (basename
+        # untouched), and pdp3 then fails trying to cp into a directory that was never created.
+        # Anchoring the pattern to a preceding path separator restricts it to the basename only.
+        # Idempotent (no-op once already anchored) and silent on failure, same as _ensure_offline.
+        try:
+            with open(pdp3_path, 'r') as f:
+                content = f.read()
+            patched = content.replace('mktemp -u | sed "s/tmp\\./config\\./"',
+                                      'mktemp -u | sed "s#/tmp\\.#/config.#"')
             if patched != content:
                 with open(pdp3_path, 'w') as f:
                     f.write(patched)
