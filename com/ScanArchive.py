@@ -168,7 +168,7 @@ def try_insert(NetworkCode, StationCode, year, doy, rinex):
         # get the rinex file name
         rnx_name = pyRinexName.RinexNameFormat(rinex)
     except:
-        return traceback.format_exc() + ' processing rinex: %s (%s.%s %s %s) using node %s' \
+        return Utils.format_exc_relevant() + ' processing rinex: %s (%s.%s %s %s) using node %s' \
                % (rinex, NetworkCode, StationCode, str(year), str(doy), platform.node())
 
 
@@ -230,7 +230,7 @@ def try_insert(NetworkCode, StationCode, year, doy, rinex):
             filename = Utils.move(rinex, os.path.join(data_reject, os.path.basename(rinex)))
         except OSError:
             # permission denied: could not move file out of the archive->return error in an orderly fashion
-            return traceback.format_exc() + ' processing rinex: %s (%s.%s %s %s) using node %s' \
+            return Utils.format_exc_relevant() + ' processing rinex: %s (%s.%s %s %s) using node %s' \
                    % (rinex, NetworkCode, StationCode, str(year), str(doy), platform.node())
 
         e.event['Description'] = 'During %s, file moved to %s: %s' \
@@ -259,7 +259,7 @@ def try_insert(NetworkCode, StationCode, year, doy, rinex):
         if cnn.active_transaction:
             cnn.rollback_transac()
 
-        return traceback.format_exc() + ' processing rinex: %s (%s.%s %s %s) using node %s' \
+        return Utils.format_exc_relevant() + ' processing rinex: %s (%s.%s %s %s) using node %s' \
                                         % (rinex, NetworkCode, StationCode, str(year), str(doy), platform.node())
 
 
@@ -354,7 +354,7 @@ def obtain_otl(NetworkCode, StationCode):
 
                 except:
 
-                    return traceback.format_exc() + \
+                    return Utils.format_exc_relevant() + \
                            ' processing: %s using node %s' % (stn_id, platform.node())
 
         # average the x y z values
@@ -407,7 +407,7 @@ def obtain_otl(NetworkCode, StationCode):
 
     except:
         # print 'problem!' + traceback.format_exc()
-        outmsg = traceback.format_exc() + ' processing otl: %s using node %s\n' \
+        outmsg = Utils.format_exc_relevant() + ' processing otl: %s using node %s\n' \
                                           % (stn_id, platform.node()) \
                                           + 'Debug info and errors follow: \n' + errors
 
@@ -423,7 +423,7 @@ def insert_stninfo(NetworkCode, StationCode, stninfofile):
     try:
         cnn = dbConnection.Cnn("gnss_data.cfg")
     except:
-        return traceback.format_exc() + ' insert_stninfo: ' + NetworkCode + ' ' + StationCode + \
+        return Utils.format_exc_relevant() + ' insert_stninfo: ' + NetworkCode + ' ' + StationCode + \
                ' using node ' + platform.node()
 
     try:
@@ -431,7 +431,7 @@ def insert_stninfo(NetworkCode, StationCode, stninfofile):
         stninfo = stnInfo.parse_station_info(stninfofile)
 
     except station_info.StationInfoException:
-        return traceback.format_exc() + ' insert_stninfo: ' + NetworkCode + ' ' + StationCode + \
+        return Utils.format_exc_relevant() + ' insert_stninfo: ' + NetworkCode + ' ' + StationCode + \
                ' using node ' + platform.node()
 
     # DDG: 18-Feb-2019 used to have some code here to force the insertion of receivers and antennas
@@ -449,7 +449,7 @@ def insert_stninfo(NetworkCode, StationCode, stninfofile):
                 errors.append(str(e))
 
             except:
-                errors.append(traceback.format_exc() + ' insert_stninfo: ' + NetworkCode + ' ' + StationCode +
+                errors.append(Utils.format_exc_relevant() + ' insert_stninfo: ' + NetworkCode + ' ' + StationCode +
                               ' using node ' + platform.node())
                 continue
 
@@ -493,7 +493,7 @@ def execute_ppp(record, rinex_path, h_tolerance):
         Config = pyOptions.ReadOptions("gnss_data.cfg")
 
     except:
-        return traceback.format_exc() + ' processing rinex: %s %s %s using node %s' \
+        return Utils.format_exc_relevant() + ' processing rinex: %s %s %s using node %s' \
                    % (stationID(record), str(year), str(doy), platform.node())
 
     # create a temp folder in production to put the orbit in
@@ -600,7 +600,7 @@ def execute_ppp(record, rinex_path, h_tolerance):
                         # DDG: Eric's request to generate a date of PPP solution
                         event = pyEvents.Event(Description = f'A new PPP solution was created using RINEX with '
                                                              f'completion {Rinex.completion} and '
-                                                             f'sampling interval {Rinex.sampling_interval} for '
+                                                             f'sampling interval {Rinex.interval} for '
                                                              f'frame {ppp.frame} using engine {ppp.engine}. '
                                                              f'At the time of execution, station information '
                                                              f'was:\n{stninfo.current_record}',
@@ -629,7 +629,7 @@ def execute_ppp(record, rinex_path, h_tolerance):
 
     except:
         cnn.close()
-        return (traceback.format_exc() + ' processing rinex: %s.%s %s %s using node %s' %
+        return (Utils.format_exc_relevant() + ' processing rinex: %s.%s %s %s using node %s' %
                 (NetworkCode, StationCode, str(year), str(doy), platform.node()))
 
 
@@ -718,7 +718,7 @@ def process_otl(cnn, JobServer, master_list):
 
     depfuncs = (ecef2lla,)
     modules  = ('geode.dbConnection', 'geode.pyRinex', 'geode.pyArchiveStruct', 'geode.pyOTL', 'geode.pyPPP',
-                'numpy', 'platform', 'geode.pyProducts', 'traceback', 'geode.pyOptions')
+                'numpy', 'platform', 'geode.pyProducts', 'traceback', 'geode.pyOptions', 'geode.Utils')
 
     JobServer.create_cluster(obtain_otl, depfuncs, callback_handle, progress_bar=pbar, modules=modules)
 
@@ -744,7 +744,7 @@ def scan_station_info(JobServer, pyArchive, archive_path, master_list):
     pbar = tqdm(total=len(stninfo), ncols=80, disable=None)
 
     modules = ('geode.dbConnection', 'geode.metadata.station_info', 'sys', 'datetime', 'geode.pyDate',
-               'platform', 'traceback')
+               'platform', 'traceback', 'geode.Utils')
 
     JobServer.create_cluster(insert_stninfo, callback=callback_handle, progress_bar=pbar, modules=modules)
 
