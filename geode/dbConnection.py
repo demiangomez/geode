@@ -1540,9 +1540,9 @@ class Cnn(object):
         else:
             raise dbErrConnect(err)
 
-    def query(self, command):
+    def query(self, command, params=None):
         try:
-            self.cursor.execute(command)
+            self.cursor.execute(command, params)
 
             debug(" QUERY: command=%r" % command)
 

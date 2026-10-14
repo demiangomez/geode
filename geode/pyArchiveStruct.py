@@ -12,11 +12,14 @@ declared directory structure and {stmn}{doy}{session}.{year}d.Z, respectively)
 import os
 import sys
 import re
+import shutil
 
 # deps
 import scandir
+from tqdm import tqdm
 
 # app
+from . import dbConnection
 from . import pyDate
 from . import pyOptions
 from . import pyEvents
@@ -235,6 +238,106 @@ class RinexStruct(object):
             self.cnn.rollback_transac()
             raise
 
+    def check_rinex_files(self, NetworkCode, StationCode, start_date, end_date, fix=False):
+        """
+        Looks for the rinex records of a station that have no file in the archive.
+        :param NetworkCode: NetworkCode of the station
+        :param StationCode: StationCode of the station
+        :param start_date: pyDate.Date of the first day to check
+        :param end_date: pyDate.Date of the last day to check
+        :param fix: if set, removes the records (and their solutions) whose file is missing and inserts an event
+        :return: list with the paths of the files not found in the archive
+        """
+        rs = self.cnn.query('SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND '
+                            '"StationCode" = \'%s\' AND '
+                            '"ObservationSTime" BETWEEN \'%s\' AND \'%s\' '
+                            'ORDER BY "ObservationSTime"'
+                            % (NetworkCode, StationCode, start_date.yyyymmdd(), end_date.yyyymmdd()))
+
+        missing_files = []
+
+        for rnx in rs.dictresult():
+
+            crinex_path = os.path.join(self.Config.archive_path,
+                                       self.build_rinex_path(NetworkCode, StationCode,
+                                                             rnx['ObservationYear'], rnx['ObservationDOY'],
+                                                             filename=rnx['Filename']))
+
+            if not os.path.exists(crinex_path):
+                missing_files.append(crinex_path)
+
+                if fix:
+                    self.remove_rinex(rnx)
+
+                    event = pyEvents.Event(
+                        Description=('A missing RINEX file was found during RINEX integrity check: ' + crinex_path +
+                                     '. It has been removed from the database. Consider rerunning PPP for this '
+                                     'station.'),
+                        NetworkCode=NetworkCode,
+                        StationCode=StationCode,
+                        Year=rnx['ObservationYear'],
+                        DOY=rnx['ObservationDOY'])
+
+                    self.cnn.insert_event(event)
+
+        return missing_files
+
+    def delete_rinex(self, stnlist, start_date, end_date, completion_limit=0.0):
+        """
+        Deletes the rinex files (and the PPP and GAMIT solutions that depend on them) of a list of stations.
+        :param stnlist: list of dictionaries with NetworkCode and StationCode
+        :param start_date: pyDate.Date of the first day to delete
+        :param end_date: pyDate.Date of the last day to delete
+        :param completion_limit: only the rinex with Completion <= completion_limit are deleted (1.0: all)
+        """
+        for stn in stnlist:
+            NetworkCode = stn['NetworkCode']
+            StationCode = stn['StationCode']
+
+            rs = self.cnn.query(
+                'SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\' '
+                'AND "ObservationFYear" BETWEEN %f AND %f AND "Completion" <= %f' %
+                (NetworkCode, StationCode, start_date.fyear, end_date.fyear, completion_limit))
+
+            rinex = rs.dictresult()
+            tqdm.write(' >> Deleting %i RINEX files and solutions for %s.%s between %s - %s and completion <= %.3f' %
+                       (len(rinex), NetworkCode, StationCode, start_date.yyyyddd(), end_date.yyyyddd(),
+                        completion_limit))
+
+            for rnx in tqdm(rinex):
+                try:
+                    # delete rinex file (also deletes PPP and GAMIT solutions)
+                    self.remove_rinex(rnx)
+
+                except dbConnection.dbErrDelete as e:
+                    tqdm.write('Failed to delete solutions and/or RINEX files for %i %i. Reason: %s\n' %
+                               (rnx['ObservationYear'], rnx['ObservationDOY'], str(e)))
+
+    def rename_station(self, NetworkCode, StationCode, DestNetworkCode, DestStationCode, start_date, end_date,
+                       delete_if_empty=True, dry_run=False):
+        """
+        Renames (merges) a station into another one: moves its rinex files in the archive and all its data in the
+        database. The work is done by station_merge.StationMerge, this only reports the progress.
+        :param delete_if_empty: delete the origin station if it is left without RINEX files
+        :param dry_run: only print what would be done, without changing anything
+        """
+        # imported here because station_merge uses this module
+        from .station_merge import StationMerge, StationMergeException, format_report
+
+        try:
+            merge = StationMerge(self.cnn, (NetworkCode, StationCode), (DestNetworkCode, DestStationCode),
+                                 start_date, end_date, delete_if_empty, archive=self)
+
+            previewed = format_report(merge.preview())
+            tqdm.write('\n'.join(previewed))
+
+            if not dry_run:
+                # the preview was already shown: only what the execution adds (warnings, result)
+                tqdm.write('\n'.join(line for line in format_report(merge.execute()) if line not in previewed))
+
+        except StationMergeException as e:
+            tqdm.write(' -- ' + str(e))
+
     def get_rinex_record(self, **kwargs):
         """
         Retrieve a single or multiple records from the rinex table given a set parameters. If parameters are left empty,
@@ -331,6 +434,62 @@ class RinexStruct(object):
 
         return stninfo, path2stninfo
 
+    def archive_folder(self, record):
+        """
+        Folder of the archive (relative to the archive root) where the rinex of a rinex record is stored.
+        :param record: a dictionary with at least the columns used as levels of the archive (rinex_tank_struct)
+        :return: the relative folder, without the filename
+        """
+        return "/".join('{key:0{width}{type}}'.format(key=record[level['rinex_col_in']],
+                                                      width=level['TotalChars'],
+                                                      type='.0f' if level['isnumeric'] == '1' else 's')
+                        for level in self.levels)
+
+    def rename_rinex_paths(self, record, DestNetworkCode, DestStationCode):
+        """
+        Paths involved in renaming a rinex record to another station. Reads nothing from the database and
+        does not touch the archive.
+        :param record: a rinex record (dictionary) of the origin station
+        :param DestNetworkCode: NetworkCode of the destiny station
+        :param DestStationCode: StationCode of the destiny station
+        :return: (source path, destiny path, new Filename for the rinex table). Both paths are absolute and
+                 point to the CRINEZ of the archive
+        """
+        src_name = RinexNameFormat(record['Filename'])
+        dst_name = RinexNameFormat(record['Filename'])
+        dst_name.StationCode = DestStationCode
+
+        dest_record = dict(record, NetworkCode=DestNetworkCode, StationCode=DestStationCode)
+
+        src_path = os.path.join(self.Config.archive_path, self.archive_folder(record),
+                                src_name.to_rinex_format(pyRinexName.TYPE_CRINEZ, no_path=True))
+        dst_path = os.path.join(self.Config.archive_path, self.archive_folder(dest_record),
+                                dst_name.to_rinex_format(pyRinexName.TYPE_CRINEZ, no_path=True))
+
+        return src_path, dst_path, dst_name.to_rinex_format(pyRinexName.TYPE_RINEX, no_path=True)
+
+    def rename_rinex(self, record, DestNetworkCode, DestStationCode):
+        """
+        Renames a rinex of the archive to another station: updates NetworkCode, StationCode and Filename of the
+        rinex table and moves the file in the archive. It does not manage the transaction nor check collisions,
+        that is up to the caller.
+        :param record: a rinex record (dictionary) of the origin station
+        :param DestNetworkCode: NetworkCode of the destiny station
+        :param DestStationCode: StationCode of the destiny station
+        :return: (source path, destiny path) of the file moved, so the caller can undo the move
+        """
+        src_path, dst_path, db_filename = self.rename_rinex_paths(record, DestNetworkCode, DestStationCode)
+
+        self.cnn.query('UPDATE rinex SET "NetworkCode" = %s, "StationCode" = %s, "Filename" = %s '
+                       'WHERE api_id = %s', (DestNetworkCode, DestStationCode, db_filename, record['api_id']))
+
+        if not os.path.isdir(os.path.dirname(dst_path)):
+            os.makedirs(os.path.dirname(dst_path))
+
+        shutil.move(src_path, dst_path)
+
+        return src_path, dst_path
+
     def build_rinex_path(self, NetworkCode, StationCode, ObservationYear, ObservationDOY,
                          with_filename=True, filename=None, rinexobj=None):
         """
@@ -373,10 +532,7 @@ class RinexStruct(object):
                 return None
 
             field = rs.dictresult()[0]
-            path = "/".join('{key:0{width}{type}}'.format(key=field[level['rinex_col_in']],
-                                                          width=level['TotalChars'],
-                                                          type='.0f' if level['isnumeric'] == '1' else 's')
-                            for level in self.levels)
+            path = self.archive_folder(field)
 
             if with_filename:
                 rnx_name = RinexNameFormat(field['Filename'])

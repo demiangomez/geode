@@ -17,7 +17,6 @@ import sys
 import traceback
 import os
 import numpy
-import shutil
 import argparse
 import platform
 from math import ceil
@@ -33,12 +32,9 @@ from geode.metadata import station_info
 from geode import pyArchiveStruct
 from geode import pyPPP
 from geode import Utils
-from geode import pyRinexName
-from geode.pyRinexName import RinexNameFormat
 from geode.Utils import (process_date, ecef2lla, parse_atx_antennas,
                           determine_frame, station_list_help, add_version_argument)
 from geode import pyJobServer
-from geode import pyEvents
 
 
 differences = []
@@ -94,8 +90,7 @@ def check_rinex_stn(NetworkCode, StationCode, start_date, end_date):
     # load the connection
     try:
         # try to open a connection to the database
-        cnn    = dbConnection.Cnn("gnss_data.cfg")
-        Config = pyOptions.ReadOptions("gnss_data.cfg")
+        cnn = dbConnection.Cnn("gnss_data.cfg")
     except Exception:
         return traceback.format_exc() + ' processing: (' + NetworkCode + '.' + StationCode \
                 + ') using node ' + platform.node(), None
@@ -103,42 +98,7 @@ def check_rinex_stn(NetworkCode, StationCode, start_date, end_date):
     try:
         Archive = pyArchiveStruct.RinexStruct(cnn)
 
-        rs = cnn.query('SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND '
-                       '"StationCode" = \'%s\' AND '
-                       '"ObservationSTime" BETWEEN \'%s\' AND \'%s\' '
-                       'ORDER BY "ObservationSTime"'
-                       % (NetworkCode, StationCode, start_date.yyyymmdd(), end_date.yyyymmdd()))
-
-        rnxtbl = rs.dictresult()
-        missing_files = []
-
-        for rnx in rnxtbl:
-
-            crinex_path = os.path.join(Config.archive_path,
-                                       Archive.build_rinex_path(NetworkCode,
-                                                                StationCode,
-                                                                rnx['ObservationYear'],
-                                                                rnx['ObservationDOY'],
-                                                                filename = rnx['Filename']))
-
-            if not os.path.exists(crinex_path):
-                # problem with file! does not appear to be in the archive
-
-                Archive.remove_rinex(rnx)
-
-                event = pyEvents.Event(
-                    Description = ('A missing RINEX file was found during RINEX integrity check: ' + crinex_path +
-                                 '. It has been removed from the database. Consider rerunning PPP for this station.'),
-                    NetworkCode = NetworkCode,
-                    StationCode = StationCode,
-                    Year        = rnx['ObservationYear'],
-                    DOY         = rnx['ObservationDOY'])
-
-                cnn.insert_event(event)
-
-                missing_files += [crinex_path]
-
-        return None, missing_files
+        return None, Archive.check_rinex_files(NetworkCode, StationCode, start_date, end_date, fix=True)
 
     except Exception:
         return traceback.format_exc() + ' processing: ' + NetworkCode + '.' + \
@@ -181,36 +141,11 @@ def check_rinex_integrity(cnn, Config, stnlist, start_date, end_date, operation,
 
         Archive = pyArchiveStruct.RinexStruct(cnn)
 
-        for stn in tqdm(stnlist, ncols=160, desc=' >> Checking archive integrity', disable=None, position=0):
-            StationCode = stn['StationCode']
-            NetworkCode = stn['NetworkCode']
-
-            rs = cnn.query('SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND '
-                           '"StationCode" = \'%s\' AND '
-                           '"ObservationSTime" BETWEEN \'%s\' AND \'%s\' '
-                           'ORDER BY "ObservationSTime"'
-                           % (NetworkCode, StationCode, start_date.yyyymmdd(), end_date.yyyymmdd()))
-
-            rnxtbl = rs.dictresult()
-
-            pbar = tqdm(total=len(rnxtbl), ncols=160, desc=' >> Checking archive integrity', disable=None, position=1)
-
-            for rnx in rnxtbl:
-                archive_path = Archive.build_rinex_path(NetworkCode,
-                                                        StationCode,
-                                                        rnx['ObservationYear'],
-                                                        rnx['ObservationDOY'],
-                                                        filename = rnx['Filename'])
-                crinex_path = os.path.join(Config.archive_path, archive_path)
-
-                pbar.postfix = '%s.%s: %s' % (NetworkCode, StationCode, archive_path)
-                pbar.update()
-
-                if not os.path.exists(crinex_path):
-                    tqdm.write(' -- CRINEZ file %s exists in the database but was not found in the archive'
-                               % crinex_path)
-
-            pbar.close()
+        for stn in tqdm(stnlist, ncols=160, desc=' >> Checking archive integrity', disable=None):
+            for crinex_path in Archive.check_rinex_files(stn['NetworkCode'], stn['StationCode'],
+                                                         start_date, end_date):
+                tqdm.write(' -- CRINEZ file %s exists in the database but was not found in the archive'
+                           % crinex_path)
 
 
 def stn_info_rinex_integrity(cnn, stnlist, start_date, end_date, JobServer):
@@ -606,216 +541,6 @@ def PrintStationInfo(cnn, stnlist, short=False):
             sys.stderr.write(str(e) + '\n')
 
 
-def rename_station(cnn, NetworkCode, StationCode, DestNetworkCode, DestStationCode, start_date, end_date, archive_path,
-                   delete_if_empty=True):
-
-    # make sure the destiny station exists
-    try:
-        rs = cnn.query('SELECT * FROM stations WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\''
-                       % (DestNetworkCode, DestStationCode))
-
-        if rs.ntuples() == 0:
-            # ask the user if he/she want to create it?
-            print('The requested destiny station does not exist. Please create it and try again')
-        else:
-
-            # select the original rinex files names
-            # this is the set that will effectively be transferred to the dest net and stn codes
-            # I select this portion of data here and not after we rename the station to prevent picking up more data
-            # (due to the time window) that is ALREADY in the dest station.
-            rs = cnn.query(
-                'SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\' AND '
-                '"ObservationSTime" BETWEEN \'%s\' AND \'%s\''
-                % (NetworkCode, StationCode, start_date.yyyymmdd(), end_date.yyyymmdd()))
-
-            original_rs = rs.dictresult()
-
-            print(" >> Beginning transfer of %i rinex files from %s.%s to %s.%s" \
-                  % (len(original_rs), NetworkCode, StationCode, DestNetworkCode, DestStationCode))
-
-            if delete_if_empty:
-                print(' -- Station will be deleted at the end of the process if no further RINEX files are found.')
-
-            for src_rinex in tqdm(original_rs):
-                # rename files
-                Archive = pyArchiveStruct.RinexStruct(cnn)  # type: pyArchiveStruct.RinexStruct
-                src_file_path = Archive.build_rinex_path(NetworkCode, StationCode,
-                                                         src_rinex['ObservationYear'],
-                                                         src_rinex['ObservationDOY'],
-                                                         filename = src_rinex['Filename'])
-
-                src_path = os.path.split(os.path.join(archive_path, src_file_path))[0]
-                src_file = os.path.split(os.path.join(archive_path, src_file_path))[1]
-
-                # PROBLEM DETECTED (solved Sep 10 2025): old code handles only RINEX 2 filenames
-                # 1) station code might be uppercase in the filename in RINEX 3
-                # 2) dest_file.replace('d.Z', 'o') only works for RINEX 2
-                rinex_name = RinexNameFormat(src_file)
-                # rename station
-                rinex_name.StationCode = DestStationCode
-                dest_file = rinex_name.to_rinex_format(pyRinexName.TYPE_CRINEZ)
-
-                date = pyDate.Date(year=int(src_rinex['ObservationYear']),
-                                   doy=int(src_rinex['ObservationDOY']))
-
-                try:
-                    cnn.begin_transac()
-                    # update the NetworkCode and StationCode and filename information in the db
-                    cnn.query(
-                        'UPDATE rinex SET "NetworkCode" = \'%s\', "StationCode" = \'%s\', "Filename" = \'%s\' '
-                        'WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\' AND "ObservationYear" = %i AND '
-                        '"ObservationDOY" = %i AND "Filename" = \'%s\''
-                        % (DestNetworkCode, DestStationCode,
-                           rinex_name.to_rinex_format(pyRinexName.TYPE_RINEX, no_path=True), NetworkCode,
-                           StationCode, src_rinex['ObservationYear'], src_rinex['ObservationDOY'],
-                           src_rinex['Filename']))
-
-                    # DO NOT USE pyArchiveStruct because we have an active transaction and the change is not visible yet
-                    # because we don't know anything about the archive's structure,
-                    # we just try to replace the names and that should suffice
-                    dest_path = src_path.replace(StationCode, DestStationCode).replace(NetworkCode, DestNetworkCode)
-
-                    # check that the destination path exists (it should, but...)
-                    if not os.path.isdir(dest_path):
-                        os.makedirs(dest_path)
-
-                    shutil.move(os.path.join(src_path,  src_file),
-                                os.path.join(dest_path, dest_file))
-
-                    # if we are here, we are good. Commit
-                    cnn.commit_transac()
-
-                    # commited transaction, add an event
-                    rnx = src_rinex['Filename']
-                    event = pyEvents.Event(Description=f'RINEX file {rnx} from {NetworkCode}.{StationCode} was merged '
-                                                       f'into {DestNetworkCode}.{DestStationCode}. A separate event '
-                                                       f'will be created to report on the station information merge '
-                                                       f'(if needed).',
-                                           NetworkCode = NetworkCode,
-                                           EventType   = 'info',
-                                           StationCode = StationCode,
-                                           Year        = int(date.year),
-                                           DOY         = int(date.doy))
-
-                    cnn.insert_event(event)
-
-                    # now insert record for new RINEX in station
-                    event = pyEvents.Event(Description='A new RINEX (%s) was merged to the archive from %s.%s'
-                                                       % (rinex_name.to_rinex_format(pyRinexName.TYPE_RINEX,
-                                                                                     no_path=True),
-                                                          NetworkCode, StationCode),
-                                           NetworkCode=DestNetworkCode,
-                                           StationCode=DestStationCode,
-                                           Year=int(date.year),
-                                           DOY=int(date.doy))
-
-                    cnn.insert_event(event)
-                except dbConnection.DatabaseError as e:
-
-                    cnn.rollback_transac()
-
-                    tqdm.write(f' -- RINEX file {src_file} could not be moved because it already exists in '
-                               f'{DestNetworkCode}.{DestStationCode}. RINEX will be removed. ({str(e)})')
-
-                    # delete the file
-                    os.remove(os.path.join(src_path,  src_file))
-                    # remove the rinex record
-                    cnn.query(
-                        'DELETE FROM rinex WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\' AND '
-                        '"ObservationYear" = %i AND "ObservationDOY" = %i AND "Filename" = \'%s\''
-                        % (NetworkCode, StationCode, src_rinex['ObservationYear'], src_rinex['ObservationDOY'],
-                           src_rinex['Filename']))
-
-                    # commited transaction, add an event
-                    rnx = src_rinex['Filename']
-                    event = pyEvents.Event(Description=f'RINEX file {rnx} from {NetworkCode}.{StationCode} was deleted '
-                                                       f'while merging to {DestNetworkCode}.{DestStationCode} because '
-                                                       f'the file already existed in destiny station.',
-                                           NetworkCode=NetworkCode,
-                                           EventType='info',
-                                           StationCode=StationCode,
-                                           Year=int(date.year),
-                                           DOY=int(date.doy))
-
-                    cnn.insert_event(event)
-
-                # Station info transfer
-                try:
-                    _ = station_info.StationInfo(cnn, DestNetworkCode, DestStationCode, date)
-                    # no error, nothing to do.
-                except station_info.StationInfoException:
-                    # failed to get a valid station info record! we need to incorporate the station info record from
-                    # the source station
-                    try:
-                        stninfo_dest = station_info.StationInfo(cnn, DestNetworkCode, DestStationCode)
-                        stninfo_src  = station_info.StationInfo(cnn, NetworkCode,     StationCode, date)
-
-                        # force the station code in record to be the same as deststationcode
-                        record                = stninfo_src.current_record
-                        record['StationCode'] = DestStationCode
-
-                        stninfo_dest.insert_station_info(record)
-
-                    except station_info.StationInfoException as e:
-                        # if there is no station info for this station either, warn the user!
-                        tqdm.write(' -- Error while updating Station Information! %s' % (str(e)))
-
-            # now delete the station if requested and empty
-            if delete_if_empty:
-                # if there is no more data in the original station, drop the station
-                rs = cnn.query(
-                    'SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\''
-                    % (NetworkCode, StationCode))
-
-                original_rs = rs.dictresult()
-
-                if len(original_rs) == 0:
-                    # empty station, drop
-                    # DDG Aug 07 2024: records on new tables associated with API REST are dropped automatically by
-                    # database trigger (same with station information
-
-                    # before triggering the deletion, backup station info as an event
-                    cnn.begin_transac()
-
-                    # retrieve the entire station info records
-                    stninf = station_info.StationInfo(cnn, NetworkCode, StationCode, allow_empty=True).return_stninfo()
-
-                    event = pyEvents.Event(
-                        Description=f'Station {NetworkCode}.{StationCode} will be deleted from the database. Station '
-                                    f'information records will be backed up in this event. Records follow:\n'
-                                    f'%s' % stninf if len(stninf) > 0 else 'NO RECORDS FOUND',
-                        NetworkCode=NetworkCode,
-                        EventType='info',
-                        StationCode=StationCode)
-
-                    cnn.insert_event(event)
-
-                    tables = ['data_source', 'etms', 'etm_params', 'gamit_soln', 'gamit_soln_excl', 'gamit_ztd',
-                              'ppp_soln', 'ppp_soln_excl', 'sources_stations', 'stacks', 'stationalias', 'stations']
-
-                    for table in tables:
-                        cnn.query('DELETE FROM %s WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\''
-                                  % (table, NetworkCode, StationCode))
-
-                    event = pyEvents.Event(
-                        Description=f'Station {NetworkCode}.{StationCode} was removed from the database after merge '
-                                    f'operation with {DestNetworkCode}.{DestStationCode}',
-                        NetworkCode=NetworkCode,
-                        EventType='info',
-                        StationCode=StationCode)
-
-                    cnn.insert_event(event)
-                    cnn.commit_transac()
-
-                    tqdm.write(' -- Station successfully deleted after rename/merge process.')
-                else:
-                    tqdm.write(' -- Could not delete station: %i remaining RINEX files' % (len(original_rs)))
-
-    except Exception:
-        cnn.rollback_transac()
-        raise
-
-
 def visualize_gaps(cnn, stnlist, start_date, end_date):
 
     for Stn in stnlist:
@@ -904,33 +629,6 @@ def exclude_solutions(cnn, stnlist, start_date, end_date):
             except dbConnection.dbErrInsert:
                 tqdm.write('PPP solution for %i %i is already in the excluded solutions table\n'
                            % (soln['Year'], soln['DOY']))
-
-
-def delete_rinex(cnn, stnlist, start_date, end_date, completion_limit=0.0):
-
-    Archive = pyArchiveStruct.RinexStruct(cnn)
-
-    for stn in stnlist:
-        NetworkCode = stn['NetworkCode']
-        StationCode = stn['StationCode']
-
-        rs = cnn.query(
-            'SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\' '
-            'AND "ObservationFYear" BETWEEN %f AND %f AND "Completion" <= %f' %
-            (NetworkCode, StationCode, start_date.fyear, end_date.fyear, completion_limit))
-
-        rinex = rs.dictresult()
-        tqdm.write(' >> Deleting %i RINEX files and solutions for %s.%s between %s - %s and completion <= %.3f' %
-                   (len(rinex), NetworkCode, StationCode, start_date.yyyyddd(), end_date.yyyyddd(), completion_limit))
-
-        for rnx in tqdm(rinex):
-            try:
-                # delete rinex file (also deletes PPP and GAMIT solutions)
-                Archive.remove_rinex(rnx)
-
-            except dbConnection.dbErrDelete as e:
-                tqdm.write('Failed to delete solutions and/or RINEX files for %i %i. Reason: %s\n' %
-                           (rnx['Year'], rnx['DOY'], str(e)))
 
 
 def main():
@@ -1107,7 +805,7 @@ def main():
         except ValueError as e:
             parser.error(str(e))
 
-        delete_rinex(cnn, stnlist, dates[0], dates[1], float(args.delete_rinex[2]))
+        pyArchiveStruct.RinexStruct(cnn).delete_rinex(stnlist, dates[0], dates[1], float(args.delete_rinex[2]))
 
     #####################################
 
@@ -1121,9 +819,9 @@ def main():
             dest_network_code = args.rename[0].split('.')[0]
             dest_station_code = args.rename[0].split('.')[1]
 
-            rename_station(cnn, stnlist[0]['NetworkCode'], stnlist[0]['StationCode'],
-                           dest_network_code, dest_station_code,
-                           dates[0], dates[1], Config.archive_path, args.delete_station)
+            pyArchiveStruct.RinexStruct(cnn).rename_station(stnlist[0]['NetworkCode'], stnlist[0]['StationCode'],
+                                                            dest_network_code, dest_station_code,
+                                                            dates[0], dates[1], args.delete_station)
 
     JobServer.close_cluster()
 
