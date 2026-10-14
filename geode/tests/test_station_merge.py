@@ -1,5 +1,5 @@
 """
-Unit tests for the pure parts of pyStationMerge and for the paths of RinexStruct.rename_rinex_paths.
+Unit tests for the pure parts of station_merge and for the paths of RinexStruct.rename_rinex_paths.
 
 The database operations are not covered here: they need a GeoDE database.
 """
@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from geode import pyStationMerge as sm
+from geode import station_merge as sm
 from geode import pyArchiveStruct
 from geode.pyDate import Date
 

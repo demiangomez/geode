@@ -317,12 +317,12 @@ class RinexStruct(object):
                        delete_if_empty=True, dry_run=False):
         """
         Renames (merges) a station into another one: moves its rinex files in the archive and all its data in the
-        database. The work is done by pyStationMerge.StationMerge, this only reports the progress.
+        database. The work is done by station_merge.StationMerge, this only reports the progress.
         :param delete_if_empty: delete the origin station if it is left without RINEX files
         :param dry_run: only print what would be done, without changing anything
         """
-        # imported here because pyStationMerge uses this module
-        from .pyStationMerge import StationMerge, StationMergeException, format_report
+        # imported here because station_merge uses this module
+        from .station_merge import StationMerge, StationMergeException, format_report
 
         try:
             merge = StationMerge(self.cnn, (NetworkCode, StationCode), (DestNetworkCode, DestStationCode),
