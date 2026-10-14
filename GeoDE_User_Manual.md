@@ -996,6 +996,12 @@ IntegrityCheck.py igs.algo -stnp 7
 # Date range limits which files are moved
 IntegrityCheck.py igs.old_code -r igs.new_code \
     -d 2024/01/01 2024/12/31 -del_stn
+
+# Same operation with a dedicated command; --dry-run only shows what would be
+# moved, skipped or deleted, without changing the database or the archive
+MergeStation.py igs.old_code igs.new_code -df 2024/01/01 -dt 2024/12/31 --dry-run
+MergeStation.py igs.old_code igs.new_code -df 2024/01/01 -del_stn   # from that day on
+MergeStation.py igs.old_code igs.new_code -dt 2024/12/31            # up to that day
 ```
 
 **Process:**

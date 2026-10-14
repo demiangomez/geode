@@ -88,6 +88,15 @@ class Contact:
 
 
 @dataclass
+class RinexProblem:
+    """A run of RINEX files that share the same problem (e.g. outside the station info records)."""
+    date_start: str          # "YYYY-MM-DD"
+    date_end:   str          # "YYYY-MM-DD"
+    files:      int
+    problem:    str          # human-readable description
+
+
+@dataclass
 class StationReport:
     # Identity
     network:     str
@@ -143,6 +152,10 @@ class StationReport:
 
     # Geodynamic events (List[Earthquake] from ScoreTable)
     geodynamic_events: list = field(default_factory=list)
+
+    # RINEX files with problems, supplied by the caller (station_from_db does not
+    # evaluate them). None = not evaluated, the section is left out; [] = none found.
+    rinex_problems: Optional[list[RinexProblem]] = None
 
 
 # ── Image utilities ────────────────────────────────────────────────────────────
@@ -828,7 +841,8 @@ def build_report(s: StationReport,
                  show_rinex: bool = True,
                  show_contacts: bool = True,
                  show_visits: bool = True,
-                 show_geodynamics: bool = True) -> str:
+                 show_geodynamics: bool = True,
+                 show_rinex_problems: bool = True) -> str:
     """
     Build the full station report HTML string.
 
@@ -1144,6 +1158,30 @@ def build_report(s: StationReport,
                 f'</div>'
             )
 
+    # ── RINEX with problems ────────────────────────────────────────────────────
+    rinex_problems_section = ""
+    if show_rinex_problems and s.rinex_problems is not None:
+        if s.rinex_problems:
+            n_files = sum(p.files for p in s.rinex_problems)
+            rows = []
+            for p in s.rinex_problems:
+                period = (p.date_start if p.date_start == p.date_end
+                          else f"{p.date_start} &rarr; {p.date_end}")
+                rows.append((period, f"{p.files} file(s) &middot; {p.problem}", False))
+            rinex_problems_section = (
+                _section(f"RINEX with Problems &nbsp;&middot;&nbsp; {n_files} file(s)")
+                + _info_card("", "Affected periods", rows)
+            )
+        else:
+            rinex_problems_section = (
+                _section("RINEX with Problems")
+                + f'<div class="comment-box" style="background:#f5f5f3 !important;'
+                f'border-color:#d0ced8;border-left-color:#9b9a96;">'
+                f'<p style="color:#9b9a96;font-style:italic;">'
+                f'No RINEX files with problems found for this station.</p>'
+                f'</div>'
+            )
+
     # ── Footer ─────────────────────────────────────────────────────────────────
     footer = (f'<div class="footer">'
               f'<span>GeoDE &middot; Geodetic Database Engine</span>'
@@ -1163,6 +1201,7 @@ def build_report(s: StationReport,
         rinex_section,
         visits_section,
         geo_section,
+        rinex_problems_section,
     ]
 
     return f"""<!DOCTYPE html>
@@ -1221,7 +1260,8 @@ def station_from_db(cnn,
                     show_visits:       bool = True,
                     show_geodynamics:  bool = True,
                     show_maps:         bool = True,
-                    maps_out_dir:      Optional[str] = None) -> StationReport:
+                    maps_out_dir:      Optional[str] = None,
+                    solution_options=None) -> StationReport:
     """
     Build a StationReport from the GeoDE PostgreSQL database.
 
@@ -1236,6 +1276,8 @@ def station_from_db(cnn,
     show_maps    : bool  — fetch OSM/satellite map tiles (requires staticmap).
     maps_out_dir : str   — base directory for map JPEGs; images land in
                            <maps_out_dir>/<net>.<stn>/ (default: 'production/reports').
+    solution_options : SolutionOptions — solution (and stack) of the ETM time-series
+                           plot (default: PPP).
     """
     nc = network_code          # keep as-is (DB stores NetworkCode in lowercase)
     sc = station_code.lower()
@@ -1488,7 +1530,7 @@ def station_from_db(cnn,
             caption = str(r.get('description') or '').strip()
             station_images.append((p, caption))
 
-    # ── 8. ETM time-series plot (PPP solution, base64 PNG) ───────────────────
+    # ── 8. ETM time-series plot (PPP solution unless given, base64 PNG) ──────
     etm_base64 = None
     if show_timeseries:
         try:
@@ -1497,9 +1539,11 @@ def station_from_db(cnn,
             from ..etm.core.type_declarations import SolutionType
             from ..etm.core.etm_engine import EtmEngine
 
-            _sol = SolutionOptions()
-            _sol.solution_type = SolutionType.PPP
-            _sol.stack_name    = 'ppp'
+            _sol = solution_options
+            if _sol is None:
+                _sol = SolutionOptions()
+                _sol.solution_type = SolutionType.PPP
+                _sol.stack_name    = 'ppp'
             _cfg = EtmConfig(nc, sc, cnn=cnn, solution_options=_sol)
             _cfg.plotting_config.file_io = _BytesIO()
             _etm = EtmEngine(_cfg, cnn=cnn)
