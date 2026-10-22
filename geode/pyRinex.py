@@ -1129,6 +1129,15 @@ class ReadRinex(RinexRecord):
             self.datetime_lastObs  = end
             self.firstObs          = start.strftime('%Y/%m/%d %H:%M:%S')
             self.lastObs           = end  .strftime('%Y/%m/%d %H:%M:%S')
+
+            # DDG: write_rinex() rebuilds the file from self.header + self.data (both cached at
+            # construction time, or whenever they were last refreshed) rather than re-reading from
+            # disk -- without this, any later write_rinex() call (e.g. normalize_header(), called
+            # for GPSPACE right after auto_coord()) silently overwrites the just-windowed file with
+            # the stale pre-windowing body, undoing the window entirely. Keep the cache in sync with
+            # what's actually on disk now.
+            self.header = self.get_header()
+            self.read_data()
         else:
             move(self.rinex_path + '.t', copyto)
 

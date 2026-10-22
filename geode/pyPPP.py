@@ -367,9 +367,16 @@ class GPSPACE(PPPEngine):
     def prepare_rinex(self, in_rinex):
         # DDG: if RINEX 3 version, convert to RINEX 2 (no PPP support)
         if in_rinex.rinex_version >= 3:
-            # DDG: make a new object and convert to RINEX 3 to leave the other one untouched
-            rinexobj = pyRinex.ReadRinex(in_rinex.NetworkCode, in_rinex.StationCode, in_rinex.origin_file,
-                                         no_cleanup=in_rinex.no_cleanup, allow_multiday=in_rinex.allow_multiday)
+            # DDG: make a new object and convert to RINEX 3 to leave the other one untouched. Read
+            # from in_rinex.rinex_path (the current working copy), NOT in_rinex.origin_file (the
+            # pristine pre-windowing source) -- window_data() only ever updates rinex_path/
+            # datetime_firstObs/datetime_lastObs, never origin_file, so reading from origin_file
+            # here silently discarded any -win windowing already applied upstream (the caller would
+            # end up with a fresh, full-day object with no way to tell it had ever been windowed).
+            rinexobj = pyRinex.ReadRinex(in_rinex.NetworkCode, in_rinex.StationCode, in_rinex.rinex_path,
+                                         no_cleanup=in_rinex.no_cleanup, allow_multiday=in_rinex.allow_multiday,
+                                         min_time_seconds=0)
+            rinexobj.origin_file = in_rinex.origin_file
             rinexobj.ConvertRinex(2)
         else:
             # file is in RINEX 2 format, use file as is
@@ -853,7 +860,10 @@ class GPSPACE(PPPEngine):
             # DDG: handle the error found in PPP (happens every now and then)
             # Fortran runtime error: End of file
             for i in range(2):
-                out, err = pyRunWithRetry.RunCommand(self.ppp, 60, self.rootdir, 'input.inp').run_shell()
+                # DDG: was 60s -- too tight for longer windows/busy multi-GNSS RINEX 3 files under
+                # cluster load, causing spurious "Timeout after 3 retries" failures on otherwise
+                # healthy runs. Match PRIDE's own allowance (see PRIDE.__exec_ppp__ below).
+                out, err = pyRunWithRetry.RunCommand(self.ppp, 900, self.rootdir, 'input.inp').run_shell()
 
                 if '*END - NORMAL COMPLETION' not in out:
 
