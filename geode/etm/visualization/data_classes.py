@@ -68,6 +68,20 @@ class TimeSeriesPlotData:
 
 
 @dataclass
+class NoiseModelPlotData:
+    """Container for the noise model diagnostic plot (NoiseCovarianceGLS)"""
+    station_id: str
+    solution_type: str
+    stack_name: str
+    completion: float
+    latitude: float
+    longitude: float
+
+    # noise_model report of each component (N, E, U); empty dict if not available
+    noise_models: List[dict] = field(default_factory=list)
+
+
+@dataclass
 class PlotOutputConfig(BaseDataClass):
     """Configuration for plot output"""
     filename: Optional[str] = None

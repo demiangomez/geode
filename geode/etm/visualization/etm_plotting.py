@@ -22,7 +22,8 @@ from ..core.etm_config import EtmConfig
 LOGO_PATH = Path(__file__).parent / 'geode_logo.png'
 from ..visualization.time_series_template import TimeSeriesTemplate
 from ..visualization.histogram_template import HistogramTemplate
-from ..visualization.data_classes import TimeSeriesPlotData, PlotOutputConfig
+from ..visualization.noise_model_template import NoiseModelTemplate
+from ..visualization.data_classes import TimeSeriesPlotData, PlotOutputConfig, NoiseModelPlotData
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class EtmPlotter:
         self.config = config
         self.time_series_template = TimeSeriesTemplate(config)
         self.histogram_template = HistogramTemplate(config)
+        self.noise_model_template = NoiseModelTemplate(config)
 
         # Interactive plotting state
         self.figure = None
@@ -116,6 +118,34 @@ class EtmPlotter:
 
         return self._handle_plot_output(fig, output_config, histogram=True)
 
+    def plot_noise_model(self, plot_data: NoiseModelPlotData,
+                         output_config: Optional[PlotOutputConfig] = None) -> Optional[str]:
+        """
+        Create the noise model diagnostic plot: one row per component with the empirical covariance and its
+        fits (left) and the scan used to detect the periodic terms (right)
+        """
+        # if no specific output_config passed, replaced with default
+        if output_config is None:
+            output_config = self.config.plotting_config
+
+        template = self.noise_model_template
+
+        fig, axes = template.create_figure_layout()
+
+        title = template.generate_title(plot_data, output_config)
+        fig.suptitle(title, fontsize=9, family='monospace')
+
+        for i, component in enumerate(['north', 'east', 'up']):
+            label = self.config.get_label(component)
+            noise_model = plot_data.noise_models[i]
+            if noise_model and 'diagnostics' in noise_model:
+                template.plot_covariance_fit(axes[i, 0], noise_model, label)
+                template.plot_detection(axes[i, 1], noise_model, label)
+            else:
+                template.plot_not_available(axes[i], label)
+
+        return self._handle_plot_output(fig, output_config, suffix='_noise')
+
     def _plot_component_data(self, ax, plot_data: TimeSeriesPlotData,
                              component: str, component_idx: int,
                              output_config: PlotOutputConfig) -> None:
@@ -196,21 +226,25 @@ class EtmPlotter:
 
     def _handle_plot_output(self, fig,
                             output_config: Optional[PlotOutputConfig],
-                            histogram: bool = False) -> Optional[str]:
-        """Handle plot output based on configuration"""
+                            histogram: bool = False,
+                            suffix: str = '') -> Optional[str]:
+        """Handle plot output based on configuration. suffix is appended to the file name"""
         # Add logo to figure
         self._add_logo(fig)
+
+        if histogram:
+            suffix = '_hist'
 
         if output_config.filename:
             if not os.path.basename(output_config.filename):
                 filename = (os.path.join(output_config.filename,
-                                                      self.config.build_filename()) + ('_hist' if histogram else '')
+                                                      self.config.build_filename()) + suffix
                                           + '.' + output_config.format)
             else:
                 dirs = os.path.dirname(output_config.filename)
                 # split at the format if provided
                 file = os.path.basename(output_config.filename).split('.' + output_config.format)
-                filename = (os.path.join(dirs, file[0]) + ('_hist' if histogram else '')
+                filename = (os.path.join(dirs, file[0]) + suffix
                                           + '.' + output_config.format)
         else:
             filename = output_config.filename

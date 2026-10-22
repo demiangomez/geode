@@ -229,9 +229,10 @@ class EtmEngine:
                                               self.solution_data.time_vector,
                                               [polynomial, periodic] + self.jump_manager.get_jump_functions())
 
-        # if adjustment strategy is LSQ_COLLOCATION, add the stochastic function to the design matrix
-        # (although it is not used during the fit)
-        if self.config.modeling.least_squares_strategy.adjustment_model == AdjustmentModels.LSQ_COLLOCATION:
+        # if adjustment strategy is LSQ_COLLOCATION or NOISE_COVARIANCE_GLS, add the stochastic function to the
+        # design matrix (although it is not used during the fit)
+        if self.config.modeling.least_squares_strategy.adjustment_model in (AdjustmentModels.LSQ_COLLOCATION,
+                                                                            AdjustmentModels.NOISE_COVARIANCE_GLS):
             self.design_matrix.functions.append(
                 StochasticSignal(self.config, self.solution_data.time_vector_cont_mjd))
 
@@ -280,7 +281,7 @@ class EtmEngine:
             run_time = self.fit.run_fit(self.solution_data, self.design_matrix)
             if cnn and try_save_to_db and self.config.modeling.status == FitStatus.POSTFIT:
                 save_parameters_db(cnn, self.fit)
-            logger.info(f'Estimated parameters in {run_time} seconds')
+            logger.info(f'Estimated parameters in {run_time:.2f} seconds')
 
     def load_from_json(self, json_: Union[str, dict] = None) -> bool:
         """
@@ -408,6 +409,19 @@ class EtmEngine:
             return plotter.plot_histogram(plot_data)
         else:
             return None
+
+    def plot_noise(self) -> Union[str, None]:
+        """diagnostic plot of the noise model estimated by the NOISE_COVARIANCE_GLS strategy"""
+        if (self.config.modeling.status != FitStatus.POSTFIT or
+                not any('diagnostics' in result.noise_model for result in self.fit.results)):
+            logger.warning('Noise model plot: no noise model available. It requires a fit with the '
+                           'NOISE_COVARIANCE_GLS strategy (solutions loaded from the database do not keep it)')
+            return None
+
+        plotter = EtmPlotter(self.config)
+        plot_data = PlotDataPreparer(self.config).prepare_noise_model_data(self.solution_data, self.fit)
+
+        return plotter.plot_noise_model(plot_data)
 
     def get_position(self, dates: Union[Date, list],
                      etm_solution: EtmSolutionType = EtmSolutionType.MODEL) -> Dict:

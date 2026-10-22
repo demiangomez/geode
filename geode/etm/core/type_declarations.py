@@ -118,11 +118,13 @@ class AdjustmentModels(IntEnum):
     """Enum for adjustment models"""
     ROBUST_LEAST_SQUARES = auto()
     LSQ_COLLOCATION = auto()
+    NOISE_COVARIANCE_GLS = auto()
     @property
     def description(self) -> str:
         descriptions = {
             AdjustmentModels.ROBUST_LEAST_SQUARES: 'Robust Least Squares',
-            AdjustmentModels.LSQ_COLLOCATION: 'Least Squares Collocation'
+            AdjustmentModels.LSQ_COLLOCATION: 'Least Squares Collocation',
+            AdjustmentModels.NOISE_COVARIANCE_GLS: 'GLS with power-law + periodic noise covariance'
         }
         return descriptions.get(self, 'UNKNOWN')
 

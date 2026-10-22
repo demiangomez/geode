@@ -95,7 +95,7 @@ class TimeSeriesTemplate(PlotTemplate):
                 flags.append(self.config.get_label('jumps'))
             if (output_config.plot_remove_stochastic
                     and self.config.modeling.least_squares_strategy.adjustment_model
-                    == AdjustmentModels.LSQ_COLLOCATION):
+                    in (AdjustmentModels.LSQ_COLLOCATION, AdjustmentModels.NOISE_COVARIANCE_GLS)):
                 flags.append(self.config.get_label('stochastic'))
 
             for prefit in self.config.modeling.prefit_models:

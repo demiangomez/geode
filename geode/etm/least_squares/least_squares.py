@@ -5,7 +5,7 @@ Author: Demian D. Gomez
 """
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Tuple
 
 from scipy.optimize import curve_fit
 from scipy.signal import lombscargle
@@ -25,6 +25,7 @@ from ..core.type_declarations import JumpType, AdjustmentModels, NoiseModels, Fi
 from ..core.data_classes import AdjustmentResults
 from ..data.solution_data import SolutionData
 from ..least_squares.ls_collocation import gaussian_func
+from ..least_squares.noise_covariance import estimate_noise_model, NoiseCovarianceSettings, DETECTION_METHODS
 
 
 class AdjustmentStrategyException(Exception):
@@ -64,6 +65,11 @@ class WeightBuilder(ABC):
 
 class AdjustmentStrategy(ABC):
     """Abstract base class for different adjustment algorithms"""
+    # Lomb-Scargle periodogram and spectral index of the residuals (and of the stochastic signal). TEMPORARILY OFF:
+    # 0.3-0.7 s per call, up to 3 calls per component; nothing downstream uses them (they are only stored in the
+    # results). When off, spectral_index_* stay 0 and periodogram_* stay empty
+    compute_periodogram = False
+
     def __init__(self, config: EtmConfig):
         self.so = 1
         self.dof = 0
@@ -77,6 +83,11 @@ class AdjustmentStrategy(ABC):
         """Perform the least squares adjustment"""
         pass
 
+    @staticmethod
+    def component_label(kwargs: dict) -> str:
+        """N, E or U from the component index passed by EtmFit.run_fit (- if not given)"""
+        return 'NEU'[kwargs['component']] if kwargs.get('component') in (0, 1, 2) else '-'
+
     @classmethod
     def create_instance(cls, config: EtmConfig) -> 'AdjustmentStrategy':
         """Determine the type of object needed and return it to the called"""
@@ -87,6 +98,8 @@ class AdjustmentStrategy(ABC):
             instance = RobustLeastSquares(config)
         elif strategy == AdjustmentModels.LSQ_COLLOCATION:
             instance = LeastSquaresCollocation(config)
+        elif strategy == AdjustmentModels.NOISE_COVARIANCE_GLS:
+            instance = NoiseCovarianceGLS(config)
         else:
             raise ValueError(f"Adjustment strategy type "
                              f"{strategy.description} not implemented")
@@ -403,7 +416,8 @@ class RobustLeastSquares(AdjustmentStrategy):
         # iterations done, compute statistics
         try:
             if not results.converged:
-                logger.info(f'RobustLeastSquares did not converge! final wrms {wrms/1000:.1f} mm')
+                logger.info(f'RobustLeastSquares [{self.component_label(kwargs)}] did not converge! '
+                            f'final wrms {wrms/1000:.1f} mm')
 
             results.covariance_matrix = np.linalg.inv(a.T @ weights.matrix @ a) * (self.so ** 2)
         except np.linalg.LinAlgError as e:
@@ -423,11 +437,13 @@ class RobustLeastSquares(AdjustmentStrategy):
         results.obs_sigmas = np.sqrt(1 / np.diag(weights.matrix))
 
         # compute spectral index of residuals
-        si, fvec, pxx = self.compute_plomb(results.residuals[results.outlier_flags], time_vector_mjd[results.outlier_flags])
-        results.spectral_index_random_noise  = si
-        results.periodogram_frequencies      = fvec
-        results.periodogram_power            = pxx
-        logger.info(f'Spectral index of residuals: {si:.4f}')
+        if self.compute_periodogram:
+            si, fvec, pxx = self.compute_plomb(results.residuals[results.outlier_flags],
+                                               time_vector_mjd[results.outlier_flags])
+            results.spectral_index_random_noise  = si
+            results.periodogram_frequencies      = fvec
+            results.periodogram_power            = pxx
+            logger.info(f'Spectral index of residuals: {si:.4f}')
 
         # declare the origin of the fit
         results.origin = 'RobustLeastSquares'
@@ -437,7 +453,7 @@ class RobustLeastSquares(AdjustmentStrategy):
         logger.debug(f'{"RobustLeastSquares [mm]":>28}: ' +
                      ' '.join([f'{p*1000.:10.3e}' for p in results.parameters.tolist()]))
 
-        logger.info(f'RobustLeastSquares rejected outliers: '
+        logger.info(f'RobustLeastSquares [{self.component_label(kwargs)}] rejected outliers: '
                     f'{np.sum(~results.outlier_flags) / results.outlier_flags.shape[0] * 100:.1f}%')
         return results
 
@@ -460,7 +476,8 @@ class LeastSquaresCollocation(AdjustmentStrategy):
         lsq = RobustLeastSquares(self.config)
         white_noise = WhiteNoise(observations.size)
 
-        results = lsq.adjust(design_matrix, observations, white_noise, time_vector_mjd, n_neq_left, c_neq_right)
+        results = lsq.adjust(design_matrix, observations, white_noise, time_vector_mjd, n_neq_left, c_neq_right,
+                             component=kwargs.get('component'))
         wrms = results.wrms
         ###################################################################################################
         # now use residuals to run lsc
@@ -497,21 +514,23 @@ class LeastSquaresCollocation(AdjustmentStrategy):
         results.outlier_flags = s <= limit
 
         # compute spectral index of residuals
-        si, fvec, pxx = self.compute_plomb(results.residuals[results.outlier_flags], time_vector_mjd[results.outlier_flags])
-        results.spectral_index_random_noise  = si
-        results.periodogram_frequencies      = fvec
-        results.periodogram_power            = pxx
-        logger.info(f'Spectral index of residuals: {si:.4f}')
+        if self.compute_periodogram:
+            si, fvec, pxx = self.compute_plomb(results.residuals[results.outlier_flags],
+                                               time_vector_mjd[results.outlier_flags])
+            results.spectral_index_random_noise  = si
+            results.periodogram_frequencies      = fvec
+            results.periodogram_power            = pxx
+            logger.info(f'Spectral index of residuals: {si:.4f}')
 
-        si, _, _ = self.compute_plomb(results.stochastic_signal, time_vector_cont_mjd)
-        results.spectral_index_stochastic_noise = si
-        logger.info(f'Spectral index of stochastic noise: {si:.4f}')
+            si, _, _ = self.compute_plomb(results.stochastic_signal, time_vector_cont_mjd)
+            results.spectral_index_stochastic_noise = si
+            logger.info(f'Spectral index of stochastic noise: {si:.4f}')
 
         # declare the origin of the fit
         results.origin = 'LeastSquaresCollocation'
 
         logger.debug(f'LeastSquaresCollocation in {time() - tt:.3f} s')
-        logger.info(f'LeastSquaresCollocation rejected outliers: '
+        logger.info(f'LeastSquaresCollocation [{self.component_label(kwargs)}] rejected outliers: '
                     f'{np.sum(~results.outlier_flags) / results.outlier_flags.shape[0] * 100:.1f}%')
 
         return results
@@ -617,6 +636,275 @@ class LeastSquaresCollocation(AdjustmentStrategy):
         return results
 
 
+class NoiseCovarianceGLS(AdjustmentStrategy):
+    """
+    GLS adjustment with a noise covariance estimated from the residuals (see noise_covariance.py): a
+    non-negative mix of power laws (alpha = 0.5 ... 1.5) and white noise fitted to the empirical covariance
+    with projected kernels, plus automatically detected periodic terms. RobustLeastSquares flags the
+    outliers first; outliers are excluded from the noise model and the GLS (treated as missing days).
+    The stochastic signal is the collocation prediction of the detected periodic terms plus the power laws with
+    alpha >= 1 (flicker and steeper); flatter power laws and the white noise stay in the residuals.
+    """
+    # GeoDE works in meters, the noise model in mm (the units of the method's spec)
+    scale = 1000.
+
+    def __init__(self, config: EtmConfig):
+        super().__init__(config)
+        lsq = config.modeling.least_squares_strategy
+        if lsq.noise_detection not in DETECTION_METHODS:
+            raise ValueError(f'NoiseCovarianceGLS: unknown detection {lsq.noise_detection!r}, '
+                             f'use one of {DETECTION_METHODS}')
+        # the noise model works in mm: the minimum white variance is the floor squared [mm^2]
+        self.settings = NoiseCovarianceSettings(variance_factors=lsq.noise_variance_factors,
+                                                white_min=lsq.noise_white_floor_mm ** 2,
+                                                detection=lsq.noise_detection)
+        if lsq.noise_snr_min is not None:
+            if lsq.noise_snr_min <= 0:
+                raise ValueError(f'NoiseCovarianceGLS: the SNR threshold must be positive ({lsq.noise_snr_min})')
+            # only the threshold of the detection in use matters
+            self.settings.jhf_snr_min = self.settings.sgs_snr_min = float(lsq.noise_snr_min)
+
+    def adjust(self, design_matrix: DesignMatrix, observations: np.ndarray,
+               weights: WeightBuilder,
+               time_vector_mjd: np.ndarray = None,
+               time_vector_cont_mjd: np.ndarray = None,
+               n_neq_left: np.ndarray = 0,
+               c_neq_right: np.ndarray = 0,
+               **kwargs) -> AdjustmentResults:
+
+        tt = time()
+        a = design_matrix.matrix
+        s = self.scale
+        # component label for the screen output
+        comp = self.component_label(kwargs)
+
+        # robust fit to flag the outliers (and fallback if the noise model cannot be estimated)
+        rls = RobustLeastSquares(self.config).adjust(design_matrix, observations, WhiteNoise(observations.size),
+                                                     time_vector_mjd, n_neq_left, c_neq_right,
+                                                     component=kwargs.get('component'))
+
+        self.dof = (a.shape[0] - a.shape[1]) + design_matrix.total_constraints
+
+        inliers = rls.outlier_flags
+        if np.sum(inliers) <= a.shape[1]:
+            logger.warning('NoiseCovarianceGLS: not enough inliers to estimate the noise model, '
+                           'keeping the robust fit')
+            return rls
+
+        mjd = np.rint(time_vector_mjd).astype(int)
+        mjd0 = mjd[inliers][0]
+        if np.any(np.diff(mjd[inliers]) <= 0):
+            logger.warning('NoiseCovarianceGLS: epochs are not unique days in increasing order, '
+                           'keeping the robust fit')
+            return rls
+
+        has_constraints = bool(np.any(n_neq_left))
+        try:
+            # step-1 weights are those of the robust fit (equal weights for the inliers)
+            nm = estimate_noise_model(mjd[inliers] - mjd0, observations[inliers] * s, a[inliers],
+                                      p0=1 / (rls.obs_sigmas[inliers] * s) ** 2,
+                                      irate=self._rate_column(design_matrix),
+                                      settings=self.settings,
+                                      n_neq=n_neq_left / s ** 2 if has_constraints else None,
+                                      c_neq=c_neq_right / s if has_constraints else None)
+        except (np.linalg.LinAlgError, ValueError) as e:
+            logger.warning(f'NoiseCovarianceGLS: could not estimate the noise model ({e}), '
+                           f'keeping the robust fit')
+            return rls
+
+        gls = nm.gls
+        results = AdjustmentResults()
+        results.iterations = rls.iterations
+        results.converged = True
+        results.parameters = gls.x / s
+        # covariance of the GLS, not scaled by the variance factor (which is ~1 by construction)
+        results.covariance_matrix = gls.qx / s ** 2
+        results.parameter_sigmas = np.sqrt(np.diag(results.covariance_matrix))
+        results.variance_factor = float(gls.factors[2])
+        self.so = np.sqrt(results.variance_factor)
+
+        # signal on the continuous time vector and at the observations (zero outside the span
+        # of the inliers); residuals have the signal removed, as in LeastSquaresCollocation
+        results.stochastic_signal = self._signal_at(nm.signal, np.rint(time_vector_cont_mjd).astype(int) - mjd0) / s
+        signal_obs = self._signal_at(nm.signal, mjd - mjd0) / s
+        results.residuals = observations - a @ results.parameters - signal_obs
+
+        results.wrms = rls.wrms * self.so
+        results.outlier_flags = inliers
+        # total sigma of an observation under the noise model; robust-fit sigmas for the outliers
+        results.obs_sigmas = rls.obs_sigmas.copy()
+        results.obs_sigmas[inliers] = np.sqrt(nm.c_lag_final[0]) / s
+
+        # report and diagnostic data (in mm: the JSON output rounds to 6 decimals)
+        results.noise_model = nm.summary()
+        results.noise_model['units'] = {'variance': 'mm^2', 'rate': 'mm/yr', 'frequency': 'cycles/yr'}
+
+        # compute spectral index of residuals and of the stochastic signal
+        if self.compute_periodogram:
+            si, fvec, pxx = self.compute_plomb(results.residuals[inliers], time_vector_mjd[inliers])
+            results.spectral_index_random_noise = si
+            results.periodogram_frequencies = fvec
+            results.periodogram_power = pxx
+            si, _, _ = self.compute_plomb(results.stochastic_signal, time_vector_cont_mjd)
+            results.spectral_index_stochastic_noise = si
+
+        # every ETM parameter in the robust (white-noise) fit and in the GLS, for the screen output and the report
+        results.noise_model['parameters'] = self._parameter_table(design_matrix, rls, results)
+
+        results.origin = 'NoiseCovarianceGLS'
+        self._log_summary(nm, comp)
+        self._log_parameters(results.noise_model['parameters'], comp)
+        logger.debug(f'NoiseCovarianceGLS [mm]: ' +
+                     ' '.join([f'{p * 1000.:10.3e}' for p in results.parameters.tolist()]))
+        logger.debug(f'NoiseCovarianceGLS in {time() - tt:.3f} s ' +
+                     ' '.join(f'{k}: {v:.2f} s' for k, v in nm.timings.items()))
+        logger.info(f'NoiseCovarianceGLS [{comp}] rejected outliers: '
+                    f'{np.sum(~inliers) / inliers.shape[0] * 100:.1f}%')
+
+        return results
+
+    @staticmethod
+    def _rate_column(design_matrix: DesignMatrix):
+        """column of the velocity in the design matrix (None if the polynomial has no rate)"""
+        poly = design_matrix.get_polynomial()
+        if poly is not None and poly.fit and poly.param_count > 1:
+            return int(poly.column_index[1])
+        return None
+
+    @staticmethod
+    def _parameter_names(design_matrix: DesignMatrix) -> List[Tuple[str, str]]:
+        """(name, unit) of each column of the design matrix, in column order"""
+        names = []
+        for f in design_matrix.functions:
+            if not f.fit or f.param_count == 0:
+                continue
+
+            if f.p.object == 'polynomial':
+                terms = [f'position ({f.p.t_ref:.3f})', 'velocity', 'acceleration']
+                units = ['mm', 'mm/yr', 'mm/yr^2']
+                fn = [(terms[p], units[p]) if p < len(terms) else (f'polynomial p{p}', f'mm/yr^{p}')
+                      for p in range(f.param_count)]
+            elif f.p.object == 'periodic':
+                # sine columns first, then cosine columns; frequencies are in cycles/day
+                fn = [(f'periodic {kind} {1 / fr:.2f} d', 'mm') for kind in ('sin', 'cos') for fr in f.p.frequencies]
+            elif f.p.object == 'jump':
+                date = f.date.yyyyddd()
+                fn = []
+                if f.p.jump_type != JumpType.POSTSEISMIC_ONLY:
+                    fn.append((f'jump {date} offset', 'mm'))
+                if f.p.jump_type in (JumpType.COSEISMIC_JUMP_DECAY, JumpType.POSTSEISMIC_ONLY):
+                    fn += [(f'jump {date} relaxation {r:.2f} yr', 'mm') for r in f.p.relaxation]
+            else:
+                fn = []
+
+            # generic names if the layout of the function is not the expected one
+            if len(fn) != f.param_count:
+                fn = [(f'{f.p.object} p{p}', '') for p in range(f.param_count)]
+            names.extend(fn)
+
+        return names
+
+    def _parameter_table(self, design_matrix: DesignMatrix, rls: AdjustmentResults,
+                         gls: AdjustmentResults) -> List[dict]:
+        """value and sigma of each ETM parameter in the robust and the GLS fits [mm, years]"""
+        names = self._parameter_names(design_matrix)
+        if len(names) != gls.parameters.size:
+            names = [(f'p{i}', '') for i in range(gls.parameters.size)]
+
+        s = self.scale
+        return [{'name': name, 'unit': unit,
+                 'rls': float(rls.parameters[i] * s), 'rls_sigma': float(rls.parameter_sigmas[i] * s),
+                 'gls': float(gls.parameters[i] * s), 'gls_sigma': float(gls.parameter_sigmas[i] * s)}
+                for i, (name, unit) in enumerate(names)]
+
+    @staticmethod
+    def _log_parameters(table: List[dict], comp: str) -> None:
+        """screen output of the ETM parameters, one per line: robust fit and GLS with the noise model"""
+        tag = f'NoiseCovarianceGLS [{comp}]'
+        logger.info(f'{tag}: {"parameter":<44} {"robust LSQ (white noise)":>24}   {"GLS (noise model)":>24}')
+        for p in table:
+            name = f"{p['name']} [{p['unit']}]" if p['unit'] else p['name']
+            logger.info(f"{tag}:   {name:<42} {p['rls']:12.3f} +- {p['rls_sigma']:8.3f}   "
+                        f"{p['gls']:12.3f} +- {p['gls_sigma']:8.3f}")
+
+    @staticmethod
+    def _signal_at(signal: np.ndarray, day: np.ndarray) -> np.ndarray:
+        """signal on the daily grid evaluated at days from the first inlier (zero outside the grid)"""
+        out = np.zeros(day.size)
+        inside = (day >= 0) & (day < signal.size)
+        out[inside] = signal[day[inside]]
+        return out
+
+    @staticmethod
+    def _log_summary(nm, comp: str) -> None:
+        """screen output of the noise model of one component (reference -> with periodic terms)"""
+        ref, fin, det = nm.reference, nm.final, nm.detection
+        a_ref, a_fin = nm.alpha_reference, nm.alpha_final
+        gls = nm.gls
+        joint = det.method == 'joint'
+        method = 'joint harmonic fit' if joint else 'stepwise grid search'
+        tag = f'NoiseCovarianceGLS [{comp}]'
+
+        def white(cf) -> str:
+            return f'{cf.nugget:.3f}' + (' (minimum)' if cf.white_at_min else '')
+
+        logger.info(f'{tag}: colored {ref.colored_variance:.3f} -> {fin.colored_variance:.3f} '
+                    f'white {white(ref)} -> {white(fin)} mm^2, chi2/dof '
+                    f'{ref.chi2 / max(ref.dof, 1):.2f} -> {fin.chi2 / max(fin.dof, 1):.2f}')
+
+        # periodic terms, one per line by increasing period: amplitude, SNR in the final fit, fraction of the variance
+        # that survives the ETM; for the joint harmonic fit also the SNR in the harmonic fit (none for periods added
+        # by the final check) and the action of the final check (passed, added; removed periods have a row without
+        # values)
+        removed = det.check_removed if joint else np.array([])
+        weak = nm.weak_final_snr
+        if not fin.f.size and not removed.size:
+            logger.info(f'{tag}: periodic terms ({method}): none')
+        else:
+            logger.info(f'{tag}: {"periodic term (" + method + ")":<44} {"amplitude [mm]":>14} {"SNR final":>10}' +
+                        (f' {"SNR harmonic":>13}' if joint else '') + f' {"survives ETM":>13}' +
+                        (f' {"final check":>12}' if joint else ''))
+            rows = []
+            for i, (f, wp, q, c0) in enumerate(zip(fin.f, fin.w_p, det.snr, fin.survive)):
+                row = f'{tag}:   {f"{1 / f:8.1f} d":<42} {np.sqrt(2 * wp):14.2f} {q:9.1f}{"*" if weak[i] else " "}'
+                if joint:
+                    q_h = det.snr_harmonic[i]
+                    row += f' {f"{q_h:.1f}" if np.isfinite(q_h) else "-":>13}'
+                row += f' {c0:13.2f}'
+                if joint:
+                    row += f' {det.check_action[i]:>12}'
+                rows.append((1 / f, row))
+            for f in removed:
+                rows.append((1 / f, f'{tag}:   {f"{1 / f:8.1f} d":<42} {"-":>14} {"-":>9}  {"-":>13} {"-":>13} '
+                                    f'{"removed":>12}'))
+            for _, row in sorted(rows, key=lambda r: r[0]):
+                logger.info(row)
+            if weak.any():
+                logger.info(f'{tag}:   * SNR below {nm.settings.jhf_snr_min:g} in the final fit (kept: the decision '
+                            f'is made in the harmonic fit)')
+        # the low final SNRs are marked in the table
+        for kind, flag in nm.flag_items():
+            if kind != 'final_snr':
+                logger.info(f'{tag}: flag: {flag}')
+
+        def alpha(ea) -> str:
+            # band as periods [d], longest first (ea.f_low, ea.f_high in cycles/yr)
+            if ea.band_empty:
+                # the steep part never dominates the floor: alpha is the local slope at 1/N
+                return f'{ea.alpha:.2f} (local at {365.25 / ea.f_low:.0f} d)'
+            return f'{ea.alpha:.2f} ({365.25 / ea.f_low:.0f}-{365.25 / ea.f_high:.0f} d)'
+
+        logger.info(f'{tag}: effective alpha {alpha(a_ref)} -> {alpha(a_fin)} with periodic terms')
+        if np.isfinite(gls.factors[0]):
+            # variance factors per part of the noise model, if requested (the white factor is undefined
+            # without white noise)
+            f_w = f'{gls.factors[1]:.3f}' if np.isfinite(gls.factors[1]) else 'n/a'
+            logger.info(f'{tag}: variance factors colored {gls.factors[0]:.3f} white {f_w}')
+        else:
+            # variance of unit weight of the whole fit: v' C^-1 v / redundancy (always computed)
+            logger.info(f'{tag}: variance of unit weight {gls.factors[2]:.3f}')
+
+
 class EtmFit:
     def __init__(self, config: EtmConfig, design_matrix: DesignMatrix, solution_data_hash: int = None):
 
@@ -694,7 +982,8 @@ class EtmFit:
                                                  time_vector_mjd=solution_data.time_vector_mjd[mask],
                                                  time_vector_cont_mjd=solution_data.time_vector_cont_mjd,
                                                  n_neq_left=n_neq_left,
-                                                 c_neq_right=c_neq_right)
+                                                 c_neq_right=c_neq_right,
+                                                 component=i)
 
                 self.load_results_to_functions()
 

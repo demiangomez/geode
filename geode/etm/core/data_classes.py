@@ -52,6 +52,8 @@ class AdjustmentResults(BaseDataClass):
     outlier_flags: np.ndarray = field(default_factory=lambda: np.array([]))
     converged: bool = False
     iterations: int = 0
+    # report of the estimated noise model (NoiseCovarianceGLS only)
+    noise_model: dict = field(default_factory=dict)
 
     def __post_init__(self):
         super().__post_init__()
@@ -193,6 +195,18 @@ class LeastSquares(BaseDataClass):
     arma_points: int = 200
     covariance_function: CovarianceFunction = CovarianceFunction.GAUSSIAN
     adjustment_model: AdjustmentModels = AdjustmentModels.ROBUST_LEAST_SQUARES
+    # NOISE_COVARIANCE_GLS: compute the colored and white variance factors of the GLS
+    # (costs one n x n triangular inverse per component)
+    noise_variance_factors: bool = False
+    # NOISE_COVARIANCE_GLS: minimum white noise (sigma, in mm) imposed in every fit of the noise model
+    noise_white_floor_mm: float = 0.5
+    # NOISE_COVARIANCE_GLS: detection of periodic terms, 'joint' (joint harmonic fit) or 'stepwise' (stepwise
+    # grid search, kept for comparison)
+    noise_detection: str = 'joint'
+    # NOISE_COVARIANCE_GLS: SNR threshold of the detection of periodic terms; None = the default of the method
+    # (8 for the joint harmonic fit, where it is also the misfit-ratio threshold of the final check; 7 for the
+    # stepwise grid search)
+    noise_snr_min: Optional[float] = None
     # constraints to apply to the fit
     constraints: List = field(default_factory=lambda: [])
 
@@ -243,7 +257,8 @@ class ModelingParameters(BaseDataClass):
     check_jump_collisions: bool = True
     # minimum number of days between jumps
     jump_min_days: int = 5
-    # years to add postseismic decays from jumps back in time
+    # how far back from the first observation M>=7 earthquakes are still fit as postseismic transients: a number
+    # of days (default 5 years) or a Date. This is the default for every caller (PlotETM, web, scripts)
     post_seismic_back_lim: Union[int, Date] = 365 * 5
 
     # General status of the fit process

@@ -412,7 +412,7 @@ class Score(object):
                 u = np.reshape(u, self.gx.shape)
 
                 # create the mask
-                disp = np.sqrt(np.square(n) + np.square(e) + np.square(u))
+                disp = np.sqrt(np.square(n) + np.square(e))
                 U = np.logical_or((disp >= limit), U)
                 # save the displacement field (average over nodal planes, when there is more than one)
                 if i > 1:

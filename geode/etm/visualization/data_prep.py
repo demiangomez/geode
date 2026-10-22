@@ -16,7 +16,7 @@ from ..core.etm_config import EtmConfig
 from ..core.type_declarations import FitStatus
 from ..data.solution_data import SolutionData
 from ..least_squares.least_squares import EtmFit
-from ..visualization.data_classes import TimeSeriesPlotData, ComponentData, PlotOutputConfig
+from ..visualization.data_classes import TimeSeriesPlotData, ComponentData, PlotOutputConfig, NoiseModelPlotData
 
 # Re-export PlotTemplate for backward compatibility
 from ..visualization.plot_template import PlotTemplate
@@ -79,6 +79,19 @@ class PlotDataPreparer:
             )
 
         return plot_data
+
+    @staticmethod
+    def prepare_noise_model_data(solution_data: SolutionData, etm_fit: EtmFit) -> NoiseModelPlotData:
+        """Prepare data for the noise model diagnostic plot"""
+        return NoiseModelPlotData(
+            station_id=solution_data.get_station_id().upper(),
+            solution_type=solution_data.soln,
+            stack_name=solution_data.stack_name,
+            completion=solution_data.completion,
+            latitude=solution_data.lat[0],
+            longitude=solution_data.lon[0],
+            noise_models=[result.noise_model for result in etm_fit.results]
+        )
 
     @staticmethod
     def _prepare_jump_tables(etm_results: EtmFit) -> JumpTableData:

@@ -127,6 +127,7 @@ def process_etm_station(stn, args_dict, from_kmz):
     ADJUSTMENT_MODEL_MAP = {
         'rls': AdjustmentModels.ROBUST_LEAST_SQUARES,
         'lsc': AdjustmentModels.LSQ_COLLOCATION,
+        'gls': AdjustmentModels.NOISE_COVARIANCE_GLS,
     }
     COVARIANCE_MAP = {
         'arma': CovarianceFunction.ARMA,
@@ -161,8 +162,11 @@ def process_etm_station(stn, args_dict, from_kmz):
             solution_options.filename      = fname
             no_save_db = True
 
+        # not given: keep the ModelingParameters default (the same for every caller)
         psb = args_dict['post_seismic_back']
-        if isinstance(psb, str) and any(c in psb for c in ('_', '.', '/')):
+        if psb is None:
+            time_back = None
+        elif any(c in psb for c in ('_', '.', '/')):
             time_back = process_date_str(psb)
         else:
             time_back = int(psb) * 365
@@ -236,6 +240,9 @@ def process_etm_station(stn, args_dict, from_kmz):
         config.modeling.fit_auto_detected_jumps        = args_dict['fit_auto_jumps'][0] is not None
         config.modeling.fit_auto_detected_jumps_method = args_dict['fit_auto_jumps'][0]
         config.modeling.least_squares_strategy.iterations          = args_dict['max_iterations']
+        config.modeling.least_squares_strategy.noise_variance_factors = args_dict['variance_factors']
+        config.modeling.least_squares_strategy.noise_detection        = args_dict['periodic_detection']
+        config.modeling.least_squares_strategy.noise_snr_min          = args_dict['snr_min']
         config.modeling.least_squares_strategy.sigma_filter_limit  = args_dict['sigma_limit']
         config.modeling.least_squares_strategy.covariance_function = \
             COVARIANCE_MAP[args_dict['covariance'][0]]
@@ -313,9 +320,14 @@ def process_etm_station(stn, args_dict, from_kmz):
                                relaxation=relax, date=date, action='+'))
 
         etm = EtmEngine(config, cnn=cnn)
+        # the noise model diagnostics are not stored in the database: recompute the fit to plot them
+        plot_noise = ('noise' in args_dict['plot_options'] and 'no-plots' not in args_dict['plot_options'] and
+                      config.modeling.least_squares_strategy.adjustment_model ==
+                      AdjustmentModels.NOISE_COVARIANCE_GLS)
         etm.run_adjustment(cnn=cnn,
                            try_save_to_db=not no_save_db,
-                           try_loading_db=not no_save_db)
+                           try_loading_db=not no_save_db,
+                           force_computation=plot_noise)
 
         json_opts = args_dict['json']
         if json_opts is not None:
@@ -329,6 +341,8 @@ def process_etm_station(stn, args_dict, from_kmz):
             etm.plot()
             if 'hist' in args_dict['plot_options']:
                 etm.plot_hist()
+            if 'noise' in args_dict['plot_options']:
+                etm.plot_noise()
 
         # --- query output (inlined from print_query, captured to string) ---
         query_output = None
@@ -396,7 +410,8 @@ def process_etm_station(stn, args_dict, from_kmz):
 
 ADJUSTMENT_MODEL_MAP = {
     'rls': AdjustmentModels.ROBUST_LEAST_SQUARES,
-    'lsc': AdjustmentModels.LSQ_COLLOCATION
+    'lsc': AdjustmentModels.LSQ_COLLOCATION,
+    'gls': AdjustmentModels.NOISE_COVARIANCE_GLS
 }
 
 COVARIANCE_MAP = {
@@ -821,9 +836,10 @@ def main():
                         help="Required: specify the GAMIT stack name or ppp to use GPSPACE solutions.")
 
     parser.add_argument('-lsq', '--least_squares_strategy',
-                        choices=['lsc', 'rls'], default='rls',
+                        choices=['lsc', 'rls', 'gls'], default='rls',
                         help="Adjustment strategy to fit the time series. Choose between least squares collocation "
-                             "(lsc) and robust least squares (rls)")
+                             "(lsc), robust least squares (rls) and generalized least squares with a power-law + "
+                             "white + periodic noise covariance estimated from the residuals (gls)")
 
     parser.add_argument('-const', '--constraints', nargs='+', default=None, metavar='{json} {function}',
                         help="Constrain fit using json function (ETM) file. Provide list of functions to constrain "
@@ -863,9 +879,10 @@ def main():
     parser.add_argument('-s_score', '--s_score_mag_limit', type=float, default=6.0, metavar='magnitude',
                         help="Limit the s-score search to earthquakes with magnitude >= {magnitude}. Default is 6.0")
 
-    parser.add_argument('-post_back', '--post_seismic_back', type=str, default=10, metavar='years|date',
-                        help="How many years (or date) since the start of the time series should the ETM fit postseismic "
-                             "transients. Default is 10 years")
+    parser.add_argument('-post_back', '--post_seismic_back', type=str, default=None, metavar='years|date',
+                        help="How many years (or date) before the start of the time series should the ETM fit "
+                             "postseismic transients of M>=7 earthquakes. Default is "
+                             f"{ModelingParameters().post_seismic_back_lim // 365} years (the ETM module default)")
 
     parser.add_argument('-force', '--force_earthquakes', nargs='+', default=[], metavar='event_id',
                         help="Add cherry-picked seismic earthquake (that fall outside of s_score_mag_limit) to the "
@@ -878,6 +895,20 @@ def main():
                              "log10(cond) > max_condition_number will get their smallest relaxation value removed. If "
                              "high condition number persists, then the jump will be reduced to POSTSEISMIC-ONLY if "
                              "jump is CO+POSTSEISMIC")
+
+    parser.add_argument('-pdet', '--periodic_detection', choices=['joint', 'stepwise'], default='joint',
+                        help="With -lsq gls, how periodic terms are detected in the noise model: joint harmonic fit "
+                             "(joint, default) or stepwise grid search (stepwise, the earlier method, kept for "
+                             "comparison)")
+
+    parser.add_argument('-snr', '--snr_min', type=float, default=None, metavar='threshold',
+                        help="With -lsq gls, SNR threshold of the detection of periodic terms. Default is 8 for the "
+                             "joint harmonic fit (where it is also the misfit-ratio threshold of the final check) "
+                             "and 7 for the stepwise grid search")
+
+    parser.add_argument('-vfac', '--variance_factors', action='store_true', default=False,
+                        help="With -lsq gls, also compute the variance factors of the colored and white parts of "
+                             "the noise model (costs one n x n triangular inverse per component)")
 
     parser.add_argument('-sigma', '--sigma_limit', type=float, default=2.5,
                         help="Number of sigmas for the limit of outlier detection. Default is 2.5 sigma")
@@ -897,11 +928,14 @@ def main():
                              "the existing configuration")
 
     parser.add_argument('-plot', '--plot_options', nargs='*',
-                        choices=['out', 'hist', 'missing', 'residuals', 'no-model', 'no-plots'],
+                        choices=['out', 'hist', 'noise', 'missing', 'residuals', 'no-model', 'no-plots'],
                         default=[],
                         help="Plotting options: "
                              "out -> plot right panel with the outliers marked in cyan; "
                              "hist -> plot additional file with histograms of residuals; "
+                             "noise -> plot additional file with the noise model diagnostics (fit to the empirical "
+                             "covariance and detection of periodic terms; -lsq gls only, forces the computation "
+                             "of the ETM); "
                              "residuals -> show only residuals (remove all ETM functions); "
                              "missing -> show missing solution days as magenta lines in the plot "
                              "(only visible with -out activated); "
@@ -927,7 +961,7 @@ def main():
                         choices=['poly', 'per', 'jumps', 'stoch'], default=None,
                         help="Remove components from model and time series before plotting. Options are: "
                              "poly -> polynomial; per -> periodic; jumps -> mechanical and geophysical jumps; "
-                             "stoch -> stochastic noise if adjustment strategy is 'least squares collocation'. "
+                             "stoch -> stochastic signal if adjustment strategy is lsc or gls. "
                              "If no arguments are given, then all components are removed (same output as "
                              "residuals mode)")
 
