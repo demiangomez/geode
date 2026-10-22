@@ -859,8 +859,36 @@ class ReadRinex(RinexRecord):
             raise pyRinexExceptionBadFile('RINEX sampling interval > 120s. The output from Gfzrnx was:\n' + str(output))
 
         elif self.epochs * self.interval < min_time_seconds:
-            raise pyRinexExceptionBadFile('RINEX file with < %i seconds of observation time. '
-                                          'The output from Gfzrnx was:\n' % min_time_seconds + str(output))
+            # DDG: lead with a plain-language summary of WHY the file is short -- usually a genuine
+            # receiver dropout/gap in the source file (not a windowing issue: this check runs on the
+            # original file before any -win windowing is even attempted), which is easy to miss
+            # buried inside the raw Gfzrnx dict dump that follows. Best-effort: never let a problem
+            # building this summary mask the actual error.
+            summary = ''
+            try:
+                d  = output['data']
+                ep = d['epoch']
+                missing = int(ep.get('number_missing', 0))
+                nominal = int(ep.get('number_nominal', 0))
+                gap     = ' (%d missing, %.0f%% gap vs. the nominal session length)' % \
+                          (missing, 100.0 * missing / nominal) if nominal else ''
+                # DDG: Gfzrnx's own 'duration_rinex' label uses 'M' for minutes (e.g. '34M'), easily
+                # misread as megabytes -- lowercase just that trailing minutes suffix.
+                dur_label = d.get('duration_rinex', '?')
+                if dur_label.endswith('M'):
+                    dur_label = dur_label[:-1] + 'm'
+                summary = (' %s has only %s (%ss) of observation data, spanning %s to %s -- '
+                          '%s of %s nominal epochs present%s.'
+                          % (output.get('file', {}).get('name', 'file'), dur_label,
+                             d.get('duration', '?'), ep.get('first', '?'), ep.get('last', '?'),
+                             ep.get('number', '?'), nominal or '?', gap))
+            except Exception:
+                pass
+
+            raise pyRinexExceptionBadFile(
+                'RINEX file has only %g seconds of observation time (minimum required: %i).%s '
+                'The full output from Gfzrnx was:\n' % (self.epochs * self.interval, min_time_seconds, summary)
+                + str(output))
 
         try:
             p = output['data']['epoch']
