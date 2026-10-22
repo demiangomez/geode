@@ -95,6 +95,13 @@ def main():
     parser.add_argument('-min', '--min_time_seconds', type=int, default=3600,
                         help='Minimum observation time in seconds for observations (default=3600).')
 
+    parser.add_argument('-ar', '--force_ar', action='store_true', default=False,
+                        help="PRIDE only: force ambiguity resolution even on sessions under 1 hour, "
+                             "overriding the automatic float-only fallback (short PRIDE-AR sessions "
+                             "can land on a weak, marginal integer fix instead of the correct one -- "
+                             "use this only when you've already judged a given short session reliable "
+                             "enough). Has no effect on GPSPACE, which never does ambiguity resolution.")
+
     parser.add_argument('-code', '--code_only', action='store_true', default=False,
                         help='Run PPP using only code (C1) observations.')
 
@@ -260,7 +267,7 @@ def process_rinex_task(rinex_path, window_hours, args_dict, options, sp3types, b
                                    not args.no_met, args.decimate, args.fix_coordinate, args.solve_troposphere,
                                    args.copy_results, args.backward_substitution, args.elevation_mask,
                                    args.code_only, args.residuals, args.print_residuals, window_hours,
-                                   args.window_start)
+                                   args.window_start, args.force_ar)
 
                 if label and text:
                     text = '\n'.join('%s %s' % (label, line) for line in text.splitlines())
@@ -291,7 +298,7 @@ def callback_locate_rinex(job):
 def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, erase, apply_met=True, decimate=True,
                 fix_coordinate=None, solve_troposphere=105, copy_results=None, backward_substitution=False,
                 elevation_mask=5, code_only=False, save_residuals=False, print_residuals=False, window_hours=None,
-                window_start=None):
+                window_start=None, force_ar=False):
     # DDG: self-contained local imports -- this function is shipped to dispy workers as a
     # dependency of process_rinex_task() (see JobServer.create_cluster's deps= argument), so it
     # can't rely on the caller module's own top-level imports being present in that namespace.
@@ -393,7 +400,8 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
                            solve_coordinates=True if not fix_coordinate else False,
                            solve_troposphere=solve_troposphere, back_substitution=backward_substitution,
                            elev_mask=elevation_mask, x=x, y=y, z=z,
-                           observations=pyPPP.OBSERV_CODE_ONLY if code_only else pyPPP.OBSERV_CODE_PHASE)
+                           observations=pyPPP.OBSERV_CODE_ONLY if code_only else pyPPP.OBSERV_CODE_PHASE,
+                           force_ar=force_ar)
 
         ppp.exec_ppp()
 

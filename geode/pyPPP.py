@@ -154,12 +154,16 @@ class PPPEngine(PPPSpatialCheck, ABC):
     def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
                  apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
                  decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
-                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE):
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False):
 
         # DDG: move this definition before anything else is called to avoid problems with object deletion in case the
         # pyRinex call below fails
         # generate a unique id for this instance
         self.rootdir = os.path.join(os.path.join('production', 'ppp'), str(uuid.uuid4()))
+
+        # DDG: only meaningful for PRIDE (see PRIDE.__exec_ppp__) -- stored here since RunPPP()'s
+        # single call site is engine-agnostic and both subclasses must accept the same kwargs.
+        self.force_ar = force_ar
 
         self.antH      = antenna_height
         self.options   = options
@@ -353,7 +357,7 @@ class GPSPACE(PPPEngine):
     def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
                  apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
                  decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
-                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE):
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False):
 
         self.ppp_path = options['ppp_path']
         self.ppp      = options['ppp_exe']
@@ -362,7 +366,7 @@ class GPSPACE(PPPEngine):
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
                            solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
-                           observations)
+                           observations, force_ar)
 
     def prepare_rinex(self, in_rinex):
         # DDG: if RINEX 3 version, convert to RINEX 2 (no PPP support)
@@ -1206,7 +1210,7 @@ class PRIDE(PPPEngine):
     def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
                  apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
                  decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
-                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE):
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False):
 
         if kinematic:
             raise pyRunPPPExceptionUnsupported('The PRIDE PPP-AR engine does not support kinematic mode yet.')
@@ -1230,7 +1234,7 @@ class PRIDE(PPPEngine):
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
                            solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
-                           observations)
+                           observations, force_ar)
 
     @staticmethod
     def _ensure_offline(pdp3_path):
@@ -1540,10 +1544,12 @@ class PRIDE(PPPEngine):
         # search can land on a weak, barely-accepted integer combination (ratio close to 1) instead
         # of the correct one, biasing the coordinate by decimeters even though PRIDE reports SUCCESS.
         # Disable ambiguity resolution entirely (float solution) for sessions under 1 hour until this
-        # is revisited. Must be appended before the RINEX filename -- pdp3 treats its last argument
-        # as the positional RINEX file and only parses options before it.
+        # is revisited -- unless force_ar explicitly overrides it (e.g. LocateRinex's -ar switch),
+        # for cases where the caller has already judged a given short session reliable enough.
+        # Must be appended before the RINEX filename -- pdp3 treats its last argument as the
+        # positional RINEX file and only parses options before it.
         span = (self.rinex.datetime_lastObs - self.rinex.datetime_firstObs).total_seconds()
-        if span < 3600:
+        if span < 3600 and not self.force_ar:
             cmd += ' -f'
 
         cmd += ' %s' % self.rinex.rinex
