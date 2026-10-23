@@ -362,6 +362,18 @@ class GPSPACE(PPPEngine):
         self.ppp_path = options['ppp_path']
         self.ppp      = options['ppp_exe']
         self.engine   = 'GPSPACE'
+        self.bia      = None
+
+        # DDG: AR literally never runs without backward substitution -- confirmed in gpspace.f, the
+        # reference-satellite-selection code (the "AR REF SEARCH"/"AR REF SELECT" block, gated at
+        # IPC.GE.1) only exists in the BACKWARD pass; with back_substitution off, that code is simply
+        # never reached, regardless of BIA/RNX3CODES/IFLTON all being correctly set up. -ar on its
+        # own would otherwise silently do nothing, so force it on here rather than make the caller
+        # separately remember -back too. Must happen before PPPEngine.__init__(), which calls
+        # stage() (and therefore config_session(), which writes commands.cmd) internally -- setting
+        # self.back_substitution afterward would be too late.
+        if force_ar:
+            back_substitution = True
 
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
@@ -385,6 +397,18 @@ class GPSPACE(PPPEngine):
         else:
             # file is in RINEX 2 format, use file as is
             rinexobj = in_rinex
+
+            # DDG: ambiguity resolution needs RNX3CODES populated (gpspace.f HDRNX), which only
+            # happens by parsing "RINEX 3 -> 2 TYPE CONVERSION DETAILS" COMMENT records that gfzrnx
+            # injects while actually performing a 3->2 downgrade -- a native RINEX 2 file never goes
+            # through that path, so a same-version passthrough does NOT add them (confirmed
+            # empirically: tested directly, no comments were injected). A 2->3->2 round-trip forces
+            # gfzrnx to infer the RINEX 3 codes from the receiver type and annotate them on the way
+            # back down, which does work (also confirmed empirically). Only worth the extra two
+            # gfzrnx passes when AR was actually requested.
+            if self.force_ar:
+                rinexobj.ConvertRinex(3)
+                rinexobj.ConvertRinex(2)
 
         return rinexobj
 
@@ -416,6 +440,12 @@ class GPSPACE(PPPEngine):
         self.copyfiles()
         self.config_session()
 
+        # DDG: stage the fetched code/phase bias product (if any -- see get_orbits()) as gpsppp.bia,
+        # the default filename gpspace.f's BIAINP looks for (Option B of the two naming conventions
+        # it supports; simpler than replicating its SP3-filename-derived alternative).
+        if self.bia is not None:
+            copyfile(self.bia.file_path, os.path.join(self.rootdir, 'gpsppp.bia'))
+
         # make a local copy of the rinex file
         # decimate the rinex file if the interval is < 15 sec.
         # DDG: only decimate when told by caller
@@ -438,6 +468,28 @@ class GPSPACE(PPPEngine):
             else:
                 if f == 'gpsppp.svb_gnss_yrly':
                     raise pyRunPPPException(f'Missing gpsppp.svb_gnss_yrly for PPP processing.')
+
+        # DDG: with -ar, force the filter ON (IFLTON=1) in the staged gpsppp.flt -- a 4th AR
+        # prerequisite the original instructions missed entirely. gpspace.f's RDFLT reads the "FLT"
+        # data line in free format as (FLTDNL,FLTDWL,FLTDAM,FLTDPL,FLTDTT,IPC,IFLTON,IC1USE,IDCBUSE,
+        # VFACTOR,ADEV,IC2USE); with IFLTON=0 (our shipped default) the cycle-slip-aware filtering
+        # that continuous ambiguity tracking depends on never runs at all (confirmed in source: e.g.
+        # "IF (IFLTON.EQ.0) FLTPR=..." takes a simplified direct-combination path instead), so none
+        # of AR's own code paths are ever reached -- BIA loads fine, matches fine, but nothing
+        # downstream of the filter ever runs regardless. Only the IFLTON field is touched.
+        if self.force_ar:
+            flt_path = os.path.join(self.rootdir, 'gpsppp.flt')
+            if os.path.isfile(flt_path):
+                with open(flt_path, 'r') as fh:
+                    flt_lines = fh.readlines()
+                for i, line in enumerate(flt_lines):
+                    if line.startswith('FLT'):
+                        fields = line.split()
+                        fields[7] = '1'
+                        flt_lines[i] = 'FLT    ' + '    '.join(fields[1:]) + '\n'
+                        break
+                with open(flt_path, 'w') as fh:
+                    fh.writelines(flt_lines)
 
         copyfile(os.path.join(self.atx),
                  os.path.join(self.rootdir, os.path.basename(self.atx)))
@@ -519,12 +571,46 @@ class GPSPACE(PPPEngine):
 
         orbits_path = os.path.join(self.rootdir, 'orbits')
 
-        if self.observations == OBSERV_CODE_PHASE:
-            orbits1 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date,     orbit_type, orbits_path, True)
-            orbits2 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date + 1, orbit_type, orbits_path, True)
+        # DDG: when AR was requested (-ar), use a product set consistently matched to the BIA file's
+        # own processing line (MGX) for SP3/CLK/ERP/BIA alike -- not just the BIA fetch. Code/phase
+        # biases are calibrated against the SAME AC's SAME processing line's own clock solution;
+        # pulling orbits/clocks from a different line (e.g. a typical sp3_cs precedence of
+        # R03,OPS,MGX finding OPS first, or even falling through to the old short-name "codWWWWD"
+        # convention, which isn't MGX-combined at all and doesn't cover BeiDou) would silently feed
+        # AR a mismatched clock datum against what the biases assume. Confirmed empirically: without
+        # this, our own test fell through to exactly that legacy short-name product. Stable-reorder
+        # (not filter), so this only changes precedence and falls back to the normal order if no MGX
+        # entry resolves for a given product.
+        product_type = orbit_type
+        if self.force_ar and self.observations == OBSERV_CODE_PHASE:
+            product_type = sorted(orbit_type, key=lambda t: 'MGX' not in t.upper())
 
-            clocks1 = pyProducts.GetClkFile(  options['sp3'], self.rinex.date,     orbit_type, orbits_path, True)
-            clocks2 = pyProducts.GetClkFile(  options['sp3'], self.rinex.date + 1, orbit_type, orbits_path, True)
+        if self.observations == OBSERV_CODE_PHASE:
+            orbits1 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
+            orbits2 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
+
+            # DDG: same sub-10s-clock preference as PRIDE's get_orbits() (see there for the full
+            # rationale/evidence) -- confirmed separately that GPSPACE itself runs fine against a 5s
+            # clock (no crash, "NORMAL COMPLETION") with only a small, roughly FIXED ~6s parsing
+            # overhead regardless of session length (15min: 3.2s->9.4s; 2h: 12.4s->18.4s), so applying
+            # the same preference here too for a fair/consistent comparison between engines. Shares
+            # the clk_interval option (not engine-prefixed) with PRIDE -- it's the same concept/
+            # mechanism in both (unlike e.g. AI validation, which only exists in PRIDE), so one
+            # config key covers both regardless of -eng.
+            if 'clk_interval' in self.options:
+                clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True,
+                                                interval_regex=self.options['clk_interval'])
+                clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True,
+                                                interval_regex=self.options['clk_interval'])
+            else:
+                try:
+                    clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True,
+                                                    interval_regex='0[0-5]S')
+                    clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True,
+                                                    interval_regex='0[0-5]S')
+                except pyProducts.pyClkException:
+                    clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
+                    clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
         else:
             # for code-only solution we get the BRDC orbit and we use the same information for all files.
             orbits1 = pyProducts.GetBrdcOrbits(options['brdc'], self.rinex.date, orbits_path, True)
@@ -532,17 +618,29 @@ class GPSPACE(PPPEngine):
             clocks1 = orbits1
             clocks2 = orbits1
         try:
-            eop_file = pyProducts.GetEOP(options['sp3'], self.rinex.date, orbit_type, self.rootdir)
+            eop_file = pyProducts.GetEOP(options['sp3'], self.rinex.date, product_type, self.rootdir)
             eop_file = eop_file.filename
         except pyProducts.pyEOPException:
             # no eop, continue with out one
             eop_file = 'dummy.eop'
+
+        # DDG: only fetched when AR was requested (-ar) -- GPSPACE's ambiguity resolution is
+        # silently disabled unless a code/phase bias (OSB.BIA) product is loaded (see stage(), which
+        # stages it as gpsppp.bia). Same product PRIDE already uses; optional like PRIDE treats it --
+        # not every AC/date publishes one, so fall back to none rather than failing the whole run.
+        bia = None
+        if self.force_ar and self.observations == OBSERV_CODE_PHASE:
+            try:
+                bia = pyProducts.GetBiaFile(options['sp3'], self.rinex.date, product_type, orbits_path, True)
+            except pyProducts.pyBiaException:
+                bia = None
 
         self.orbits1    = orbits1
         self.orbits2    = orbits2
         self.clocks1    = clocks1
         self.clocks2    = clocks2
         self.eop_file   = eop_file
+        self.bia        = bia
         # get the type of orbit
         self.orbit_type = orbits1.type
         # DDG: new -> add the value of the orbit hash to the PPP hash to include the orbit type
@@ -984,13 +1082,13 @@ Multipath              = NO
 
 ## Ambiguity fixing options
 Ambiguity co-var        = YES
-Ambiguity duration      = 600                    ! time duration in seconds for a resolvable ambiguity
-AI Ambiguity validation = YES
+Ambiguity duration      = {amb_duration}                    ! time duration in seconds for a resolvable ambiguity
+AI Ambiguity validation = {ai_validation}
 Cutoff elevation        = 15                     ! cutoff mean elevation for eligible ambiguities to be resolved
-PCO on wide-lane        = YES
+PCO on wide-lane        = {pco_wl}
 Widelane decision       = 0.20 0.15 1000.        ! deviation (cycle), sigma (cycle) and decision threshold for WL ambiguities
 Narrowlane decision     = 0.15 0.15 1000.        ! deviation (cycle), sigma (cycle) and decision threshold for NL ambiguities
-Critical search         = 3 4 1.8 3.0            ! highest number of ambiguities to be excluded, lowest number to be reserved, fixed/float, ratio threshold
+Critical search         = {critical_search}            ! highest number of ambiguities to be excluded, lowest number to be reserved, fixed/float, ratio threshold
 Truncate at midnight    = NO
 Verbose output          = NO
 
@@ -1227,6 +1325,7 @@ class PRIDE(PPPEngine):
         self.brdm = None
         self.obx  = None
         self.bia  = None
+        self.amb_fixed = None
         self.path_cfg_file = None
         self.local_table   = None
         self.engine = 'PRIDE'
@@ -1409,8 +1508,30 @@ class PRIDE(PPPEngine):
 
         orbits = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date, orbit_type, products_path,
                                          True, short_name=False)
-        clocks = pyProducts.GetClkFile(  options['sp3'], self.rinex.date, orbit_type, products_path,
-                                         True, short_name=False)
+        # DDG: OrbitalProduct's version/interval tie-break deliberately prefers the LARGEST matching
+        # interval "to speed up processing" -- reasonable for orbit/ERP products, but for the clock
+        # product specifically that means picking e.g. a 30s file over a 5s one from the same AC when
+        # both exist, which forces heavier interpolation for 1Hz AR sessions. Confirmed empirically:
+        # swapping a wrongly-FIXED 0.25h AGGO session's clock from COD's 30s product to its own 5s
+        # product (same AC/line/solution, nothing else changed) took it from a 445mm wrong fix to an
+        # ~11mm correct one, with no measurable cost to already-good sessions. Default is now to
+        # prefer a sub-10s clock (seconds only, not minutes -- "0[0-5]S" matches "05S" but not "30S"
+        # or a 5-minute-labeled "05M") and fall back to the old "any interval, largest wins" behavior
+        # when the AC/date doesn't publish one. GPSPACE's get_orbits() does the same, sharing the
+        # clk_interval option below (not engine-prefixed) since it's the same concept/mechanism in
+        # both -- confirmed separately that GPSPACE itself runs fine against a 5s clock (no crash,
+        # roughly fixed ~6s parsing overhead regardless of session length).
+        if 'clk_interval' in self.options:
+            clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, orbit_type, products_path,
+                                           True, short_name=False,
+                                           interval_regex=self.options['clk_interval'])
+        else:
+            try:
+                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, orbit_type, products_path,
+                                               True, short_name=False, interval_regex='0[0-5]S')
+            except pyProducts.pyClkException:
+                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, orbit_type, products_path,
+                                               True, short_name=False)
         erp    = pyProducts.GetEOP(      options['sp3'], self.rinex.date, orbit_type, products_path,
                                          short_name=False)
 
@@ -1502,6 +1623,14 @@ class PRIDE(PPPEngine):
 
         self.path_cfg_file = os.path.join(self.rootdir, 'config.' + site)
 
+        # DDG: AR tuning knobs, overridable from the [ppp] section of gnss_data.cfg (defaults =
+        # current/original hardcoded behavior) -- lets the wrong-fix investigation in
+        # PRIDE_AR_tests.md change one setting at a time via config instead of a code redeploy.
+        amb_duration = str(self.options.get('pride_amb_duration', '600')).strip()
+        if amb_duration.lower() == 'auto':
+            # sessions < 1h: require ambiguities to span ~90% of the session (never below PRIDE's 600s)
+            amb_duration = '%d' % (max(600, int(0.9 * span)) if span < 3600 else 600)
+
         file_write(self.path_cfg_file, _PRIDE_CONFIG_TEMPLATE.format(
             interval       = self.rinex.interval,
             session_time   = session_time,
@@ -1532,7 +1661,11 @@ class PRIDE(PPPEngine):
             # (must be consumed directly by the AR binary), used only to gate which observations
             # are eligible for ambiguity resolution -- so it's deliberately NOT tied to elev_mask
             # and kept at PRIDE's own factory default (15) instead.
-            ev             = self.elev_mask))
+            ev              = self.elev_mask,
+            amb_duration    = amb_duration,
+            ai_validation   = self.options.get('pride_ai_validation', 'YES'),
+            pco_wl          = self.options.get('pride_pco_wl', 'YES'),
+            critical_search = self.options.get('pride_critical_search', '3 4 1.8 3.0')))
 
     def __exec_ppp__(self, raise_error=True):
 
@@ -1616,6 +1749,7 @@ class PRIDE(PPPEngine):
                 fixing_fields = line.split()
                 if fixing_fields and fixing_fields[0] == 'YES':
                     counts = [int(v) for v in fixing_fields[2::2] if v.isdigit()]
+                    self.amb_fixed = sum(counts)
                     self.solution_type = 'FIXED' if any(c > 0 for c in counts) else 'FLOAT'
                 else:
                     self.solution_type = 'FLOAT'

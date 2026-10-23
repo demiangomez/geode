@@ -563,22 +563,24 @@ class ReadRinex(RinexRecord):
                 'Could not create RINEX file. Unknown reason. Possible problem with crx2rnx?')
 
     def ConvertRinex(self, to_version):
-        # only available to convert from 3 -> 2
+        # DDG: originally "only available to convert from 3 -> 2" -- also used for a 2->3->2
+        # round-trip now (see GPSPACE.prepare_rinex()), so to_version can legitimately be 3 too.
         try:
-            # most programs still don't support RINEX 3 (partially implemented in this code)
-            # convert to RINEX 2.11 using gfzrnx_lx
+            # convert version using gfzrnx_lx
             cmd = pyRunWithRetry.RunCommand('gfzrnx_lx -finp %s -fout %s.t -vo %i -f'
                                             % (self.rinex, self.rinex, to_version), 45, self.rootdir)
 
             _, err = cmd.run_shell()
 
             result_path = self.rinex_path + '.t'
-            
+
             if '| E |' in err:
-                raise pyRinexExceptionBadFile('gfzrnx_lx returned error converting to RINEX 2.11:\n' + err)
+                raise pyRinexExceptionBadFile('gfzrnx_lx returned error converting to RINEX version %i:\n'
+                                              % to_version + err)
 
             elif not os.path.exists(result_path):
-                raise pyRinexExceptionBadFile('gfzrnx_lx failed to convert to RINEX 2.11:\n' + err)
+                raise pyRinexExceptionBadFile('gfzrnx_lx failed to convert to RINEX version %i:\n'
+                                              % to_version + err)
 
             # if all ok, move converted file to rinex_path
             os.remove(self.rinex_path)
@@ -586,7 +588,15 @@ class ReadRinex(RinexRecord):
             # change version
             self.rinex_version = to_version
 
-            self.log_event('Origin file was RINEX 3 -> Converted to 2.11')
+            # DDG: same cache-staleness gap window_data() had -- write_rinex() rebuilds the file from
+            # self.header + self.data rather than re-reading from disk, so without this, a later
+            # write_rinex() call (e.g. normalize_header()) would silently overwrite the just-converted
+            # file with the pre-conversion header/body (losing e.g. gfzrnx's injected RINEX 3 -> 2 TYPE
+            # CONVERSION DETAILS comments on a round-trip conversion). Keep the cache in sync.
+            self.header = self.get_header()
+            self.read_data()
+
+            self.log_event('Converted RINEX to version %i' % to_version)
 
         except pyRunWithRetry.RunCommandWithRetryExeception as e:
             # catch the timeout except and pass it as a pyRinexException

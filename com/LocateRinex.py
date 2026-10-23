@@ -444,9 +444,14 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
                     ppp.clock_phase, ppp.clock_phase_sigma, ppp.phase_drift, ppp.phase_drift_sigma,
                     ppp.clock_rms))
             else:
-                output.append('%s %-5s %-5s %10.5f %13.4f %13.4f %13.4f %14.9f %14.9f %8.3f' % (
+                line = '%s %-5s %-5s %10.5f %13.4f %13.4f %13.4f %14.9f %14.9f %8.3f' % (
                     stnm, ppp.solution_type, ppp.systems_used, rinexinfo.date.fyear, ppp.x, ppp.y, ppp.z,
-                    ppp.lat[0], ppp.lon[0], ppp.h[0]))
+                    ppp.lat[0], ppp.lon[0], ppp.h[0])
+                # DDG: number of fixed ambiguities (PRIDE only) -- lets score_ar_tests.py tell whether
+                # a wrong FIXED solution was a small partial fix, without needing to re-parse pos files.
+                if getattr(ppp, 'amb_fixed', None) is not None:
+                    line += ' %4i' % ppp.amb_fixed
+                output.append(line)
         else:
             from geopy.geocoders import Nominatim
             import country_converter as coco
