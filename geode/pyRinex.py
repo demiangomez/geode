@@ -1204,11 +1204,21 @@ class ReadRinex(RinexRecord):
         os.remove(copyto)
         move(copyto + '.t', copyto)
 
+        if copyto == self.rinex_path:
+            # DDG: same cache-staleness gap ConvertRinex()/window_data()/remove_systems() had --
+            # write_rinex() rebuilds the file from self.header + self.data rather than re-reading
+            # from disk, so without this, a later write_rinex() call (e.g. purge_comments(), called
+            # right after decimate() in gamit_task.py) would silently overwrite the just-decimated
+            # file with the stale pre-decimation body. Keep the cache in sync with what's on disk.
+            self.header = self.get_header()
+            self.read_data()
+
         self.log_event('RINEX decimated to %is (applied to %s)' % (decimate_rate, str(copyto)))
 
     def remove_systems(self, systems=('C', 'E', 'I', 'J', 'R', 'S'), copyto=None):
+        # when called without arguments, removes everything but GPS
         # if copy to is passed, then the system removal is done on the copy of the file, not on the current rinex.
-        # other wise, system removal is done to current rinex
+        # otherwise, system removal is done to current rinex
         if copyto is not None:
             copyfile(self.rinex_path, copyto)
         else:
@@ -1236,8 +1246,13 @@ class ReadRinex(RinexRecord):
         if copyto == self.rinex_path:
             # reload information from this file
             self.parse_output(self.RunGfzrnx(), self.min_time_seconds)
-        else:
-            raise pyRinexException(err)
+            # DDG: same cache-staleness gap ConvertRinex()/window_data() had -- write_rinex()
+            # rebuilds the file from self.header + self.data rather than re-reading from disk,
+            # so without this, a later write_rinex() call (e.g. purge_comments(), called right
+            # after remove_systems() in LocateRinex.py) would silently overwrite the just-filtered
+            # file with the stale pre-removal header. Keep the cache in sync with what's on disk.
+            self.header = self.get_header()
+            self.read_data()
 
         self.log_event('Removed systems %s (applied to %s)' % (','.join(systems), str(copyto)))
 

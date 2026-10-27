@@ -154,12 +154,20 @@ class PPPEngine(PPPSpatialCheck, ABC):
     def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
                  apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
                  decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
-                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False):
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False,
+                 strict_products=False):
 
         # DDG: move this definition before anything else is called to avoid problems with object deletion in case the
         # pyRinex call below fails
         # generate a unique id for this instance
         self.rootdir = os.path.join(os.path.join('production', 'ppp'), str(uuid.uuid4()))
+
+        # DDG: NOT the same thing as `strict` above (that gates solution-quality checks, e.g.
+        # antenna phase center / rejected-obs ratio). This one gates get_orbits()'s product-line
+        # resolution (see pyProducts.resolve_product_line()): whether a clock-rate requirement that
+        # the preferred (highest-precedence) AC/CS/ST line can't satisfy raises instead of silently
+        # substituting a lower-precedence, fully-consistent line for ALL products.
+        self.strict_products = strict_products
 
         # DDG: only meaningful for PRIDE (see PRIDE.__exec_ppp__) -- stored here since RunPPP()'s
         # single call site is engine-agnostic and both subclasses must accept the same kwargs.
@@ -357,7 +365,8 @@ class GPSPACE(PPPEngine):
     def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
                  apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
                  decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
-                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False):
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False,
+                 strict_products=False):
 
         self.ppp_path = options['ppp_path']
         self.ppp      = options['ppp_exe']
@@ -378,7 +387,7 @@ class GPSPACE(PPPEngine):
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
                            solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
-                           observations, force_ar)
+                           observations, force_ar, strict_products)
 
     def prepare_rinex(self, in_rinex):
         # DDG: if RINEX 3 version, convert to RINEX 2 (no PPP support)
@@ -586,6 +595,32 @@ class GPSPACE(PPPEngine):
             product_type = sorted(orbit_type, key=lambda t: 'MGX' not in t.upper())
 
         if self.observations == OBSERV_CODE_PHASE:
+            # DDG: only prefer/require a sub-10s clock when the RINEX itself is actually high-rate
+            # (same <15s threshold stage() uses below to decide whether to decimate to 30s). For a
+            # normal 30s-sampled RINEX, a 30s clock is already a perfect match (no interpolation
+            # needed at all) -- forcing a sub-10s-only search in that case buys no accuracy benefit
+            # and only risks an unnecessary cross-AC substitution (see resolve_product_line()) or a
+            # failure to find any product at all. An explicit user-configured clk_interval is always
+            # honored regardless of RINEX rate -- that's a deliberate override, not the preference.
+            if 'clk_interval' in self.options:
+                clk_interval_regex = self.options['clk_interval']
+            elif self.rinex.interval < 15:
+                clk_interval_regex = '0[0-5]S'
+            else:
+                clk_interval_regex = None
+
+            # DDG: resolve ONE consistent AC/CS/ST product line up front, across BOTH the current
+            # day and the next day GPSPACE needs for boundary interpolation, rather than letting
+            # SP3/CLK/ERP/BIA each independently walk `product_type` below and potentially land on
+            # different lines (see pyProducts.resolve_product_line() for the full rationale -- this
+            # is what used to let e.g. a 5s-clock-only AC get silently paired with a different AC's
+            # orbit). Requiring the SAME line across both days also avoids a discontinuity at the
+            # day boundary GPSPACE interpolates across, since orbits1/orbits2 would otherwise be
+            # allowed to come from two different ACs.
+            product_type = pyProducts.resolve_product_line(
+                options['sp3'], (self.rinex.date, self.rinex.date + 1), product_type,
+                clk_interval_regex=clk_interval_regex, strict=self.strict_products)
+
             orbits1 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
             orbits2 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
 
@@ -602,7 +637,7 @@ class GPSPACE(PPPEngine):
                                                 interval_regex=self.options['clk_interval'])
                 clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True,
                                                 interval_regex=self.options['clk_interval'])
-            else:
+            elif self.rinex.interval < 15:
                 try:
                     clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True,
                                                     interval_regex='0[0-5]S')
@@ -611,6 +646,9 @@ class GPSPACE(PPPEngine):
                 except pyProducts.pyClkException:
                     clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
                     clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
+            else:
+                clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
+                clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
         else:
             # for code-only solution we get the BRDC orbit and we use the same information for all files.
             orbits1 = pyProducts.GetBrdcOrbits(options['brdc'], self.rinex.date, orbits_path, True)
@@ -1188,60 +1226,60 @@ Verbose output          = NO
  E34   1
  E35   1
  E36   1
-#C01   3
-#C02   3
-#C03   3
-#C04   3
-#C05   3
-#C06   1
-#C07   1
-#C08   1
-#C09   1
-#C10   1
-#C11   1
-#C12   1
-#C13   1
-#C14   1
-#C15   1
-#C16   1
-#C17   1
-#C18   3
-#C19   1
-#C20   1
-#C21   1
-#C22   1
-#C23   1
-#C24   1
-#C25   1
-#C26   1
-#C27   1
-#C28   1
-#C29   1
-#C30   1
-#C31   1
-#C32   1
-#C33   1
-#C34   1
-#C35   1
-#C36   1
-#C37   1
-#C38   1
-#C39   1
-#C40   1
-#C41   1
-#C42   1
-#C43   1
-#C44   1
-#C45   1
-#C46   1
-#C47   1
-#C48   1
-#C56   1
-#C57   1
-#C58   1
-#C59   3
-#C60   3
-#C61   3
+ C01   3
+ C02   3
+ C03   3
+ C04   3
+ C05   3
+ C06   1
+ C07   1
+ C08   1
+ C09   1
+ C10   1
+ C11   1
+ C12   1
+ C13   1
+ C14   1
+ C15   1
+ C16   1
+ C17   1
+ C18   3
+ C19   1
+ C20   1
+ C21   1
+ C22   1
+ C23   1
+ C24   1
+ C25   1
+ C26   1
+ C27   1
+ C28   1
+ C29   1
+ C30   1
+ C31   1
+ C32   1
+ C33   1
+ C34   1
+ C35   1
+ C36   1
+ C37   1
+ C38   1
+ C39   1
+ C40   1
+ C41   1
+ C42   1
+ C43   1
+ C44   1
+ C45   1
+ C46   1
+ C47   1
+ C48   1
+ C56   1
+ C57   1
+ C58   1
+ C59   3
+ C60   3
+ C61   3
 #J01   1
 #J02   1
 #J03   1
@@ -1308,7 +1346,8 @@ class PRIDE(PPPEngine):
     def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
                  apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
                  decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
-                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False):
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False,
+                 strict_products=False):
 
         if kinematic:
             raise pyRunPPPExceptionUnsupported('The PRIDE PPP-AR engine does not support kinematic mode yet.')
@@ -1333,7 +1372,7 @@ class PRIDE(PPPEngine):
         PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
                            apply_met, kinematic, clock_interpolation, hash, erase, decimate,
                            solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
-                           observations, force_ar)
+                           observations, force_ar, strict_products)
 
     @staticmethod
     def _ensure_offline(pdp3_path):
@@ -1506,33 +1545,57 @@ class PRIDE(PPPEngine):
         options = self.options
         products_path = os.path.join(self.rootdir, 'products')
 
-        orbits = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date, orbit_type, products_path,
-                                         True, short_name=False)
-        # DDG: OrbitalProduct's version/interval tie-break deliberately prefers the LARGEST matching
+        # DDG: only prefer/require a sub-10s clock when the RINEX itself is actually high-rate
+        # (OrbitalProduct's version/interval tie-break deliberately prefers the LARGEST matching
         # interval "to speed up processing" -- reasonable for orbit/ERP products, but for the clock
         # product specifically that means picking e.g. a 30s file over a 5s one from the same AC when
         # both exist, which forces heavier interpolation for 1Hz AR sessions. Confirmed empirically:
         # swapping a wrongly-FIXED 0.25h AGGO session's clock from COD's 30s product to its own 5s
         # product (same AC/line/solution, nothing else changed) took it from a 445mm wrong fix to an
-        # ~11mm correct one, with no measurable cost to already-good sessions. Default is now to
-        # prefer a sub-10s clock (seconds only, not minutes -- "0[0-5]S" matches "05S" but not "30S"
-        # or a 5-minute-labeled "05M") and fall back to the old "any interval, largest wins" behavior
-        # when the AC/date doesn't publish one. GPSPACE's get_orbits() does the same, sharing the
-        # clk_interval option below (not engine-prefixed) since it's the same concept/mechanism in
-        # both -- confirmed separately that GPSPACE itself runs fine against a 5s clock (no crash,
-        # roughly fixed ~6s parsing overhead regardless of session length).
+        # ~11mm correct one, with no measurable cost to already-good sessions). But for a normal
+        # 30s-sampled RINEX, a 30s clock is already a perfect match (no interpolation needed at
+        # all) -- forcing a sub-10s-only search in that case buys no accuracy benefit and only
+        # risks an unnecessary cross-AC substitution (see resolve_product_line()) or a failure to
+        # find any product at all. Same <15s threshold stage() uses to decide whether to decimate
+        # to 30s. An explicit user-configured clk_interval is always honored regardless of RINEX
+        # rate -- that's a deliberate override, not the preference. GPSPACE's get_orbits() does the
+        # same, sharing the clk_interval option below (not engine-prefixed) since it's the same
+        # concept/mechanism in both -- confirmed separately that GPSPACE itself runs fine against a
+        # 5s clock (no crash, roughly fixed ~6s parsing overhead regardless of session length).
         if 'clk_interval' in self.options:
-            clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, orbit_type, products_path,
+            clk_interval_regex = self.options['clk_interval']
+        elif self.rinex.interval < 15:
+            clk_interval_regex = '0[0-5]S'
+        else:
+            clk_interval_regex = None
+
+        # DDG: resolve ONE consistent AC/CS/ST product line up front instead of letting SP3/CLK/
+        # ERP/OBX/BIA each independently walk `orbit_type` below and potentially land on different
+        # lines -- see pyProducts.resolve_product_line() for the full rationale (this is what used
+        # to let e.g. a 5s-clock-only AC get silently paired with a different AC's orbit, the
+        # original WUM/COD mixing this was built to fix).
+        product_type = pyProducts.resolve_product_line(
+            options['sp3'], self.rinex.date, orbit_type,
+            clk_interval_regex=clk_interval_regex, strict=self.strict_products)
+
+        orbits = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date, product_type, products_path,
+                                         True, short_name=False)
+
+        if 'clk_interval' in self.options:
+            clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
                                            True, short_name=False,
                                            interval_regex=self.options['clk_interval'])
-        else:
+        elif self.rinex.interval < 15:
             try:
-                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, orbit_type, products_path,
+                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
                                                True, short_name=False, interval_regex='0[0-5]S')
             except pyProducts.pyClkException:
-                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, orbit_type, products_path,
+                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
                                                True, short_name=False)
-        erp    = pyProducts.GetEOP(      options['sp3'], self.rinex.date, orbit_type, products_path,
+        else:
+            clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
+                                           True, short_name=False)
+        erp    = pyProducts.GetEOP(      options['sp3'], self.rinex.date, product_type, products_path,
                                          short_name=False)
 
         # DDG: PRIDE PPP-AR needs a broadcast nav file next to the RINEX obs file itself
@@ -1555,12 +1618,12 @@ class PRIDE(PPPEngine):
         # them and older dates rarely have them. PRIDE PPP-AR runs without them (with reduced fidelity/
         # no ambiguity resolution rather than failing), so fall back to NONE instead of raising.
         try:
-            obx = pyProducts.GetObxFile(options['sp3'], self.rinex.date, orbit_type, products_path, True)
+            obx = pyProducts.GetObxFile(options['sp3'], self.rinex.date, product_type, products_path, True)
         except pyProducts.pyObxException:
             obx = None
 
         try:
-            bia = pyProducts.GetBiaFile(options['sp3'], self.rinex.date, orbit_type, products_path, True)
+            bia = pyProducts.GetBiaFile(options['sp3'], self.rinex.date, product_type, products_path, True)
         except pyProducts.pyBiaException:
             bia = None
 

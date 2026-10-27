@@ -6,7 +6,8 @@ Author: Demian D. Gomez
 import os
 import glob
 import re
-from shutil import copyfile
+import tempfile
+from shutil import copyfile, rmtree
 from datetime import datetime
 
 # app
@@ -269,6 +270,106 @@ class GetClkFile(OrbitalProduct):
 
     def __enter__(self):
         return self
+
+
+def resolve_product_line(archive, dates, sp3types, clk_interval_regex=None, strict=False):
+    """
+    Resolve a single analysis-center/campaign-specification/solution-type product line out of
+    `sp3types` (the ordered AC x CS x ST precedence list ReadOptions builds from sp3_ac/sp3_cs/
+    sp3_st) that is actually available -- for the orbit, and (when clk_interval_regex is given)
+    for a clock product matching that rate too -- across EVERY date in `dates` together.
+
+    Without this, GetSp3Orbits/GetClkFile/GetEOP/GetObxFile/GetBiaFile each independently walk the
+    same precedence list and stop at the first entry satisfying their OWN requirements. SP3/ERP/
+    OBX/BIA only check existence, but CLK additionally filters by rate, so it alone can land on a
+    lower-precedence line than the others picked -- e.g. the user's top AC only publishes a
+    RAPID/MGX orbit with a 30s clock, so CLK falls through to a different, lower-precedence AC
+    entirely while SP3/ERP/OBX/BIA stay on the first one, silently mixing clock and orbit data
+    from two different analysis centers in the same solution. Calling this ONCE up front and
+    feeding every subsequent Get*() call the resulting single-entry list keeps them all
+    consistent -- and, for engines that span more than one day (e.g. GPSPACE interpolates across
+    the day boundary using the next day's orbit), passing every date that will be fetched keeps
+    the orbit source the same across that boundary too, avoiding a discontinuity at the edge of
+    the day.
+
+    strict=False (default): if the highest-precedence line with an orbit (across all `dates`)
+    doesn't also satisfy the clock-rate requirement, fall back to the first lower-precedence line
+    that satisfies BOTH, and use it for every product. If no line satisfies the clock-rate
+    requirement at all, fall back to the orbit-preferred line unchanged -- the caller's own
+    interval_regex retry/relaxation (trying again with no rate requirement) handles that case
+    exactly as it did before this function existed.
+
+    strict=True: raise pyProductsException instead of silently substituting a different line than
+    the orbit-preferred one.
+
+    Returns a 1-element list containing the resolved sp3type string, suitable for passing directly
+    to GetSp3Orbits/GetClkFile/GetEOP/GetObxFile/GetBiaFile in place of the full `sp3types` list.
+    Raises pySp3Exception if no line provides an orbit for all `dates`.
+    """
+    if isinstance(dates, pyDate.Date):
+        dates = (dates,)
+
+    probe_dir = tempfile.mkdtemp(prefix='pyproducts_resolve_')
+
+    try:
+        def has_orbit(sp3type, d):
+            try:
+                with GetSp3Orbits(archive, d, [sp3type], probe_dir, no_cleanup=False):
+                    return True
+            except pyProductsException:
+                return False
+
+        def has_clock(sp3type, d):
+            if clk_interval_regex is None:
+                return True
+            try:
+                with GetClkFile(archive, d, [sp3type], probe_dir, no_cleanup=False,
+                                interval_regex=clk_interval_regex):
+                    return True
+            except pyProductsException:
+                return False
+
+        preferred = None
+        resolved  = None
+
+        for sp3type in sp3types:
+            if not all(has_orbit(sp3type, d) for d in dates):
+                continue
+
+            if preferred is None:
+                # highest-precedence line that has an orbit at all for every date -- this is what
+                # independent, per-product selection would have picked for SP3/ERP/OBX/BIA today
+                preferred = sp3type
+
+            if resolved is None and all(has_clock(sp3type, d) for d in dates):
+                resolved = sp3type
+                break
+
+        if preferred is None:
+            raise pySp3Exception(
+                'Could not find a valid orbit product (any of: ' + ', '.join(sp3types) + ') for ' +
+                ', '.join(d.yyyyddd() for d in dates) + ' that is consistently available across '
+                'all the requested dates')
+
+        if resolved is None or resolved == preferred:
+            # either no line anywhere satisfies the clock-rate requirement (nothing to switch to
+            # -- let the caller's own rate-relaxation fallback handle it), or the preferred line
+            # already satisfies everything: either way, no cross-AC substitution is needed
+            return [preferred]
+
+        if strict:
+            raise pyProductsException(
+                "Preferred product line '%s' does not provide a clock product at the requested "
+                "rate (%s) for %s. The next available fully-consistent line is '%s', but strict "
+                "product selection is enabled, so no automatic substitution across orbit, clock, "
+                "ERP, attitude and bias products was made. Either disable strict product "
+                "selection or adjust sp3_ac/sp3_cs/sp3_st so your preferred line already provides "
+                "the needed clock rate."
+                % (preferred, clk_interval_regex, ', '.join(d.yyyyddd() for d in dates), resolved))
+
+        return [resolved]
+    finally:
+        rmtree(probe_dir, ignore_errors=True)
 
 
 class GetEOP(OrbitalProduct):

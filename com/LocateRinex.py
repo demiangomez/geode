@@ -105,9 +105,23 @@ def main():
     parser.add_argument('-code', '--code_only', action='store_true', default=False,
                         help='Run PPP using only code (C1) observations.')
 
+    parser.add_argument('-strict_products', '--strict_products', action='store_true', default=False,
+                        help="Raise an error instead of silently falling back to a lower-precedence "
+                             "analysis center/line when the preferred one (per sp3_ac/sp3_cs/sp3_st) "
+                             "doesn't provide a clock product at the rate PPP needs (the preferred "
+                             "line's orbit, clock, ERP, attitude and bias products are otherwise all "
+                             "pinned to whichever line actually satisfies the requirement, never mixed "
+                             "across different ACs). Default is to allow that automatic substitution.")
+
     parser.add_argument('-c', '--copy_results', type=str, nargs=1, metavar='storage_dir',
                         help='Copy the output files (.ses, .sum, .res, .pos) to [storage_dir]. A folder with the '
                              'station name will be created in [storage_dir].')
+
+    parser.add_argument('-systems', '--systems', type=str,
+                        metavar='[G][R][E][C]',  default='CEIGJRS',
+                        help='Set the constellations used to find a solution (no spaces between constellations. '
+                             'Those not included will be removed from the RINEX file. Default uses everything in the '
+                             'RINEX file. Options: G -> GPS; R -> GLONASS; E -> GALILEO; C -> BEIDOU')
 
     parser.add_argument('-res', '--residuals', action='store_true', default=False,
                         help="Save elevation-dependent phase residuals to [station]_[doy]_residuals.txt "
@@ -214,6 +228,8 @@ def main():
 
     JobServer = pyJobServer.JobServer(Config, check_archive=False, check_executables=False, check_atx=False)
 
+    print(' -- Using only ' + args_dict['systems'])
+
     pbar = tqdm(desc='%-30s' % ' >> Processing RINEX files', total=len(tasks), ncols=160, disable=None)
 
     # DDG: dispy ships process_rinex_task's own code, but not sibling top-level functions it calls --
@@ -267,7 +283,7 @@ def process_rinex_task(rinex_path, window_hours, args_dict, options, sp3types, b
                                    not args.no_met, args.decimate, args.fix_coordinate, args.solve_troposphere,
                                    args.copy_results, args.backward_substitution, args.elevation_mask,
                                    args.code_only, args.residuals, args.print_residuals, window_hours,
-                                   args.window_start, args.force_ar)
+                                   args.window_start, args.force_ar, args.strict_products)
 
                 if label and text:
                     text = '\n'.join('%s %s' % (label, line) for line in text.splitlines())
@@ -298,7 +314,7 @@ def callback_locate_rinex(job):
 def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, erase, apply_met=True, decimate=True,
                 fix_coordinate=None, solve_troposphere=105, copy_results=None, backward_substitution=False,
                 elevation_mask=5, code_only=False, save_residuals=False, print_residuals=False, window_hours=None,
-                window_start=None, force_ar=False):
+                window_start=None, force_ar=False, strict_products=False):
     # DDG: self-contained local imports -- this function is shipped to dispy workers as a
     # dependency of process_rinex_task() (see JobServer.create_cluster's deps= argument), so it
     # can't rely on the caller module's own top-level imports being present in that namespace.
@@ -317,8 +333,11 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
     # put the correct APR coordinates in the header.
     # stninfo = pyStationInfo.StationInfo(None, allow_empty=True)
     brdc = pyProducts.GetBrdcOrbits(brdc_path, rinexinfo.date, rinexinfo.rootdir)
-
     try:
+        # apply constellation removals
+        rsys = ''.join(s for s in 'CEIGJRS' if s not in args.systems)
+        if rsys:
+            rinexinfo.remove_systems(rsys)
         rinexinfo.purge_comments()
 
         # DDG: window AFTER purge_comments(), not before -- purge_comments()'s write_rinex() call
@@ -362,7 +381,8 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
             # get a first ppp coordinate
             ppp = pyPPP.RunPPP(rinexinfo, '', options, sp3types, sp3altrn, 0,
                                strict=False, apply_met=False, kinematic=False, clock_interpolation=True,
-                               observations=pyPPP.OBSERV_CODE_ONLY if code_only else pyPPP.OBSERV_CODE_PHASE)
+                               observations=pyPPP.OBSERV_CODE_ONLY if code_only else pyPPP.OBSERV_CODE_PHASE,
+                               strict_products=strict_products)
 
             ppp.exec_ppp()
 
@@ -401,7 +421,7 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
                            solve_troposphere=solve_troposphere, back_substitution=backward_substitution,
                            elev_mask=elevation_mask, x=x, y=y, z=z,
                            observations=pyPPP.OBSERV_CODE_ONLY if code_only else pyPPP.OBSERV_CODE_PHASE,
-                           force_ar=force_ar)
+                           force_ar=force_ar, strict_products=strict_products)
 
         ppp.exec_ppp()
 
