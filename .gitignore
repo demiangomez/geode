@@ -111,3 +111,5 @@ parallel_gamit/link_tables.sh
 
 reinstall_geode.sh
 reinstall_geode.sh
+
+production/

@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 import filecmp
 import argparse
 import stat
@@ -989,6 +990,33 @@ def file_read_all(path):
         return f.read()
 
 
+# DDG: frames belonging to known worker-dispatch plumbing -- dozens of these sit between a dispy
+# worker thread's own bootstrap and the one frame that actually matters, burying it. Matched by
+# substring against each frame's filename.
+_TRACEBACK_NOISE = ('/threading.py', '/multiprocessing/', '/pycos/', '/dispy.py', '/dispynode.py')
+
+
+def format_exc_relevant(noise=_TRACEBACK_NOISE):
+    """
+    Like traceback.format_exc(), but drops stack frames belonging to threading/multiprocessing/
+    dispy/pycos worker-dispatch internals, which are never useful for debugging and bury the
+    GeoDE frame(s) that actually matter under dozens of boilerplate ones. Must be called from
+    inside an except block (reads the currently-handled exception via sys.exc_info()). Falls back
+    to the full, unfiltered trace if every frame turns out to be infrastructure.
+    """
+    exc_type, exc_value, exc_tb = sys.exc_info()
+    if exc_tb is None:
+        return traceback.format_exc()
+
+    frames = [f for f in traceback.extract_tb(exc_tb) if not any(n in f.filename for n in noise)]
+    if not frames:
+        return traceback.format_exc()
+
+    return ''.join(['Traceback (most recent call last):\n'] +
+                   traceback.format_list(frames) +
+                   traceback.format_exception_only(exc_type, exc_value))
+
+
 def file_try_remove(path):
     try:
         os.remove(path)
@@ -1083,9 +1111,14 @@ grdtab = [absolute_path]/gamit/gamit/bin/grdtab
 otlgrid = [absolute_path]/gamit/tables/otl.grid
 
 [ppp]
+# engine used by RunPPP(): 'gpspace' (default, NRCAN PPP) or 'pride' (PRIDE PPP-AR, pdp3)
+ppp_engine = gpspace
 ppp_path = [absolute_path]/PPP_NRCAN
 ppp_exe = [absolute_path]/PPP_NRCAN/source/ppp34613
 # ppp_remote_local are the locations, remote and local on each node, where the PPP software lives
+# pride_exe/pride_table are only required when ppp_engine = pride
+pride_exe = [absolute_path]/PRIDE-PPPAR/bin/pdp3
+pride_table = [absolute_path]/PRIDE-PPPAR/table
 institution = [institution]
 info = [Address, zip code, etc]
 # comma separated frames, defined with time interval (see below)

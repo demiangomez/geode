@@ -12,9 +12,12 @@ import inspect
 import re
 
 
+_STACK_NOISE = ('/threading.py', '/multiprocessing/', '/pycos/', '/dispy.py', '/dispynode.py')
+
+
 class Event(dict):
 
-    def __init__(self, **kwargs):
+    def __init__(self, filter_stack=True, **kwargs):
 
         dict.__init__(self)
 
@@ -46,7 +49,17 @@ class Event(dict):
             self[key] = arg
 
         if self['EventType'] == 'error':
-            self['stack'] = ''.join(traceback.format_stack()[0:-2])  # print the traceback until just before this call
+            # DDG: filter_stack (on by default) drops frames belonging to threading/multiprocessing/
+            # dispy/pycos worker-dispatch plumbing -- when an error is raised inside a dispy worker
+            # (e.g. a PPP job), that's dozens of boilerplate frames burying the one that actually
+            # matters. Falls back to the full, unfiltered stack if every frame turns out to be
+            # infrastructure, so nothing is ever silently hidden; pass filter_stack=False to opt out.
+            frames = stack
+            if filter_stack:
+                relevant = [f for f in stack if not any(n in f.filename for n in _STACK_NOISE)]
+                if relevant:
+                    frames = relevant
+            self['stack'] = ''.join(traceback.format_list(frames))  # print the traceback until just before this call
         else:
             self['stack'] = None
 

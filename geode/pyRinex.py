@@ -563,22 +563,24 @@ class ReadRinex(RinexRecord):
                 'Could not create RINEX file. Unknown reason. Possible problem with crx2rnx?')
 
     def ConvertRinex(self, to_version):
-        # only available to convert from 3 -> 2
+        # DDG: originally "only available to convert from 3 -> 2" -- also used for a 2->3->2
+        # round-trip now (see GPSPACE.prepare_rinex()), so to_version can legitimately be 3 too.
         try:
-            # most programs still don't support RINEX 3 (partially implemented in this code)
-            # convert to RINEX 2.11 using gfzrnx_lx
+            # convert version using gfzrnx_lx
             cmd = pyRunWithRetry.RunCommand('gfzrnx_lx -finp %s -fout %s.t -vo %i -f'
                                             % (self.rinex, self.rinex, to_version), 45, self.rootdir)
 
             _, err = cmd.run_shell()
 
             result_path = self.rinex_path + '.t'
-            
+
             if '| E |' in err:
-                raise pyRinexExceptionBadFile('gfzrnx_lx returned error converting to RINEX 2.11:\n' + err)
+                raise pyRinexExceptionBadFile('gfzrnx_lx returned error converting to RINEX version %i:\n'
+                                              % to_version + err)
 
             elif not os.path.exists(result_path):
-                raise pyRinexExceptionBadFile('gfzrnx_lx failed to convert to RINEX 2.11:\n' + err)
+                raise pyRinexExceptionBadFile('gfzrnx_lx failed to convert to RINEX version %i:\n'
+                                              % to_version + err)
 
             # if all ok, move converted file to rinex_path
             os.remove(self.rinex_path)
@@ -586,7 +588,15 @@ class ReadRinex(RinexRecord):
             # change version
             self.rinex_version = to_version
 
-            self.log_event('Origin file was RINEX 3 -> Converted to 2.11')
+            # DDG: same cache-staleness gap window_data() had -- write_rinex() rebuilds the file from
+            # self.header + self.data rather than re-reading from disk, so without this, a later
+            # write_rinex() call (e.g. normalize_header()) would silently overwrite the just-converted
+            # file with the pre-conversion header/body (losing e.g. gfzrnx's injected RINEX 3 -> 2 TYPE
+            # CONVERSION DETAILS comments on a round-trip conversion). Keep the cache in sync.
+            self.header = self.get_header()
+            self.read_data()
+
+            self.log_event('Converted RINEX to version %i' % to_version)
 
         except pyRunWithRetry.RunCommandWithRetryExeception as e:
             # catch the timeout except and pass it as a pyRinexException
@@ -859,8 +869,36 @@ class ReadRinex(RinexRecord):
             raise pyRinexExceptionBadFile('RINEX sampling interval > 120s. The output from Gfzrnx was:\n' + str(output))
 
         elif self.epochs * self.interval < min_time_seconds:
-            raise pyRinexExceptionBadFile('RINEX file with < %i seconds of observation time. '
-                                          'The output from Gfzrnx was:\n' % min_time_seconds + str(output))
+            # DDG: lead with a plain-language summary of WHY the file is short -- usually a genuine
+            # receiver dropout/gap in the source file (not a windowing issue: this check runs on the
+            # original file before any -win windowing is even attempted), which is easy to miss
+            # buried inside the raw Gfzrnx dict dump that follows. Best-effort: never let a problem
+            # building this summary mask the actual error.
+            summary = ''
+            try:
+                d  = output['data']
+                ep = d['epoch']
+                missing = int(ep.get('number_missing', 0))
+                nominal = int(ep.get('number_nominal', 0))
+                gap     = ' (%d missing, %.0f%% gap vs. the nominal session length)' % \
+                          (missing, 100.0 * missing / nominal) if nominal else ''
+                # DDG: Gfzrnx's own 'duration_rinex' label uses 'M' for minutes (e.g. '34M'), easily
+                # misread as megabytes -- lowercase just that trailing minutes suffix.
+                dur_label = d.get('duration_rinex', '?')
+                if dur_label.endswith('M'):
+                    dur_label = dur_label[:-1] + 'm'
+                summary = (' %s has only %s (%ss) of observation data, spanning %s to %s -- '
+                          '%s of %s nominal epochs present%s.'
+                          % (output.get('file', {}).get('name', 'file'), dur_label,
+                             d.get('duration', '?'), ep.get('first', '?'), ep.get('last', '?'),
+                             ep.get('number', '?'), nominal or '?', gap))
+            except Exception:
+                pass
+
+            raise pyRinexExceptionBadFile(
+                'RINEX file has only %g seconds of observation time (minimum required: %i).%s '
+                'The full output from Gfzrnx was:\n' % (self.epochs * self.interval, min_time_seconds, summary)
+                + str(output))
 
         try:
             p = output['data']['epoch']
@@ -969,11 +1007,20 @@ class ReadRinex(RinexRecord):
         # use NRCAN PPP in code-only mode to obtain a coordinate of the station
         from geode import pyPPP, pyOptions
 
-        rnx = ReadRinex(self.NetworkCode, self.StationCode, self.rinex_path, allow_multiday=True)
+        # DDG: min_time_seconds=0 -- this just re-opens a file the caller already validated once
+        # (e.g. a -win-windowed file under 1h); re-applying the default 3600s minimum here raises
+        # a spurious pyRinexExceptionBadFile for short windows even though the bootstrap is fine.
+        rnx = ReadRinex(self.NetworkCode, self.StationCode, self.rinex_path, allow_multiday=True,
+                        min_time_seconds=0)
 
         config = pyOptions.ReadOptions('gnss_data.cfg')  # type: pyOptions.ReadOptions
 
-        ppp = pyPPP.RunPPP(rnx, '', config.options, '', '', 0,
+        # DDG: code-only bootstrap coordinate is only implemented for GPSPACE -- force it here regardless
+        # of the configured ppp_engine (e.g. 'pride'), which does not support code-only PPP yet.
+        options = dict(config.options)
+        options['ppp_engine'] = 'gpspace'
+
+        ppp = pyPPP.RunPPP(rnx, '', options, '', '', 0,
                            clock_interpolation=True, strict=False, apply_met=False, observations=pyPPP.OBSERV_CODE_ONLY)
 
         ppp.exec_ppp()
@@ -1120,6 +1167,15 @@ class ReadRinex(RinexRecord):
             self.datetime_lastObs  = end
             self.firstObs          = start.strftime('%Y/%m/%d %H:%M:%S')
             self.lastObs           = end  .strftime('%Y/%m/%d %H:%M:%S')
+
+            # DDG: write_rinex() rebuilds the file from self.header + self.data (both cached at
+            # construction time, or whenever they were last refreshed) rather than re-reading from
+            # disk -- without this, any later write_rinex() call (e.g. normalize_header(), called
+            # for GPSPACE right after auto_coord()) silently overwrites the just-windowed file with
+            # the stale pre-windowing body, undoing the window entirely. Keep the cache in sync with
+            # what's actually on disk now.
+            self.header = self.get_header()
+            self.read_data()
         else:
             move(self.rinex_path + '.t', copyto)
 
@@ -1148,11 +1204,21 @@ class ReadRinex(RinexRecord):
         os.remove(copyto)
         move(copyto + '.t', copyto)
 
+        if copyto == self.rinex_path:
+            # DDG: same cache-staleness gap ConvertRinex()/window_data()/remove_systems() had --
+            # write_rinex() rebuilds the file from self.header + self.data rather than re-reading
+            # from disk, so without this, a later write_rinex() call (e.g. purge_comments(), called
+            # right after decimate() in gamit_task.py) would silently overwrite the just-decimated
+            # file with the stale pre-decimation body. Keep the cache in sync with what's on disk.
+            self.header = self.get_header()
+            self.read_data()
+
         self.log_event('RINEX decimated to %is (applied to %s)' % (decimate_rate, str(copyto)))
 
     def remove_systems(self, systems=('C', 'E', 'I', 'J', 'R', 'S'), copyto=None):
+        # when called without arguments, removes everything but GPS
         # if copy to is passed, then the system removal is done on the copy of the file, not on the current rinex.
-        # other wise, system removal is done to current rinex
+        # otherwise, system removal is done to current rinex
         if copyto is not None:
             copyfile(self.rinex_path, copyto)
         else:
@@ -1180,8 +1246,13 @@ class ReadRinex(RinexRecord):
         if copyto == self.rinex_path:
             # reload information from this file
             self.parse_output(self.RunGfzrnx(), self.min_time_seconds)
-        else:
-            raise pyRinexException(err)
+            # DDG: same cache-staleness gap ConvertRinex()/window_data() had -- write_rinex()
+            # rebuilds the file from self.header + self.data rather than re-reading from disk,
+            # so without this, a later write_rinex() call (e.g. purge_comments(), called right
+            # after remove_systems() in LocateRinex.py) would silently overwrite the just-filtered
+            # file with the stale pre-removal header. Keep the cache in sync with what's on disk.
+            self.header = self.get_header()
+            self.read_data()
 
         self.log_event('Removed systems %s (applied to %s)' % (','.join(systems), str(copyto)))
 

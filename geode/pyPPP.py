@@ -3,13 +3,15 @@ Project: Geodetic Database Engine (GeoDE)
 Date: 2/21/17 3:34 PM
 Author: Demian D. Gomez
 
-Python wrapper for PPP. It runs the NRCAN PPP and loads the information from
-the summary file. Can be used without a database connection, except for 
-PPPSpatialCheck
-
+Python wrapper for PPP processing. RunPPP() is a factory that dispatches to a concrete engine
+(GPSPACE, the NRCAN PPP software; PRIDE, PRIDE PPP-AR) chosen via options['ppp_engine']
+(default 'gpspace'). Both engines expose the same public surface (exec_ppp(), .record, .x/.y/.z,
+.sigma*, .frame, .elevation_bins/.elevation_residuals, verify_spatial_coherence()) so callers do
+not need to know which engine produced a solution.
 """
+from abc import ABC, abstractmethod
 from shutil import copyfile, rmtree
-from math import isnan
+from math import isnan, sqrt
 import os
 import uuid
 import re
@@ -52,6 +54,7 @@ class pyRunPPPExceptionTooFewAcceptedObs(pyRunPPPException): pass
 class pyRunPPPExceptionNaN              (pyRunPPPException): pass
 class pyRunPPPExceptionZeroProcEpochs   (pyRunPPPException): pass
 class pyRunPPPExceptionEOPError         (pyRunPPPException): pass
+class pyRunPPPExceptionUnsupported      (pyRunPPPException): pass
 
 
 class PPPSpatialCheck:
@@ -92,9 +95,9 @@ class PPPSpatialCheck:
             SELECT st1."NetworkCode", st1."StationCode", st1."StationName", st1."DateStart", st1."DateEnd",
              st1."auto_x", st1."auto_y", st1."auto_z", st1."Harpos_coeff_otl", st1."lat", st1."lon", st1."height",
              st1."max_dist", st1."dome", st1.distance FROM
-            (SELECT *, 2*asin(sqrt(sin((radians(%.8f)-radians(lat))/2)^2 + cos(radians(lat)) * 
+            (SELECT *, 2*asin(sqrt(sin((radians(%.8f)-radians(lat))/2)^2 + cos(radians(lat)) *
             cos(radians(%.8f)) * sin((radians(%.8f)-radians(lon))/2)^2))*6371000 AS distance
-            FROM stations %s) as st1 left join stations as st2 ON 
+            FROM stations %s) as st1 left join stations as st2 ON
                 st1."StationCode" = st2."StationCode" and
                 st1."NetworkCode" = st2."NetworkCode" and
                 st1.distance < coalesce(st2.max_dist, 20)
@@ -109,7 +112,7 @@ class PPPSpatialCheck:
             # get the closest station and distance in km to help the caller function
             rs = cnn.query("""
                 SELECT * FROM
-                    (SELECT *, 2*asin(sqrt(sin((radians(%.8f)-radians(lat))/2)^2 + cos(radians(lat)) * 
+                    (SELECT *, 2*asin(sqrt(sin((radians(%.8f)-radians(lat))/2)^2 + cos(radians(lat)) *
                     cos(radians(%.8f)) * sin((radians(%.8f)-radians(lon))/2)^2))*6371000 AS distance
                         FROM stations %s) as DD ORDER BY distance
                 """ % (self.lat[0], self.lat[0], self.lon[0], where_clause))
@@ -141,20 +144,36 @@ class PPPSpatialCheck:
                 return False, stn_match, []
 
 
-class RunPPP(PPPSpatialCheck):
-    def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True, apply_met=True,
-                 kinematic=False, clock_interpolation=False, hash=0, erase=True, decimate=True, solve_coordinates=True,
-                 solve_troposphere=105, back_substitution=False, elev_mask=10, x=0, y=0, z=0,
-                 observations=OBSERV_CODE_PHASE):
+class PPPEngine(PPPSpatialCheck, ABC):
+    """
+    Common attribute surface and orchestration shared by all PPP engine backends.
+    A subclass provides prepare_rinex() (any engine-specific RINEX pre-processing), stage()
+    (product staging + control-file generation) and exec_ppp() (run + parse + retry policy).
+    """
+
+    def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
+                 apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
+                 decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False,
+                 strict_products=False):
 
         # DDG: move this definition before anything else is called to avoid problems with object deletion in case the
         # pyRinex call below fails
         # generate a unique id for this instance
         self.rootdir = os.path.join(os.path.join('production', 'ppp'), str(uuid.uuid4()))
 
+        # DDG: NOT the same thing as `strict` above (that gates solution-quality checks, e.g.
+        # antenna phase center / rejected-obs ratio). This one gates get_orbits()'s product-line
+        # resolution (see pyProducts.resolve_product_line()): whether a clock-rate requirement that
+        # the preferred (highest-precedence) AC/CS/ST line can't satisfy raises instead of silently
+        # substituting a lower-precedence, fully-consistent line for ALL products.
+        self.strict_products = strict_products
+
+        # DDG: only meaningful for PRIDE (see PRIDE.__exec_ppp__) -- stored here since RunPPP()'s
+        # single call site is engine-agnostic and both subclasses must accept the same kwargs.
+        self.force_ar = force_ar
+
         self.antH      = antenna_height
-        self.ppp_path  = options['ppp_path']
-        self.ppp       = options['ppp_exe']
         self.options   = options
         self.kinematic = kinematic
 
@@ -204,7 +223,7 @@ class RunPPP(PPPSpatialCheck):
         self.orbits2       = None
         self.clocks1       = None
         self.clocks2       = None
-        self.eop_file      = None
+        self.eop_file       = None
         self.sp3altrn      = sp3altrn
         self.sp3types      = sp3types
         self.otl_coeff     = otl_coeff
@@ -215,24 +234,38 @@ class RunPPP(PPPSpatialCheck):
         self.summary       = ''
         self.pos           = ''
 
-        self.elevation_bins      = None
-        self.elevation_residuals = None
+        self.elevation_bins          = None
+        self.elevation_residuals     = None
+        self.elevation_residuals_std = None
+
+        # DDG: 'FLOAT' or 'FIXED' (integer-fixed ambiguities). GPSPACE (ionosphere-free code+phase,
+        # no ambiguity resolution) is always FLOAT, so 'FLOAT' is left as the default here rather
+        # than set explicitly in that subclass; PRIDE overrides this in parse_summary() once it
+        # knows whether ambiguity resolution was actually attempted and succeeded (depends on
+        # ATT.OBX/OSB.BIA product availability, which varies per date/AC -- see PRIDE.get_orbits()).
+        self.solution_type = 'FLOAT'
+
+        # DDG: GNSS system letters (IGS convention: G/R/E/C/J) actually used in the solution. 'G'
+        # is only a fallback default for the (unlikely) case a subclass's own parsing finds
+        # nothing -- both engines override this once parsed: GPSPACE.parse_summary() (this build
+        # is not GPS-only; it's an OSU-customized GPSPACE that also handles GLONASS/Galileo, per
+        # section 3.2's per-constellation breakdown) and PRIDE.parse_res_file() (from the actual
+        # satellite list of contributing PRNs).
+        self.systems_used = 'G'
 
         assert isinstance(in_rinex, pyRinex.ReadRinex)
 
-        # DDG: if RINEX 3 version, convert to RINEX 2 (no PPP support)
-        if in_rinex.rinex_version >= 3:
-            # DDG: make a new object and convert to RINEX 3 to leave the other one untouched
-            rinexobj = pyRinex.ReadRinex(in_rinex.NetworkCode, in_rinex.StationCode, in_rinex.origin_file,
-                                         no_cleanup=in_rinex.no_cleanup, allow_multiday=in_rinex.allow_multiday)
-            rinexobj.ConvertRinex(2)
-        else:
-            # file is in RINEX 2 format, use file as is
-            rinexobj = in_rinex
+        rinexobj = self.prepare_rinex(in_rinex)
 
         # DDG: issue with JPL orbits: some files with one epoch after midnight of next day make PPP
-        # crash when using JPL orbits. Window the data
-        rinexobj.window_data(rinexobj.date.first_epoch('datetime'), rinexobj.date.last_epoch('datetime'))
+        # crash when using JPL orbits. Clip to the nominal calendar day -- but clamp against (not
+        # reset to) the day bounds, so a narrower window already applied upstream (e.g. LocateRinex's
+        # -win) survives. A plain window_data(day_start, day_end) here would unconditionally stretch
+        # any pre-windowed file back out to the full day.
+        day_start = rinexobj.date.first_epoch('datetime')
+        day_end   = rinexobj.date.last_epoch('datetime')
+        rinexobj.window_data(max(rinexobj.datetime_firstObs, day_start),
+                             min(rinexobj.datetime_lastObs, day_end))
 
         PPPSpatialCheck.__init__(self)
 
@@ -258,51 +291,178 @@ class RunPPP(PPPSpatialCheck):
 
         if os.path.isfile(self.rinex.rinex_path):
 
-            path = os.path.join(self.rootdir, self.rinex.rinex[:-3])
-            self.path_sum_file = path + 'sum'
-            self.path_pos_file = path + 'pos'
-            self.path_ses_file = path + 'ses'
-            self.path_res_file = path + 'res'
-
             try:
                 # create a production folder to analyze the rinex file
                 if not os.path.exists(self.rootdir):
                     os.makedirs(self.rootdir)
-                    os.makedirs(os.path.join(self.rootdir, 'orbits'))
             except Exception:
                 # could not create production dir! FATAL
                 raise
 
-            try:
-                self.get_orbits(self.sp3types)
-
-            except (pyProducts.pySp3Exception,
-                    pyProducts.pyClkException,
-                    pyProducts.pyEOPException) as e:
-
-                if sp3altrn:
-                    self.get_orbits(self.sp3altrn)
-                else:
-                    raise type(e)(str(e) + ' -> This exception usually occurs due to the need of having '
-                                          'the orbit for the day being processed and the orbit of the '
-                                          'next day.')
-
-            self.write_otl()
-            self.copyfiles()
-            self.config_session()
-
-            # make a local copy of the rinex file
-            # decimate the rinex file if the interval is < 15 sec.
-            # DDG: only decimate when told by caller
-            if self.rinex.interval < 15 and decimate:
-                self.rinex.decimate(30)
-
-            copyfile(self.rinex.rinex_path,
-                     os.path.join(self.rootdir, self.rinex.rinex))
-
+            self.stage(decimate)
         else:
             raise pyRunPPPException('The file ' + self.rinex.rinex_path +
                                     ' could not be found. PPP was not executed.')
+
+    @abstractmethod
+    def prepare_rinex(self, in_rinex):
+        """Return the ReadRinex object to actually process (may convert version, etc.)."""
+
+    @abstractmethod
+    def stage(self, decimate):
+        """Fetch products, write control files and stage the RINEX copy in self.rootdir."""
+
+    @abstractmethod
+    def exec_ppp(self):
+        """Run the engine (retrying per engine-specific policy), then populate self.record."""
+
+    def check_phase_center(self, section):
+        # default: no known phase-center issue to report; GPSPACE overrides this with a real check
+        return True
+
+    def load_record(self):
+
+        self.record['NetworkCode']    = self.rinex.NetworkCode
+        self.record['StationCode']    = self.rinex.StationCode
+        self.record['X']              = self.x
+        self.record['Y']              = self.y
+        self.record['Z']              = self.z
+        self.record['Year']           = self.rinex.date.year
+        self.record['DOY']            = self.rinex.date.doy
+        self.record['ReferenceFrame'] = self.frame
+        self.record['sigmax']         = self.sigmax
+        self.record['sigmay']         = self.sigmay
+        self.record['sigmaz']         = self.sigmaz
+        self.record['sigmaxy']        = self.sigmaxy
+        self.record['sigmaxz']        = self.sigmaxz
+        self.record['sigmayz']        = self.sigmayz
+        self.record['hash']           = self.hash
+        self.record['orbit']          = self.orbits1.archive_filename
+
+    def cleanup(self):
+        # DDG: subclasses may raise (e.g. missing options key) before PPPEngine.__init__ has run,
+        # in which case self.rootdir/self.erase were never set -- guard __del__ against that.
+        rootdir = getattr(self, 'rootdir', None)
+        if rootdir and os.path.isdir(rootdir) and getattr(self, 'erase', True):
+            # remove all the directory contents
+            rmtree(rootdir)
+
+    def __del__(self):
+        self.cleanup()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def __enter__(self):
+        return self
+
+
+class GPSPACE(PPPEngine):
+    """
+    Wrapper for the NRCAN PPP software (GPSPACE / CSRS-PPP), the original engine behind RunPPP.
+    """
+
+    def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
+                 apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
+                 decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False,
+                 strict_products=False):
+
+        self.ppp_path = options['ppp_path']
+        self.ppp      = options['ppp_exe']
+        self.engine   = 'GPSPACE'
+        self.bia      = None
+
+        # DDG: AR literally never runs without backward substitution -- confirmed in gpspace.f, the
+        # reference-satellite-selection code (the "AR REF SEARCH"/"AR REF SELECT" block, gated at
+        # IPC.GE.1) only exists in the BACKWARD pass; with back_substitution off, that code is simply
+        # never reached, regardless of BIA/RNX3CODES/IFLTON all being correctly set up. -ar on its
+        # own would otherwise silently do nothing, so force it on here rather than make the caller
+        # separately remember -back too. Must happen before PPPEngine.__init__(), which calls
+        # stage() (and therefore config_session(), which writes commands.cmd) internally -- setting
+        # self.back_substitution afterward would be too late.
+        if force_ar:
+            back_substitution = True
+
+        PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
+                           apply_met, kinematic, clock_interpolation, hash, erase, decimate,
+                           solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
+                           observations, force_ar, strict_products)
+
+    def prepare_rinex(self, in_rinex):
+        # DDG: if RINEX 3 version, convert to RINEX 2 (no PPP support)
+        if in_rinex.rinex_version >= 3:
+            # DDG: make a new object and convert to RINEX 3 to leave the other one untouched. Read
+            # from in_rinex.rinex_path (the current working copy), NOT in_rinex.origin_file (the
+            # pristine pre-windowing source) -- window_data() only ever updates rinex_path/
+            # datetime_firstObs/datetime_lastObs, never origin_file, so reading from origin_file
+            # here silently discarded any -win windowing already applied upstream (the caller would
+            # end up with a fresh, full-day object with no way to tell it had ever been windowed).
+            rinexobj = pyRinex.ReadRinex(in_rinex.NetworkCode, in_rinex.StationCode, in_rinex.rinex_path,
+                                         no_cleanup=in_rinex.no_cleanup, allow_multiday=in_rinex.allow_multiday,
+                                         min_time_seconds=0)
+            rinexobj.origin_file = in_rinex.origin_file
+            rinexobj.ConvertRinex(2)
+        else:
+            # file is in RINEX 2 format, use file as is
+            rinexobj = in_rinex
+
+            # DDG: ambiguity resolution needs RNX3CODES populated (gpspace.f HDRNX), which only
+            # happens by parsing "RINEX 3 -> 2 TYPE CONVERSION DETAILS" COMMENT records that gfzrnx
+            # injects while actually performing a 3->2 downgrade -- a native RINEX 2 file never goes
+            # through that path, so a same-version passthrough does NOT add them (confirmed
+            # empirically: tested directly, no comments were injected). A 2->3->2 round-trip forces
+            # gfzrnx to infer the RINEX 3 codes from the receiver type and annotate them on the way
+            # back down, which does work (also confirmed empirically). Only worth the extra two
+            # gfzrnx passes when AR was actually requested.
+            if self.force_ar:
+                rinexobj.ConvertRinex(3)
+                rinexobj.ConvertRinex(2)
+
+        return rinexobj
+
+    def stage(self, decimate):
+
+        path = os.path.join(self.rootdir, self.rinex.rinex[:-3])
+        self.path_sum_file = path + 'sum'
+        self.path_pos_file = path + 'pos'
+        self.path_ses_file = path + 'ses'
+        self.path_res_file = path + 'res'
+
+        os.makedirs(os.path.join(self.rootdir, 'orbits'))
+
+        try:
+            self.get_orbits(self.sp3types)
+
+        except (pyProducts.pySp3Exception,
+                pyProducts.pyClkException,
+                pyProducts.pyEOPException) as e:
+
+            if self.sp3altrn:
+                self.get_orbits(self.sp3altrn)
+            else:
+                raise type(e)(str(e) + ' -> This exception usually occurs due to the need of having '
+                                      'the orbit for the day being processed and the orbit of the '
+                                      'next day.')
+
+        self.write_otl()
+        self.copyfiles()
+        self.config_session()
+
+        # DDG: stage the fetched code/phase bias product (if any -- see get_orbits()) as gpsppp.bia,
+        # the default filename gpspace.f's BIAINP looks for (Option B of the two naming conventions
+        # it supports; simpler than replicating its SP3-filename-derived alternative).
+        if self.bia is not None:
+            copyfile(self.bia.file_path, os.path.join(self.rootdir, 'gpsppp.bia'))
+
+        # make a local copy of the rinex file
+        # decimate the rinex file if the interval is < 15 sec.
+        # DDG: only decimate when told by caller
+        if self.rinex.interval < 15 and decimate:
+            self.rinex.decimate(30)
+
+        copyfile(self.rinex.rinex_path,
+                 os.path.join(self.rootdir, self.rinex.rinex))
 
     def copyfiles(self):
         # prepare all the files required to run PPP
@@ -318,6 +478,28 @@ class RunPPP(PPPSpatialCheck):
                 if f == 'gpsppp.svb_gnss_yrly':
                     raise pyRunPPPException(f'Missing gpsppp.svb_gnss_yrly for PPP processing.')
 
+        # DDG: with -ar, force the filter ON (IFLTON=1) in the staged gpsppp.flt -- a 4th AR
+        # prerequisite the original instructions missed entirely. gpspace.f's RDFLT reads the "FLT"
+        # data line in free format as (FLTDNL,FLTDWL,FLTDAM,FLTDPL,FLTDTT,IPC,IFLTON,IC1USE,IDCBUSE,
+        # VFACTOR,ADEV,IC2USE); with IFLTON=0 (our shipped default) the cycle-slip-aware filtering
+        # that continuous ambiguity tracking depends on never runs at all (confirmed in source: e.g.
+        # "IF (IFLTON.EQ.0) FLTPR=..." takes a simplified direct-combination path instead), so none
+        # of AR's own code paths are ever reached -- BIA loads fine, matches fine, but nothing
+        # downstream of the filter ever runs regardless. Only the IFLTON field is touched.
+        if self.force_ar:
+            flt_path = os.path.join(self.rootdir, 'gpsppp.flt')
+            if os.path.isfile(flt_path):
+                with open(flt_path, 'r') as fh:
+                    flt_lines = fh.readlines()
+                for i, line in enumerate(flt_lines):
+                    if line.startswith('FLT'):
+                        fields = line.split()
+                        fields[7] = '1'
+                        flt_lines[i] = 'FLT    ' + '    '.join(fields[1:]) + '\n'
+                        break
+                with open(flt_path, 'w') as fh:
+                    fh.writelines(flt_lines)
+
         copyfile(os.path.join(self.atx),
                  os.path.join(self.rootdir, os.path.basename(self.atx)))
 
@@ -330,7 +512,7 @@ class RunPPP(PPPSpatialCheck):
         options = self.options
 
         # create the def file
-        file_write(os.path.join(self.rootdir, 'gpsppp.def'), 
+        file_write(os.path.join(self.rootdir, 'gpsppp.def'),
                    "'LNG' 'ENGLISH'\n"
                    "'TRF' 'gpsppp.trf'\n"
                    "'SVB' 'gpsppp.svb_gnss_yrly'\n"
@@ -380,7 +562,7 @@ class RunPPP(PPPSpatialCheck):
                       self.x, self.y, self.z,
                       self.antH, self.elev_mask))
 
-        file_write(os.path.join(self.rootdir, 'input.inp'), 
+        file_write(os.path.join(self.rootdir, 'input.inp'),
                    "%s\n"
                    "commands.cmd\n"
                    "0 0\n"
@@ -398,12 +580,75 @@ class RunPPP(PPPSpatialCheck):
 
         orbits_path = os.path.join(self.rootdir, 'orbits')
 
-        if self.observations == OBSERV_CODE_PHASE:
-            orbits1 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date,     orbit_type, orbits_path, True)
-            orbits2 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date + 1, orbit_type, orbits_path, True)
+        # DDG: when AR was requested (-ar), use a product set consistently matched to the BIA file's
+        # own processing line (MGX) for SP3/CLK/ERP/BIA alike -- not just the BIA fetch. Code/phase
+        # biases are calibrated against the SAME AC's SAME processing line's own clock solution;
+        # pulling orbits/clocks from a different line (e.g. a typical sp3_cs precedence of
+        # R03,OPS,MGX finding OPS first, or even falling through to the old short-name "codWWWWD"
+        # convention, which isn't MGX-combined at all and doesn't cover BeiDou) would silently feed
+        # AR a mismatched clock datum against what the biases assume. Confirmed empirically: without
+        # this, our own test fell through to exactly that legacy short-name product. Stable-reorder
+        # (not filter), so this only changes precedence and falls back to the normal order if no MGX
+        # entry resolves for a given product.
+        product_type = orbit_type
+        if self.force_ar and self.observations == OBSERV_CODE_PHASE:
+            product_type = sorted(orbit_type, key=lambda t: 'MGX' not in t.upper())
 
-            clocks1 = pyProducts.GetClkFile(  options['sp3'], self.rinex.date,     orbit_type, orbits_path, True)
-            clocks2 = pyProducts.GetClkFile(  options['sp3'], self.rinex.date + 1, orbit_type, orbits_path, True)
+        if self.observations == OBSERV_CODE_PHASE:
+            # DDG: only prefer/require a sub-10s clock when the RINEX itself is actually high-rate
+            # (same <15s threshold stage() uses below to decide whether to decimate to 30s). For a
+            # normal 30s-sampled RINEX, a 30s clock is already a perfect match (no interpolation
+            # needed at all) -- forcing a sub-10s-only search in that case buys no accuracy benefit
+            # and only risks an unnecessary cross-AC substitution (see resolve_product_line()) or a
+            # failure to find any product at all. An explicit user-configured clk_interval is always
+            # honored regardless of RINEX rate -- that's a deliberate override, not the preference.
+            if 'clk_interval' in self.options:
+                clk_interval_regex = self.options['clk_interval']
+            elif self.rinex.interval < 15:
+                clk_interval_regex = '0[0-5]S'
+            else:
+                clk_interval_regex = None
+
+            # DDG: resolve ONE consistent AC/CS/ST product line up front, across BOTH the current
+            # day and the next day GPSPACE needs for boundary interpolation, rather than letting
+            # SP3/CLK/ERP/BIA each independently walk `product_type` below and potentially land on
+            # different lines (see pyProducts.resolve_product_line() for the full rationale -- this
+            # is what used to let e.g. a 5s-clock-only AC get silently paired with a different AC's
+            # orbit). Requiring the SAME line across both days also avoids a discontinuity at the
+            # day boundary GPSPACE interpolates across, since orbits1/orbits2 would otherwise be
+            # allowed to come from two different ACs.
+            product_type = pyProducts.resolve_product_line(
+                options['sp3'], (self.rinex.date, self.rinex.date + 1), product_type,
+                clk_interval_regex=clk_interval_regex, strict=self.strict_products)
+
+            orbits1 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
+            orbits2 = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
+
+            # DDG: same sub-10s-clock preference as PRIDE's get_orbits() (see there for the full
+            # rationale/evidence) -- confirmed separately that GPSPACE itself runs fine against a 5s
+            # clock (no crash, "NORMAL COMPLETION") with only a small, roughly FIXED ~6s parsing
+            # overhead regardless of session length (15min: 3.2s->9.4s; 2h: 12.4s->18.4s), so applying
+            # the same preference here too for a fair/consistent comparison between engines. Shares
+            # the clk_interval option (not engine-prefixed) with PRIDE -- it's the same concept/
+            # mechanism in both (unlike e.g. AI validation, which only exists in PRIDE), so one
+            # config key covers both regardless of -eng.
+            if 'clk_interval' in self.options:
+                clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True,
+                                                interval_regex=self.options['clk_interval'])
+                clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True,
+                                                interval_regex=self.options['clk_interval'])
+            elif self.rinex.interval < 15:
+                try:
+                    clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True,
+                                                    interval_regex='0[0-5]S')
+                    clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True,
+                                                    interval_regex='0[0-5]S')
+                except pyProducts.pyClkException:
+                    clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
+                    clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
+            else:
+                clocks1 = pyProducts.GetClkFile(options['sp3'], self.rinex.date,     product_type, orbits_path, True)
+                clocks2 = pyProducts.GetClkFile(options['sp3'], self.rinex.date + 1, product_type, orbits_path, True)
         else:
             # for code-only solution we get the BRDC orbit and we use the same information for all files.
             orbits1 = pyProducts.GetBrdcOrbits(options['brdc'], self.rinex.date, orbits_path, True)
@@ -411,17 +656,29 @@ class RunPPP(PPPSpatialCheck):
             clocks1 = orbits1
             clocks2 = orbits1
         try:
-            eop_file = pyProducts.GetEOP(options['sp3'], self.rinex.date, orbit_type, self.rootdir)
+            eop_file = pyProducts.GetEOP(options['sp3'], self.rinex.date, product_type, self.rootdir)
             eop_file = eop_file.filename
         except pyProducts.pyEOPException:
             # no eop, continue with out one
             eop_file = 'dummy.eop'
+
+        # DDG: only fetched when AR was requested (-ar) -- GPSPACE's ambiguity resolution is
+        # silently disabled unless a code/phase bias (OSB.BIA) product is loaded (see stage(), which
+        # stages it as gpsppp.bia). Same product PRIDE already uses; optional like PRIDE treats it --
+        # not every AC/date publishes one, so fall back to none rather than failing the whole run.
+        bia = None
+        if self.force_ar and self.observations == OBSERV_CODE_PHASE:
+            try:
+                bia = pyProducts.GetBiaFile(options['sp3'], self.rinex.date, product_type, orbits_path, True)
+            except pyProducts.pyBiaException:
+                bia = None
 
         self.orbits1    = orbits1
         self.orbits2    = orbits2
         self.clocks1    = clocks1
         self.clocks2    = clocks2
         self.eop_file   = eop_file
+        self.bia        = bia
         # get the type of orbit
         self.orbit_type = orbits1.type
         # DDG: new -> add the value of the orbit hash to the PPP hash to include the orbit type
@@ -542,6 +799,25 @@ class RunPPP(PPPSpatialCheck):
 
         return int(processed), rejected
 
+    # DDG: maps the constellation names this (OSU-customized) GPSPACE build prints in section 3.2
+    # to IGS single-letter system codes, matching PRIDE's convention (systems_used).
+    _CONSTELLATION_CODES = {'GPS': 'G', 'GLONASS': 'R', 'GALILEO': 'E', 'BEIDOU': 'C', 'QZSS': 'J'}
+
+    @classmethod
+    def get_systems_used(cls, section):
+        systems = set()
+        for line in section.split('\n'):
+            if 'Number of satellites processed' not in line or ':' not in line:
+                continue
+            tokens = line.split(':', 1)[1].split()
+            # the first (aggregate, all-systems) occurrence has no trailing constellation name
+            if len(tokens) < 2:
+                continue
+            count, constellation = tokens[0], tokens[1]
+            if constellation in cls._CONSTELLATION_CODES and count.isdigit() and int(count) > 0:
+                systems.add(cls._CONSTELLATION_CODES[constellation])
+        return ''.join(sorted(systems)) if systems else 'G'
+
     @staticmethod
     def check_phase_center(section):
         return not len(re.findall(r'Antenna phase center.+NOT AVAILABLE', section)) > 0
@@ -609,6 +885,12 @@ class RunPPP(PPPSpatialCheck):
         if self.processed_obs == 0:
             raise pyRunPPPExceptionZeroProcEpochs('PPP returned zero processed epochs')
 
+        # DDG: this OSU build of GPSPACE is not GPS-only -- section 3.2 repeats "Number of
+        # satellites processed" once per constellation actually processed (the very first such
+        # line, with no trailing constellation name, is the all-systems aggregate and is skipped
+        # here). Only count a system as used if it actually processed at least one satellite.
+        self.systems_used = self.get_systems_used(self.observation_session)
+
         # if self.strict and (self.processed_obs == 0 or self.rejected_obs > 0.95 * self.processed_obs):
         #    raise pyRunPPPExceptionTooFewAcceptedObs('The processed observations (' + str(self.processed_obs) +
         #                                             ') is zero or more than 95% of the observations were rejected (' +
@@ -637,7 +919,7 @@ class RunPPP(PPPSpatialCheck):
         # not implemented in PPP: apply NE offset if is NOT zero
         if self.rinex.antOffsetN != 0.0 or \
            self.rinex.antOffsetE != 0.0:
-            
+
             dx, dy, dz = lg2ct(numpy.array(self.rinex.antOffsetN),
                                numpy.array(self.rinex.antOffsetE),
                                numpy.array([0]),
@@ -655,8 +937,10 @@ class RunPPP(PPPSpatialCheck):
         epochs only.  Bins with no observations are set to NaN.
 
         Populates:
-            self.elevation_bins      : numpy integer array [0, 1, ..., 90] (degrees)
-            self.elevation_residuals : numpy float array, mean VCP per 1-degree bin
+            self.elevation_bins          : numpy integer array [0, 1, ..., 90] (degrees)
+            self.elevation_residuals     : numpy float array, mean VCP per 1-degree bin
+            self.elevation_residuals_std : numpy float array, std dev of VCP per 1-degree bin
+                                            (NaN where a bin has no observations, same as the mean)
         """
         if not os.path.isfile(self.path_res_file):
             return
@@ -698,14 +982,17 @@ class RunPPP(PPPSpatialCheck):
 
         bins  = numpy.arange(0, 91)
         means = numpy.full(91, numpy.nan)
+        stds  = numpy.full(91, numpy.nan)
 
         for deg in bins:
             mask = elev_bin == deg
             if numpy.any(mask):
                 means[deg] = numpy.nanmean(residuals[mask])
+                stds[deg]  = numpy.nanstd(residuals[mask])
 
-        self.elevation_bins      = bins
-        self.elevation_residuals = means
+        self.elevation_bins          = bins
+        self.elevation_residuals     = means
+        self.elevation_residuals_std = stds
 
     def __exec_ppp__(self, raise_error=True):
 
@@ -713,7 +1000,10 @@ class RunPPP(PPPSpatialCheck):
             # DDG: handle the error found in PPP (happens every now and then)
             # Fortran runtime error: End of file
             for i in range(2):
-                out, err = pyRunWithRetry.RunCommand(self.ppp, 60, self.rootdir, 'input.inp').run_shell()
+                # DDG: was 60s -- too tight for longer windows/busy multi-GNSS RINEX 3 files under
+                # cluster load, causing spurious "Timeout after 3 retries" failures on otherwise
+                # healthy runs. Match PRIDE's own allowance (see PRIDE.__exec_ppp__ below).
+                out, err = pyRunWithRetry.RunCommand(self.ppp, 900, self.rootdir, 'input.inp').run_shell()
 
                 if '*END - NORMAL COMPLETION' not in out:
 
@@ -796,35 +1086,887 @@ class RunPPP(PPPSpatialCheck):
         self.load_record()
         self.parse_res_file()
 
-    def load_record(self):
 
-        self.record['NetworkCode']    = self.rinex.NetworkCode
-        self.record['StationCode']    = self.rinex.StationCode
-        self.record['X']              = self.x
-        self.record['Y']              = self.y
-        self.record['Z']              = self.z
-        self.record['Year']           = self.rinex.date.year
-        self.record['DOY']            = self.rinex.date.doy
-        self.record['ReferenceFrame'] = self.frame
-        self.record['sigmax']         = self.sigmax
-        self.record['sigmay']         = self.sigmay
-        self.record['sigmaz']         = self.sigmaz
-        self.record['sigmaxy']        = self.sigmaxy
-        self.record['sigmaxz']        = self.sigmaxz
-        self.record['sigmayz']        = self.sigmayz
-        self.record['hash']           = self.hash
-        self.record['orbit']          = self.orbits1.archive_filename
+# Hand-written from a real pdp3-generated config file (PRIDE PPP-AR 3.2.10), keeping every section
+# and the default satellite list / ambiguity-fixing block verbatim. Only the fields geode actually
+# has a run-specific value for are substituted; everything else is left at PRIDE's own defaults.
+_PRIDE_CONFIG_TEMPLATE = """# Configuration template for PRIDE PPP-AR 3
 
-    def cleanup(self):
-        if os.path.isdir(self.rootdir) and self.erase:
-            # remove all the directory contents
-            rmtree(self.rootdir)
+## Observation configuration
+Frequency combination  = G12 R12 E15 C26 J12
+Interval               = {interval:g}
+Time window            = 0.01
+Session time           = {session_time}
+Table directory        = {table_dir}
 
-    def __del__(self):
-        self.cleanup()
+## Satellite product
+Product directory      = {product_dir}
+Satellite orbit        = {sp3_filename}
+Satellite clock        = {clk_filename}
+ERP                    = {erp_filename}
+Quaternions            = {obx_filename}
+Code/phase bias        = {bia_filename}
+LEO quaternions        = NONE
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.cleanup()
+## Data processing strategies
+Strict editing         = YES
+RCK model              = WNO
+ISB model              = NO
+ZTD model              = {ztd_model}
+HTG model              = {htg_model}
+Iono 2nd               = NO
+Tides                  = SOLID/OCEAN/POLE
+Multipath              = NO
 
-    def __enter__(self):
-        return self
+## Ambiguity fixing options
+Ambiguity co-var        = YES
+Ambiguity duration      = {amb_duration}                    ! time duration in seconds for a resolvable ambiguity
+AI Ambiguity validation = {ai_validation}
+Cutoff elevation        = 15                     ! cutoff mean elevation for eligible ambiguities to be resolved
+PCO on wide-lane        = {pco_wl}
+Widelane decision       = 0.20 0.15 1000.        ! deviation (cycle), sigma (cycle) and decision threshold for WL ambiguities
+Narrowlane decision     = 0.15 0.15 1000.        ! deviation (cycle), sigma (cycle) and decision threshold for NL ambiguities
+Critical search         = {critical_search}            ! highest number of ambiguities to be excluded, lowest number to be reserved, fixed/float, ratio threshold
+Truncate at midnight    = NO
+Verbose output          = NO
+
+## Satellite list
+# Inserting `#' at the beginning of individual GNSS PRN means not to use this satellite
++GNSS satellites
+*PRN variance
+ G01   1
+ G02   1
+ G03   1
+ G04   1
+ G05   1
+ G06   1
+ G07   1
+ G08   1
+ G09   1
+ G10   1
+ G11   1
+ G12   1
+ G13   1
+ G14   1
+ G15   1
+ G16   1
+ G17   1
+ G18   1
+ G19   1
+ G20   1
+ G21   1
+ G22   1
+ G23   1
+ G24   1
+ G25   1
+ G26   1
+ G27   1
+ G28   1
+ G29   1
+ G30   1
+ G31   1
+ G32   1
+ R01   1
+ R02   1
+ R03   1
+ R04   1
+ R05   1
+ R06   1
+ R07   1
+ R08   1
+ R09   1
+ R10   1
+ R11   1
+ R12   1
+ R13   1
+ R14   1
+ R15   1
+ R16   1
+ R17   1
+ R18   1
+ R19   1
+ R20   1
+ R21   1
+ R22   1
+ R23   1
+ R24   1
+ E01   1
+ E02   1
+ E03   1
+ E04   1
+ E05   1
+ E06   1
+ E07   1
+ E08   1
+ E09   1
+ E10   1
+ E11   1
+ E12   1
+ E13   1
+ E14   1
+ E15   1
+ E16   1
+ E17   1
+ E18   1
+ E19   1
+ E20   1
+ E21   1
+ E22   1
+ E23   1
+ E24   1
+ E25   1
+ E26   1
+ E27   1
+ E28   1
+ E29   1
+ E30   1
+ E31   1
+ E32   1
+ E33   1
+ E34   1
+ E35   1
+ E36   1
+ C01   3
+ C02   3
+ C03   3
+ C04   3
+ C05   3
+ C06   1
+ C07   1
+ C08   1
+ C09   1
+ C10   1
+ C11   1
+ C12   1
+ C13   1
+ C14   1
+ C15   1
+ C16   1
+ C17   1
+ C18   3
+ C19   1
+ C20   1
+ C21   1
+ C22   1
+ C23   1
+ C24   1
+ C25   1
+ C26   1
+ C27   1
+ C28   1
+ C29   1
+ C30   1
+ C31   1
+ C32   1
+ C33   1
+ C34   1
+ C35   1
+ C36   1
+ C37   1
+ C38   1
+ C39   1
+ C40   1
+ C41   1
+ C42   1
+ C43   1
+ C44   1
+ C45   1
+ C46   1
+ C47   1
+ C48   1
+ C56   1
+ C57   1
+ C58   1
+ C59   3
+ C60   3
+ C61   3
+#J01   1
+#J02   1
+#J03   1
+#J07   3
+-GNSS satellites
+
+## Option line
+# There should be only one option line to be processed
+# Arguments can be replaced by command-line automatically
+# Available positioning mode:  S -- static
+#                              P -- piec-wise
+#                              K -- kinematic
+#                              F -- fixed
+# Available mapping function:  NIE -- Niell Mapping Function (NMF)
+#                              GMF -- Global Mapping Function (GMF)
+#                              VM1 -- Vienna Mapping Function (VMF1)
+#                              VM3 -- Vienna Mapping Function (VMF3)
+# Other arguments can be kept if you are not familiar with them
++Station used
+*NAME TP MAP CLKm  PoDm EV ZTDm  PoDm HTGm  PoDm RAGm PHSc PoLns PoXEm PoYNm PoZHm
+ {site:<4s} {mode} GMF 9000 0.000  {ev:.0f} 0.20 .0004 .005 0.002 0.30 0.01 300 {pos_sigma} {pos_sigma} {pos_sigma} 0
+-Station used
+"""
+
+
+class PRIDE(PPPEngine):
+    """
+    Wrapper for PRIDE PPP-AR (pdp3), a carrier-phase PPP-AR engine. Unlike GPSPACE it supports
+    RINEX 3/4 natively, resolves integer ambiguities, and computes ocean tide loading internally
+    (options['pride_engine'] does not need otl_coeff -- it is accepted for interface parity only).
+
+    ATT.OBX (satellite attitude) and OSB.BIA (code/phase bias) products are optional: not every
+    analysis center publishes them and older dates rarely have them. When missing, they are set to
+    NONE in the PRIDE config file rather than failing the run -- PRIDE PPP-AR still runs without
+    them, with reduced fidelity (e.g. no ambiguity resolution).
+
+    Broadcast navigation: the pre-merged multi-GNSS BRDM product (best quality) is only available
+    from ~2013 onward (MGEX era). For older dates this falls back to staging the plain GPS (.n,
+    required) and GLONASS (.g, optional) broadcast nav files next to the RINEX file instead --
+    pdp3 merges them itself locally, or runs single-GNSS (GPS-only) if GLONASS isn't available.
+
+    Fixed-coordinate PPP (solve_coordinates=False): PRIDE calls this "quasi-fixed", not hard-fixed.
+    Confirmed directly by PRIDE's developers (pride@whu.edu.cn): "F" mode does not pin the position
+    to sit.xyz -- it gives the seed coordinate a small a-priori sigma, READ FROM sit.xyz itself
+    (not from the Option-line's PoXEm/PoYNm/PoZHm, which they confirmed only applies when the mode
+    is NOT "F"). To approximate a hard fix, they recommend a very tight sigma, e.g. 1 micrometer
+    (1e-6 m) -- see _SIT_XYZ_FIXED_SIGMA below.
+
+    pdp3's "F" mode normally tries to download a position-SINEX product to seed the coordinate, but
+    falls back to a local sit.xyz file in its per-day work directory if present -- we stage that
+    ourselves (from self.x/y/z, with the tight sigma) to avoid the network call entirely, same
+    pattern as the BRDM navigation fallback.
+
+    Zenith troposphere delay gradients (solve_troposphere, same values/meaning as GPSPACE: 1 = do
+    not solve troposphere at all, 2-5 = solve without gradients, 102-105 = solve with gradients)
+    map onto PRIDE's "ZTD model"/"HTG model" config keys (NON/STO/PWC:720). The specific random-walk
+    magnitude encoded in GPSPACE's 2-5 vs 102-105 values is not replicated -- only the on/off/none
+    distinction PRIDE actually exposes through these two keys.
+
+    v1 scope: static/fixed mode only (kinematic and code-only PPP are not yet implemented and raise
+    pyRunPPPExceptionUnsupported).
+    """
+
+    def __init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict=True,
+                 apply_met=True, kinematic=False, clock_interpolation=False, hash=0, erase=True,
+                 decimate=True, solve_coordinates=True, solve_troposphere=105, back_substitution=False,
+                 elev_mask=10, x=0, y=0, z=0, observations=OBSERV_CODE_PHASE, force_ar=False,
+                 strict_products=False):
+
+        if kinematic:
+            raise pyRunPPPExceptionUnsupported('The PRIDE PPP-AR engine does not support kinematic mode yet.')
+        if observations != OBSERV_CODE_PHASE:
+            raise pyRunPPPExceptionUnsupported('The PRIDE PPP-AR engine does not support code-only PPP yet.')
+
+        self.ppp_path = options['pride_table']
+        self.ppp      = options['pride_exe']
+
+        self._ensure_offline(self.ppp)
+        self._ensure_tmp_config_fix(self.ppp)
+
+        self.erp  = None
+        self.brdm = None
+        self.obx  = None
+        self.bia  = None
+        self.amb_fixed = None
+        self.path_cfg_file = None
+        self.local_table   = None
+        self.engine = 'PRIDE'
+
+        PPPEngine.__init__(self, in_rinex, otl_coeff, options, sp3types, sp3altrn, antenna_height, strict,
+                           apply_met, kinematic, clock_interpolation, hash, erase, decimate,
+                           solve_coordinates, solve_troposphere, back_substitution, elev_mask, x, y, z,
+                           observations, force_ar, strict_products)
+
+    @staticmethod
+    def _ensure_offline(pdp3_path):
+        # DDG: pdp3 hardcodes `readonly OFFLINE=NO` near the top of the script -- left at its
+        # factory default, it reaches out to PRIDE's own servers mid-run (e.g. for an ANTEX file),
+        # which we never want. This is normally a one-line manual edit after installing/updating
+        # PRIDE, but it's easy to forget on a freshly deployed cluster node, so patch it here
+        # automatically every time instead. Idempotent (no-op once already YES) and deliberately
+        # silent on failure (e.g. read-only install, unwritable by this user) -- this is a
+        # best-effort convenience, not something that should block PPP processing.
+        try:
+            with open(pdp3_path, 'r') as f:
+                content = f.read()
+            patched = re.sub(r'(readonly\s+OFFLINE\s*=\s*)NO\b', r'\1YES', content, count=1)
+            if patched != content:
+                with open(pdp3_path, 'w') as f:
+                    f.write(patched)
+        except (IOError, OSError):
+            pass
+
+    @staticmethod
+    def _ensure_tmp_config_fix(pdp3_path):
+        # DDG: pdp3 builds its per-run temp config path with `mktemp -u | sed "s/tmp\./config\./"`,
+        # an unanchored substitution that's supposed to rename the basename (tmp.XXXXXXXXXX ->
+        # config.XXXXXXXXXX) but instead replaces whatever "tmp." it finds FIRST in the full path.
+        # On HPC schedulers whose $TMPDIR itself contains "tmp." (e.g. OSC's SLURM-assigned
+        # /tmp/slurmtmp.<jobid>), that's the directory name, not the basename -- e.g.
+        # /tmp/slurmtmp.12345/tmp.XXXXXXXXXX becomes /tmp/slurmCONFIG.12345/tmp.XXXXXXXXXX (basename
+        # untouched), and pdp3 then fails trying to cp into a directory that was never created.
+        # Anchoring the pattern to a preceding path separator restricts it to the basename only.
+        # Idempotent (no-op once already anchored) and silent on failure, same as _ensure_offline.
+        try:
+            with open(pdp3_path, 'r') as f:
+                content = f.read()
+            patched = content.replace('mktemp -u | sed "s/tmp\\./config\\./"',
+                                      'mktemp -u | sed "s#/tmp\\.#/config.#"')
+            if patched != content:
+                with open(pdp3_path, 'w') as f:
+                    f.write(patched)
+        except (IOError, OSError):
+            pass
+
+    def prepare_rinex(self, in_rinex):
+        # PRIDE PPP-AR supports RINEX 3/4 natively -- no version downgrade needed
+        return in_rinex
+
+    def check_phase_center(self, section):
+        # DDG: overrides PPPEngine's unconditional-True default. PRIDE reports the antenna type it
+        # actually matched (from the RINEX header + ANTEX) directly in the pos_ file's own header;
+        # "SITE ANTENNA TYPE = NONE" means it could not match one -- mirrors GPSPACE's
+        # "Antenna phase center ... NOT AVAILABLE" check. section is unused (kept for interface
+        # parity with GPSPACE/callers like LocateRinex.py's ppp.check_phase_center(ppp.proc_parameters)).
+        for line in self.out:
+            if 'SITE ANTENNA TYPE' in line:
+                return line.split('SITE ANTENNA TYPE')[0].strip().upper() != 'NONE'
+        return True
+
+    def stage(self, decimate):
+
+        os.makedirs(os.path.join(self.rootdir, 'products'))
+
+        try:
+            self.get_orbits(self.sp3types)
+
+        except (pyProducts.pySp3Exception,
+                pyProducts.pyClkException,
+                pyProducts.pyEOPException,
+                pyProducts.pyBrdcException) as e:
+
+            if self.sp3altrn:
+                self.get_orbits(self.sp3altrn)
+            else:
+                raise type(e)(str(e) + ' -> PRIDE PPP-AR requires SP3, CLK, ERP and at least a GPS '
+                                      'broadcast navigation (BRDC) product for the day being processed.')
+
+        self.local_table = self.stage_table_dir()
+        self.config_session()
+
+        if self.rinex.interval < 15 and decimate:
+            self.rinex.decimate(30)
+
+        copyfile(self.rinex.rinex_path,
+                 os.path.join(self.rootdir, self.rinex.rinex))
+
+    def stage_table_dir(self):
+        """
+        pdp3 has no config key or CLI flag for the ANTEX file: it resolves one internally (usually
+        from the SP3/CLK product's own header, e.g. 'igs14') and always looks for it in the
+        directory named by the config's "Table directory" line, unconditionally overwriting
+        whatever local file might already be there. The only way to force it to use GeoDE's own
+        ATX (determine_frame(), same as GPSPACE) is to control that directory's contents.
+
+        We can't just overwrite the real pride_table directory in place -- concurrent PRIDE runs
+        for different stations would race on the same shared file. Instead, build a process-
+        isolated overlay under self.rootdir that symlinks every entry from the real table
+        directory, except *.atx/*.ATX entries, which are redirected to GeoDE's own ATX file.
+
+        Mirroring existing *.atx entries alone isn't enough: pdp3 resolves the specific filename
+        it wants (e.g. 'igs20_2388.atx') from the CLK product's own header, and that exact
+        version may not already exist as a file in the real table dir (e.g. a newer ATX version
+        than what's locally cached) -- in that case pdp3 falls straight to a network download
+        attempt, bypassing our override entirely. So this also replicates pdp3's own extraction
+        (pdp3.sh: grep "SYS / PCVS APPLIED" $clk | cut -c21-34 | tr A-Z a-z | sed 's/r3/R3/') from
+        our own already-staged CLK file, and stages that exact filename too -- including pdp3's
+        CODE-MGEX special case (COD0MGX/COM clock + label "igs14" -> M14.ATX/M20.ATX), see
+        _resolve_clk_atx_name() for details.
+        """
+        local_table = os.path.join(self.rootdir, 'table')
+        os.makedirs(local_table)
+
+        real_table = os.path.abspath(self.ppp_path)
+        real_atx   = os.path.abspath(self.atx)
+
+        for entry in os.listdir(real_table):
+            link_path = os.path.join(local_table, entry)
+            if entry.lower().endswith('.atx'):
+                os.symlink(real_atx, link_path)
+            else:
+                os.symlink(os.path.join(real_table, entry), link_path)
+
+        clk_atx_name = self._resolve_clk_atx_name()
+        if clk_atx_name:
+            link_path = os.path.join(local_table, clk_atx_name)
+            if os.path.lexists(link_path):
+                os.remove(link_path)
+            os.symlink(real_atx, link_path)
+
+        return local_table
+
+    def _resolve_clk_atx_name(self):
+        """
+        Replicate pdp3.sh's own ANTEX filename resolution from the staged CLK product's "SYS /
+        PCVS APPLIED" header line, so stage_table_dir() can stage GeoDE's ATX under that exact
+        name. Returns None if the CLK file has no such header (pdp3 would then fall back to its
+        own table_dir scan, already covered by mirroring existing *.atx entries).
+
+        Also replicates pdp3.sh's CODE-MGEX special case: when the clock product is CODE's
+        combined MGEX solution (filename starting with COD0MGX or COM) and the header-derived
+        label is the generic "igs14" (no specific realization), pdp3 overrides the filename to
+        M14.ATX or M20.ATX (depending on whether the processing date is before/after MJD 59336,
+        the IGS14->IGS20 frame switch) and fetches it from CODE's own FTP mirror instead of the
+        usual IGS ANTEX naming -- a path that pdp3.sh does NOT gate behind OFFLINE at all, so it
+        must be pre-staged locally or it'll attempt a network download regardless.
+        """
+        if self.clocks1 is None or not os.path.isfile(self.clocks1.clk_path):
+            return None
+
+        try:
+            with open(self.clocks1.clk_path, 'r', errors='ignore') as f:
+                for line in f:
+                    if 'SYS / PCVS APPLIED' in line:
+                        label = line[20:34].strip().lower()
+                        if not label:
+                            return None
+
+                        clk_name = os.path.basename(self.clocks1.clk_path)
+                        if label == 'igs14' and clk_name.startswith(('COD0MGX', 'COM')):
+                            return 'M14.ATX' if self.rinex.date.mjd <= 59336 else 'M20.ATX'
+
+                        if 'r3' in label:
+                            label = label.replace('r3', 'R3', 1)
+                        return label if label.endswith('.atx') else label + '.atx'
+        except OSError:
+            return None
+
+        return None
+
+    def get_orbits(self, orbit_type):
+
+        options = self.options
+        products_path = os.path.join(self.rootdir, 'products')
+
+        # DDG: only prefer/require a sub-10s clock when the RINEX itself is actually high-rate
+        # (OrbitalProduct's version/interval tie-break deliberately prefers the LARGEST matching
+        # interval "to speed up processing" -- reasonable for orbit/ERP products, but for the clock
+        # product specifically that means picking e.g. a 30s file over a 5s one from the same AC when
+        # both exist, which forces heavier interpolation for 1Hz AR sessions. Confirmed empirically:
+        # swapping a wrongly-FIXED 0.25h AGGO session's clock from COD's 30s product to its own 5s
+        # product (same AC/line/solution, nothing else changed) took it from a 445mm wrong fix to an
+        # ~11mm correct one, with no measurable cost to already-good sessions). But for a normal
+        # 30s-sampled RINEX, a 30s clock is already a perfect match (no interpolation needed at
+        # all) -- forcing a sub-10s-only search in that case buys no accuracy benefit and only
+        # risks an unnecessary cross-AC substitution (see resolve_product_line()) or a failure to
+        # find any product at all. Same <15s threshold stage() uses to decide whether to decimate
+        # to 30s. An explicit user-configured clk_interval is always honored regardless of RINEX
+        # rate -- that's a deliberate override, not the preference. GPSPACE's get_orbits() does the
+        # same, sharing the clk_interval option below (not engine-prefixed) since it's the same
+        # concept/mechanism in both -- confirmed separately that GPSPACE itself runs fine against a
+        # 5s clock (no crash, roughly fixed ~6s parsing overhead regardless of session length).
+        if 'clk_interval' in self.options:
+            clk_interval_regex = self.options['clk_interval']
+        elif self.rinex.interval < 15:
+            clk_interval_regex = '0[0-5]S'
+        else:
+            clk_interval_regex = None
+
+        # DDG: resolve ONE consistent AC/CS/ST product line up front instead of letting SP3/CLK/
+        # ERP/OBX/BIA each independently walk `orbit_type` below and potentially land on different
+        # lines -- see pyProducts.resolve_product_line() for the full rationale (this is what used
+        # to let e.g. a 5s-clock-only AC get silently paired with a different AC's orbit, the
+        # original WUM/COD mixing this was built to fix).
+        product_type = pyProducts.resolve_product_line(
+            options['sp3'], self.rinex.date, orbit_type,
+            clk_interval_regex=clk_interval_regex, strict=self.strict_products)
+
+        orbits = pyProducts.GetSp3Orbits(options['sp3'], self.rinex.date, product_type, products_path,
+                                         True, short_name=False)
+
+        if 'clk_interval' in self.options:
+            clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
+                                           True, short_name=False,
+                                           interval_regex=self.options['clk_interval'])
+        elif self.rinex.interval < 15:
+            try:
+                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
+                                               True, short_name=False, interval_regex='0[0-5]S')
+            except pyProducts.pyClkException:
+                clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
+                                               True, short_name=False)
+        else:
+            clocks = pyProducts.GetClkFile(options['sp3'], self.rinex.date, product_type, products_path,
+                                           True, short_name=False)
+        erp    = pyProducts.GetEOP(      options['sp3'], self.rinex.date, product_type, products_path,
+                                         short_name=False)
+
+        # DDG: PRIDE PPP-AR needs a broadcast nav file next to the RINEX obs file itself
+        # (self.rootdir), not in products/ -- that is where pdp3's own PrepareRinexNav looks for it.
+        # Prefer the pre-merged multi-GNSS BRDM product (best quality), but that only exists from
+        # ~2013 onward (MGEX era); for older dates fall back to the plain GPS (.n) broadcast nav
+        # (required) plus GLONASS (.g) if available (optional) -- pdp3 merges these itself locally,
+        # or runs single-GNSS (GPS-only) if only the .n file is present. Either way, no network call.
+        try:
+            brdm = pyProducts.GetBrdmOrbits(options['brdc'], self.rinex.date, self.rootdir, True)
+        except pyProducts.pyBrdmException:
+            brdm = None
+            pyProducts.GetBrdcOrbits(options['brdc'], self.rinex.date, self.rootdir, True)
+            try:
+                pyProducts.GetBrdgOrbits(options['brdc'], self.rinex.date, self.rootdir, True)
+            except pyProducts.pyBrdgException:
+                pass
+
+        # DDG: ATT.OBX (attitude) and OSB.BIA (code/phase bias) are optional -- not every AC publishes
+        # them and older dates rarely have them. PRIDE PPP-AR runs without them (with reduced fidelity/
+        # no ambiguity resolution rather than failing), so fall back to NONE instead of raising.
+        try:
+            obx = pyProducts.GetObxFile(options['sp3'], self.rinex.date, product_type, products_path, True)
+        except pyProducts.pyObxException:
+            obx = None
+
+        try:
+            bia = pyProducts.GetBiaFile(options['sp3'], self.rinex.date, product_type, products_path, True)
+        except pyProducts.pyBiaException:
+            bia = None
+
+        self.orbits1 = orbits
+        self.clocks1 = clocks
+        self.erp     = erp
+        self.brdm    = brdm
+        self.obx     = obx
+        self.bia     = bia
+        self.orbit_type = orbits.type
+        self.hash   += orbits.hash
+
+    def config_session(self):
+
+        site  = self.rinex.StationCode.lower()
+        first = self.rinex.datetime_firstObs
+        last  = self.rinex.datetime_lastObs
+        span  = (last - first).total_seconds()
+
+        session_time = '%04d %02d %02d %02d %02d %05.2f %.2f' % \
+                       (first.year, first.month, first.day, first.hour, first.minute, first.second, span)
+
+        # DDG: solve_troposphere follows GPSPACE's convention (1 = don't solve, 2-5 = solve without
+        # gradients, 102-105 = solve with gradients); map that onto PRIDE's ZTD/HTG model keys.
+        if self.solve_troposphere == 1:
+            ztd_model, htg_model = 'NON', 'NON'
+        elif self.solve_troposphere >= 100:
+            ztd_model, htg_model = 'STO', 'PWC:720'
+        else:
+            ztd_model, htg_model = 'STO', 'NON'
+
+        # DDG: PoXEm/PoYNm/PoZHm (Option-line trailing columns) is the a-priori position sigma, but
+        # per PRIDE's developers it is only applied when the mode is NOT "F" -- it's a no-op for
+        # fixed-coordinate runs, hence always the static-mode default here regardless of mode.
+        pos_sigma = '10.00'
+
+        if self.solve_coordinates:
+            mode = 'S'
+        else:
+            mode = 'F'
+
+            # DDG: pdp3's "F" mode tries to download a position-SINEX product to seed the fixed
+            # coordinate, but falls back to a local sit.xyz in its per-day work directory
+            # (self.rootdir/<year>/<doy>/) if already present -- stage it ourselves from self.x/y/z
+            # (same site/network-avoidance pattern as the BRDM navigation fallback).
+            #
+            # Per PRIDE's developers (pride@whu.edu.cn), "F" mode does not hard-fix the position --
+            # it gives the seed coordinate a small a-priori sigma read FROM sit.xyz itself (not from
+            # PoXEm/PoYNm/PoZHm, which they confirmed is ignored in F mode). They recommend a very
+            # tight sigma, e.g. 1e-6 m, to approximate a hard fix. This corrects two earlier wrong
+            # turns: the manual's own -m section (5.4.1) only documents "staname posx posy posz"
+            # (4 fields, no sigma) with no mention that a sigma is read from the file at all, and an
+            # interim attempt guessed 1e-4/1e-3 m from pdp3.sh's internal field indexing without
+            # confirmation -- neither actually constrained the solution in testing.
+            year_doy = os.path.join(self.rootdir, str(self.rinex.date.year), str(self.rinex.date.doy).zfill(3))
+            os.makedirs(year_doy, exist_ok=True)
+            file_write(os.path.join(year_doy, 'sit.xyz'),
+                      ' %s%16.4f%16.4f%16.4f%10.6f%10.6f%10.6f\n' %
+                      (site, self.x, self.y, self.z, 1e-6, 1e-6, 1e-6))
+
+        self.path_cfg_file = os.path.join(self.rootdir, 'config.' + site)
+
+        # DDG: AR tuning knobs, overridable from the [ppp] section of gnss_data.cfg (defaults =
+        # current/original hardcoded behavior) -- lets the wrong-fix investigation in
+        # PRIDE_AR_tests.md change one setting at a time via config instead of a code redeploy.
+        amb_duration = str(self.options.get('pride_amb_duration', '600')).strip()
+        if amb_duration.lower() == 'auto':
+            # sessions < 1h: require ambiguities to span ~90% of the session (never below PRIDE's 600s)
+            amb_duration = '%d' % (max(600, int(0.9 * span)) if span < 3600 else 600)
+
+        file_write(self.path_cfg_file, _PRIDE_CONFIG_TEMPLATE.format(
+            interval       = self.rinex.interval,
+            session_time   = session_time,
+            # DDG: points at the process-isolated overlay built by stage_table_dir(), not the real
+            # shared pride_table -- see stage_table_dir() for why (forces GeoDE's own ATX).
+            table_dir      = os.path.join(os.path.abspath(self.local_table), ''),
+            # DDG: pdp3 runs with cwd=self.rootdir (a relative path); a relative "Product directory"
+            # would resolve against that cwd and point nowhere, so must be absolute. When pdp3 can't
+            # find a product locally it silently falls back to fetching it from its own remote
+            # server -- an absolute, correct path avoids that fallback (and the network calls) entirely.
+            product_dir    = os.path.join(os.path.abspath(self.rootdir), 'products', ''),
+            sp3_filename   = self.orbits1.filename,
+            clk_filename   = self.clocks1.filename,
+            erp_filename   = self.erp.filename,
+            obx_filename   = self.obx.filename if self.obx else 'NONE',
+            bia_filename   = self.bia.filename if self.bia else 'NONE',
+            ztd_model      = ztd_model,
+            htg_model      = htg_model,
+            site           = site,
+            mode           = mode,
+            pos_sigma      = pos_sigma,
+            # DDG: EV (Option-line field 6, general observation/editing elevation mask) stays
+            # user-configurable via elev_mask/-elv (default 10) -- confirmed in pdp3.sh (lines
+            # 1108-1125) to be the value actually passed as -elev to tedit/lsq, read straight from
+            # this config field (CLI -c is just an optional override on top of it, which we don't
+            # need since we write the field directly). The ambiguity-fixing "Cutoff elevation"
+            # above is a genuinely separate parameter -- never read by the bash wrapper at all
+            # (must be consumed directly by the AR binary), used only to gate which observations
+            # are eligible for ambiguity resolution -- so it's deliberately NOT tied to elev_mask
+            # and kept at PRIDE's own factory default (15) instead.
+            ev              = self.elev_mask,
+            amb_duration    = amb_duration,
+            ai_validation   = self.options.get('pride_ai_validation', 'YES'),
+            pco_wl          = self.options.get('pride_pco_wl', 'YES'),
+            critical_search = self.options.get('pride_critical_search', '3 4 1.8 3.0')))
+
+    def __exec_ppp__(self, raise_error=True):
+
+        site = self.rinex.StationCode.lower()
+        mode = 'S' if self.solve_coordinates else 'F'
+        cmd = '%s -cfg %s -m %s -n %s' % (self.ppp, os.path.basename(self.path_cfg_file), mode, site)
+
+        # DDG TEMPORARY: ambiguity-fixing is unstable below ~1h of data -- a thin/marginal LAMBDA
+        # search can land on a weak, barely-accepted integer combination (ratio close to 1) instead
+        # of the correct one, biasing the coordinate by decimeters even though PRIDE reports SUCCESS.
+        # Disable ambiguity resolution entirely (float solution) for sessions under 1 hour until this
+        # is revisited -- unless force_ar explicitly overrides it (e.g. LocateRinex's -ar switch),
+        # for cases where the caller has already judged a given short session reliable enough.
+        # Must be appended before the RINEX filename -- pdp3 treats its last argument as the
+        # positional RINEX file and only parses options before it.
+        span = (self.rinex.datetime_lastObs - self.rinex.datetime_firstObs).total_seconds()
+        if span < 3600 and not self.force_ar:
+            cmd += ' -f'
+
+        cmd += ' %s' % self.rinex.rinex
+
+        try:
+            # PRIDE PPP-AR (ambiguity resolution over a full day) runs considerably longer than GPSPACE
+            out, err = pyRunWithRetry.RunCommand(cmd, 900, self.rootdir).run_shell()
+        except pyRunWithRetry.RunCommandWithRetryExeception as e:
+            msg = str(e)
+            if raise_error:
+                raise pyRunPPPException(e)
+            return False, msg
+
+        # DDG: pdp3 writes its results into a <year>/<doy>/ subdirectory of cwd, not flat in cwd
+        yyyyddd  = '%04d%03d' % (self.rinex.date.year, self.rinex.date.doy)
+        year_doy = os.path.join(self.rootdir, str(self.rinex.date.year), str(self.rinex.date.doy).zfill(3))
+        self.path_pos_file = os.path.join(year_doy, 'pos_%s_%s' % (yyyyddd, site))
+        self.path_res_file = os.path.join(year_doy, 'res_%s_%s' % (yyyyddd, site))
+
+        if not os.path.isfile(self.path_pos_file):
+            msg = 'PRIDE PPP-AR (pdp3) ended abnormally for ' + self.rinex.rinex_path + ':\n' + err + '\n' + out
+            if raise_error:
+                raise pyRunPPPException(msg)
+            return False, msg
+
+        self.out = file_readlines(self.path_pos_file)
+        return True, ''
+
+    def parse_summary(self):
+
+        self.summary = ''.join(self.out)
+
+        try:
+            header_end = self.out.index([l for l in self.out if 'END OF HEADER' in l][0]) + 1
+        except IndexError:
+            raise pyRunPPPException('Could not find END OF HEADER in PRIDE pos file ' + self.path_pos_file)
+
+        data_lines = [l for l in self.out[header_end:] if l.strip() and not l.lstrip().startswith('*')]
+
+        if not data_lines:
+            raise pyRunPPPExceptionZeroProcEpochs('PRIDE PPP-AR returned zero processed epochs')
+
+        # DDG: strict mode means the same thing here as in GPSPACE -- if the antenna model
+        # couldn't be resolved, do not accept the run. Only the antenna half is implemented: I
+        # don't have a verified way to detect "OTL could not be determined" for PRIDE specifically
+        # (it computes OTL internally via its own grid rather than taking our HARPOS coefficient,
+        # and I have no confirmed real-world example of what a failed OTL lookup looks like in its
+        # output -- as opposed to GPSPACE's explicit "Ocean loading coefficients ... NOT FOUND"
+        # text). Flagging this as a known gap rather than guessing at a check I can't verify.
+        if self.strict and not self.check_phase_center(None):
+            raise pyRunPPPException(
+                'Error while running PPP: could not find the antenna model in the ANTEX file '
+                '(PRIDE pos file reports SITE ANTENNA TYPE = NONE). Check RINEX header for '
+                'formatting issues in the ANT # / TYPE field.')
+
+        # DDG: the header's "AMB FIXING" line reports whether ambiguity resolution was attempted at
+        # all ("NO" if e.g. no OSB.BIA product was available -- see PRIDE.get_orbits()) and, if so,
+        # the number of ambiguities actually fixed per GNSS system, e.g.
+        # "YES  GPS    67  GAL     0  ...". Attempted-but-nothing-fixed (all-zero counts) is still
+        # effectively a float solution, so only count it FIXED if at least one system has a
+        # nonzero count.
+        for line in self.out[:header_end]:
+            if 'AMB FIXING' in line:
+                fixing_fields = line.split()
+                if fixing_fields and fixing_fields[0] == 'YES':
+                    counts = [int(v) for v in fixing_fields[2::2] if v.isdigit()]
+                    self.amb_fixed = sum(counts)
+                    self.solution_type = 'FIXED' if any(c > 0 for c in counts) else 'FLOAT'
+                else:
+                    self.solution_type = 'FLOAT'
+                break
+
+        # static mode -> a single data row spanning the whole day
+        fields = data_lines[-1].split()
+
+        if len(fields) < 13:
+            raise pyRunPPPException('Unexpected PRIDE pos file record: ' + data_lines[-1])
+
+        _name, _mjd, x, y, z, sx, sy, sz, rxy, rxz, ryz, sig0, nobs = fields[:13]
+
+        x, y, z = float(x), float(y), float(z)
+
+        if isnan(x) or isnan(y) or isnan(z):
+            raise pyRunPPPExceptionNaN('One or more coordinate is NaN')
+
+        self.x, self.y, self.z     = x, y, z
+        self.lat, self.lon, self.h = ecef2lla([self.x, self.y, self.z])
+
+        # pos file header describes Sx/Sy/Sz/Rxy/Rxz/Ryz as cofactors and Sig0 as sqrt(variance factor):
+        # variance = cofactor * Sig0**2. This matches the general geodetic cofactor-matrix convention,
+        # but has not been cross-checked against PRIDE PPP-AR's own source/documentation -- validate
+        # before relying on these sigmas for QC.
+        var0 = float(sig0) ** 2
+        self.sigmax  = sqrt(float(sx) * var0)
+        self.sigmay  = sqrt(float(sy) * var0)
+        self.sigmaz  = sqrt(float(sz) * var0)
+        self.sigmaxy = float(rxy) * var0
+        self.sigmaxz = float(rxz) * var0
+        self.sigmayz = float(ryz) * var0
+
+        self.processed_obs = int(nobs)
+        self.rejected_obs  = 0
+
+    def parse_res_file(self):
+        """
+        Parse the PRIDE PPP-AR res_<yyyyddd>_<site> file and compute mean LC-phase residuals
+        binned by 1-degree elevation intervals, mirroring GPSPACE's parse_res_file(). Bins with no
+        observations are set to NaN.
+
+        Each post-header data line looks like:
+            <PRN> <LC resid, m> <PC resid, m> <iono, D-notation> <weight, D-notation> <flag> <elev> <az> <obs types...>
+        The LC (phase) residual is converted from meters to millimeters to match GPSPACE's VCP
+        convention (already in mm) so self.elevation_residuals is comparable across engines.
+
+        Populates:
+            self.elevation_bins          : numpy integer array [0, 1, ..., 90] (degrees)
+            self.elevation_residuals     : numpy float array, mean residual (mm) per 1-degree bin
+            self.elevation_residuals_std : numpy float array, std dev of residual (mm) per
+                                            1-degree bin (NaN where a bin has no observations,
+                                            same as the mean)
+        """
+        if not os.path.isfile(self.path_res_file):
+            return
+
+        lines = file_readlines(self.path_res_file)
+
+        try:
+            header_end = lines.index([l for l in lines if 'END OF HEADER' in l][0]) + 1
+        except IndexError:
+            return
+
+        # DDG: the header's (possibly wrapped) "SATELLITE LIST" lines enumerate every PRN that
+        # actually contributed an observation to the solution -- a direct, per-run indicator of
+        # which GNSS systems were used, sourced from the same file already fetched for residuals
+        # rather than guessing from the RINEX header or the (requested, not necessarily used)
+        # Frequency combination config line.
+        systems = set()
+        for line in lines[:header_end]:
+            if 'SATELLITE LIST' in line:
+                for prn in line.split()[:-2]:
+                    if prn and prn[0].isalpha():
+                        systems.add(prn[0])
+        if systems:
+            self.systems_used = ''.join(sorted(systems))
+
+        elevations, residuals = [], []
+
+        for line in lines[header_end:]:
+            if not line.strip() or line.lstrip().startswith('TIM'):
+                continue
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+            try:
+                resid = float(parts[1])  # LC (phase) residual, meters
+                elev  = float(parts[6])  # elevation, degrees
+            except ValueError:
+                continue
+            elevations.append(elev)
+            residuals.append(resid * 1000.0)  # meters -> millimeters
+
+        if not elevations:
+            return
+
+        elevations = numpy.array(elevations)
+        residuals  = numpy.array(residuals)
+
+        elev_bin = numpy.clip(numpy.round(elevations).astype(int), 0, 90)
+
+        bins  = numpy.arange(0, 91)
+        means = numpy.full(91, numpy.nan)
+        stds  = numpy.full(91, numpy.nan)
+
+        for deg in bins:
+            mask = elev_bin == deg
+            if numpy.any(mask):
+                means[deg] = numpy.nanmean(residuals[mask])
+                stds[deg]  = numpy.nanstd(residuals[mask])
+
+        self.elevation_bins          = bins
+        self.elevation_residuals     = means
+        self.elevation_residuals_std = stds
+
+    def exec_ppp(self):
+
+        result, message = self.__exec_ppp__(False)
+
+        if not result:
+            if self.sp3altrn and self.orbit_type not in self.sp3altrn:
+                # maybe a bad orbit, fall back to alternative and retry once
+                self.get_orbits(self.sp3altrn)
+                self.config_session()
+                result, message = self.__exec_ppp__(False)
+
+            if not result:
+                raise pyRunPPPException(message)
+
+        self.parse_summary()
+        self.load_record()
+        self.parse_res_file()
+
+
+_PPP_ENGINES = {'gpspace': GPSPACE, 'pride': PRIDE}
+
+
+def RunPPP(*args, **kwargs):
+    """
+    Factory that dispatches to the concrete PPP engine selected by options['ppp_engine']
+    (default 'gpspace'). Keeps every existing RunPPP(...) call site unchanged: the returned
+    object exposes the same attributes/methods regardless of which engine produced it.
+    """
+    options = kwargs.get('options')
+    if options is None and len(args) > 2:
+        options = args[2]
+
+    engine_name = str(options.get('ppp_engine', 'gpspace')).strip().lower() if options else 'gpspace'
+
+    try:
+        engine_cls = _PPP_ENGINES[engine_name]
+    except KeyError:
+        raise pyRunPPPException("Unknown PPP engine '%s' in configuration (expected one of: %s)"
+                                % (engine_name, ', '.join(_PPP_ENGINES)))
+
+    return engine_cls(*args, **kwargs)
