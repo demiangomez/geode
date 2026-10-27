@@ -68,8 +68,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
         from geode import pyRunWithRetry
         from geode import pyDate
 
-        print(' -- Done')
-
     except:
         return ' -- %s: Problem found while importing modules:\n%s' % (platform.node(), traceback.format_exc())
 
@@ -91,8 +89,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
                     for f in updated:
                         print('    -- Updated %s' % f)
 
-            print(' -- Done')
-
     except:
         return ' -- %s: Problem found while synchronizing software:\n%s ' % (platform.node(), traceback.format_exc())
 
@@ -103,7 +99,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
         cnn = dbConnection.Cnn('gnss_data.cfg')
 
         q = cnn.query('SELECT count(*) FROM networks')
-        print(' -- Done')
     except:
         return ' -- %s: Problem found while connecting to postgres:\n%s ' % (platform.node(), traceback.format_exc())
 
@@ -113,8 +108,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
         test_dir = os.path.join('production/node_test')
         if not os.path.exists(test_dir):
             os.makedirs(test_dir)
-
-        print(' -- Done')
     except:
         return ' -- %s: Could not create production folder:\n%s ' % (platform.node(), traceback.format_exc())
 
@@ -122,7 +115,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
     try:
         print(' >> Testing gnss_data.cfg file access')
         Config = pyOptions.ReadOptions('gnss_data.cfg')
-        print(' -- Done')
     except:
         return ' -- %s: Problem while reading config file and/or testing archive access:\n%s' \
                % (platform.node(), traceback.format_exc())
@@ -132,19 +124,16 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
         # check that all paths exist and can be reached
         if not os.path.exists(Config.archive_path):
             return ' -- %s: Could not reach archive path %s' % (platform.node(), Config.archive_path)
-        print(' -- Done')
 
         print(' >> Testing access to repository %s' % Config.repository)
         if not os.path.exists(Config.repository):
             return ' -- %s: Could not reach repository path %s' % (platform.node(), Config.repository)
-        print(' -- Done')
 
         # pick a test date to replace any possible parameters in the config file
         date = pyDate.Date(year=2010, doy=1)
         try:
             print(' >> Testing access to broadcast orbits %s' % Config.brdc_path)
             brdc = pyProducts.GetBrdcOrbits(Config.brdc_path, date, test_dir)
-            print(' -- Done')
         except:
             return ' -- %s: Problem while testing the broadcast ephemeris archive (%s) access:\n%s' \
                    % (platform.node(), Config.brdc_path, traceback.format_exc())
@@ -152,7 +141,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
         try:
             print(' >> Testing access to precise orbits %s' % Config.sp3_path)
             sp3 = pyProducts.GetSp3Orbits(Config.sp3_path, date, Config.sp3types, test_dir)
-            print(' -- Done')
         except:
             return ' -- %s: Problem while testing the sp3 orbits archive (%s) access:\n%s' \
                    % (platform.node(), Config.sp3_path, traceback.format_exc())
@@ -165,7 +153,6 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
             stdout, _ = pyRunWithRetry.RunCommand('which ' + prg, 10).run_shell()
             if not stdout.strip():
                 return ' -- %s: Could not find path to %s' % (platform.node(), prg)
-        print(' -- Done')
 
         # check grdtab and ppp from the config file
         for opt in ('grdtab', 'otlgrid', 'ppp_exe'):
@@ -173,21 +160,18 @@ def test_node(check_gamit_tables=None, check_archive=True, check_executables=Tru
             print(' >> Testing access to %s' % path)
             if not os.path.isfile(path):
                 return ' -- %s: Could not find %s in %s' % (platform.node(), opt, path)
-        print(' -- Done')
 
         ppp_path = Config.options['ppp_path']
         for f in ('gpsppp.stc', 'gpsppp.svb_gps_yrly', 'gpsppp.flt', 'gpsppp.stc', 'gpsppp.met'):
             print(' >> Testing access to %s' % f)
             if not os.path.isfile(os.path.join(ppp_path, f)):
                 return ' -- %s: Could not find %s in %s' % (platform.node(), f, ppp_path)
-        print(' -- Done')
 
     if check_atx:
         for frame in Config.options['frames']:
             print(' >> Testing access to %s %s' % (frame, frame['atx']))
             if not os.path.isfile(frame['atx']):
                 return ' -- %s: Could not find atx in %s' % (platform.node(), frame['atx'])
-        print(' -- Done')
 
     if check_gamit_tables is not None:
         # check the gamit tables if not none
