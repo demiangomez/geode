@@ -35,7 +35,9 @@ class AdjustmentStrategyException(Exception):
 class WeightBuilder(ABC):
     """Abstract base class for different weighting strategies"""
     def __init__(self, **kwargs):
-        self.matrix = np.array([])
+        # diagonal of the weight matrix (weights are diagonal by construction for every
+        # implementation here, so only the diagonal is stored, never the full N x N matrix)
+        self.diag = np.array([])
         pass
 
     @classmethod
@@ -131,18 +133,20 @@ class WhiteNoise(WeightBuilder):
     """Implementation of WeightBuilder for different noise processes"""
     def __init__(self, observation_count: int = 0):
         super().__init__()
-        self.matrix = np.diag(np.ones((observation_count,)))
+        # white/uncorrelated noise: weights are diagonal, so only keep the diagonal (a dense
+        # N x N matrix here was costing O(N^2) memory/compute, rebuilt on every RLS iteration)
+        self.diag = np.ones((observation_count,))
         self._w = np.ones((observation_count,))
 
     def update_weights(self, new_weights):
-        # check for weights <<< than eps, otherwise matrix may become singular
+        # check for weights <<< than eps, otherwise system may become singular
         new_weights[new_weights < np.finfo(float).eps] = np.finfo(float).eps
         if len(new_weights.shape) > 1:
-            self.matrix = new_weights
-            self._w = np.sqrt(np.diag(new_weights))
+            # a full matrix was passed in; weights are diagonal by construction, keep only that
+            self.diag = np.diag(new_weights)
         else:
-            self.matrix = np.diag(new_weights)
-            self._w = np.sqrt(new_weights)
+            self.diag = new_weights
+        self._w = np.sqrt(self.diag)
 
     def weight_observations(self, observations) -> np.ndarray:
         """
@@ -378,9 +382,9 @@ class RobustLeastSquares(AdjustmentStrategy):
             results.residuals = observations - a @ results.parameters
 
             v = results.residuals
-            p = weights.matrix
-            # unit variance
-            self.so = float(np.sqrt((v @ p @ v) / self.dof))
+            w = weights.diag
+            # unit variance (weights are diagonal: v @ diag(w) @ v == sum(w * v**2))
+            self.so = float(np.sqrt(np.sum(w * v ** 2) / self.dof))
             # save in results
             results.variance_factor = float(np.square(self.so))
 
@@ -419,7 +423,8 @@ class RobustLeastSquares(AdjustmentStrategy):
                 logger.info(f'RobustLeastSquares [{self.component_label(kwargs)}] did not converge! '
                             f'final wrms {wrms/1000:.1f} mm')
 
-            results.covariance_matrix = np.linalg.inv(a.T @ weights.matrix @ a) * (self.so ** 2)
+            aw = weights.weight_design(a)
+            results.covariance_matrix = np.linalg.inv(aw.T @ aw) * (self.so ** 2)
         except np.linalg.LinAlgError as e:
             logger.info('np.linalg.inv failed to obtain covariance matrix: %s' % str(e))
             results.covariance_matrix = np.ones((design_matrix.matrix.shape[1],
@@ -434,7 +439,7 @@ class RobustLeastSquares(AdjustmentStrategy):
             results.parameter_sigmas =  np.sqrt(np.diag(results.covariance_matrix))
         # mark observations with sigma <= LIMIT
         results.outlier_flags = s <= limit
-        results.obs_sigmas = np.sqrt(1 / np.diag(weights.matrix))
+        results.obs_sigmas = np.sqrt(1 / weights.diag)
 
         # compute spectral index of residuals
         if self.compute_periodogram:
