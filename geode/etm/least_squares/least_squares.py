@@ -1071,8 +1071,22 @@ class EtmFit:
                         f.configure_behavior({'relaxation': rlx})
                         # activate the check again flag
                         check_again = True
+                    elif f.p.jump_type == JumpType.COSEISMIC_JUMP_DECAY:
+                        # single relaxation left and it is still ill-conditioned (e.g. jump sits
+                        # right before a large data gap or the end of the series): drop the decay
+                        # term entirely and keep only the coseismic offset, instead of leaving a
+                        # column in the design matrix that makes the system rank deficient
+                        logger.info('Single relaxation still ill-conditioned, '
+                                    'downgrading jump to COSEISMIC ONLY')
+                        f.configure_behavior({'jump_type': JumpType.COSEISMIC_ONLY})
+                        check_again = True
                     else:
-                        logger.info('Function has a single relaxation, cannot remove it.')
+                        # POSTSEISMIC_ONLY with a single, ill-conditioned relaxation and no offset
+                        # term to fall back on: nothing left to fit, remove the jump
+                        logger.info('Function has a single relaxation, cannot remove it. '
+                                    'Removing jump from fit.')
+                        f.remove_from_fit()
+                        check_again = True
             if not check_again:
                 break
         # if we reach the max iteration level and still check again, create warning

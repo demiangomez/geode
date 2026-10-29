@@ -266,10 +266,13 @@ class JumpFunction(EtmFunction):
         elif not self.p.jump_type == JumpType.POSTSEISMIC_ONLY:
             self.format_str.append(f'{self.user_action} {self.date.yyyyddd()} {"":4}' + ' {:>7.1f}')
 
-        # add relaxation parameters if needed
-        for relax in self.p.relaxation:
-            self.format_str.append(f'{self.user_action} {self.date.yyyyddd()} {relax:4.2f}' + ' {:>7.1f}'
-                                   + f' {self.magnitude:3.1f} {self.epi_distance:6.1f}')
+        # add relaxation parameters if needed (only for jump types that actually fit a decay
+        # term; e.g. a jump downgraded to COSEISMIC_ONLY still carries p.relaxation values but
+        # no longer has decay columns/params, so it must not contribute format_str entries)
+        if self.p.jump_type in (JumpType.COSEISMIC_JUMP_DECAY, JumpType.POSTSEISMIC_ONLY):
+            for relax in self.p.relaxation:
+                self.format_str.append(f'{self.user_action} {self.date.yyyyddd()} {relax:4.2f}' + ' {:>7.1f}'
+                                       + f' {self.magnitude:3.1f} {self.epi_distance:6.1f}')
 
         output_table = [[], [], []]
 
@@ -530,8 +533,9 @@ class JumpFunction(EtmFunction):
         else:
             name = []
 
-        for r in self.p.relaxation:
-            name.append(f'{"RELAX " + f"{r:.1f}":>10}')
+        if self.p.jump_type in (JumpType.COSEISMIC_JUMP_DECAY, JumpType.POSTSEISMIC_ONLY):
+            for r in self.p.relaxation:
+                name.append(f'{"RELAX " + f"{r:.1f}":>10}')
 
         return ' '.join(name)
 
