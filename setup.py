@@ -41,6 +41,7 @@ if __name__ == "__main__":
         'com/OTL_FES2014b.py',
         'com/ParallelGamit.py',
         'com/PlotMapView.py',
+        'com/PrintVelocities.py',
         'com/QueryETM.py',
         'com/S-score.py',
         'com/ScanArchive.py',
