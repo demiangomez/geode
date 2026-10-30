@@ -142,6 +142,8 @@ def test_covariance_fits(case):
     assert_rel(r.fit0.nugget, v['fit0_nugget'], DOWNSTREAM, 'unweighted nugget')
     assert_scaled(r.sigma_ct, v['sig_ct'], DOWNSTREAM, 'model residual covariance for Sigma')
     assert_scaled(r.sigma, v['Sig'], DIRECT, 'Sigma')
+    # the Sigma of the test vectors is positive definite: no jitter, so the results are the same as before
+    assert r.sigma_jitter == 0 and rs.sigma_jitter == 0
     for ref in (r.reference, rs.reference):
         assert_rel(ref.w, v['ref_w'], DOWNSTREAM, 'reference w')
         assert_rel(ref.nugget, v['ref_nugget'], DOWNSTREAM, 'reference nugget')

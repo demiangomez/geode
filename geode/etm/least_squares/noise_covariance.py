@@ -25,7 +25,7 @@ the rest of GeoDE so that it can be tested against the MATLAB test vectors.
 import logging
 from dataclasses import dataclass, field
 from time import time
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import scipy.fft
@@ -75,6 +75,16 @@ class NoiseCovarianceSettings:
     share: float = 0.1
     # Cholesky safety margin for Sigma (relative to its mean diagonal)
     eps: float = 1e-10
+    # escalating jitter when a Cholesky fails (Sigma, and the covariance of the GLS): retry adding
+    # jitter * diagonal, with jitter = jitter_start, x jitter_factor, ... up to the maximum, then give up (the
+    # strategy falls back to the robust fit). The jitter is relative to each diagonal element: for Sigma it
+    # inflates the variance of each lag's empirical covariance by (1 + jitter). Sigma estimated from gappy
+    # series can be slightly indefinite (IGS.PECE N and E: one eigenvalue of its correlation matrix at -0.6% and
+    # -0.9%, fixed by 1e-2); beyond sigma_jitter_max it is treated as broken. The GLS bound is C(0) (jitter 1)
+    jitter_start: float = 1e-8
+    jitter_factor: float = 10.
+    sigma_jitter_max: float = 0.1
+    gls_jitter_max: float = 1.0
     # minimum white variance imposed in every fit, in the units of the observations squared: (0.5 mm)^2.
     # Real GNSS positions always have some white noise; without it the fit can put all near-white noise into
     # the alpha = 0.5 component
@@ -332,6 +342,25 @@ class CovarianceFit:
         return self.c[0] if self.w_p.size else np.array([])
 
 
+def cholesky_jitter(build: Callable[[float], np.ndarray], what: str, start: float = 1e-8, factor: float = 10.,
+                    max_jitter: float = 1.) -> Tuple[np.ndarray, float]:
+    """
+    Lower Cholesky factor of build(0); if it fails, of build(jitter) with jitter = start, start * factor, ...
+    up to max_jitter, where build(jitter) adds jitter times the diagonal (each site defines its scale). Returns
+    (L, jitter); raises LinAlgError if even max_jitter does not give a positive definite matrix. build must
+    return a new matrix on every call (it is overwritten)
+    """
+    jitter = 0.
+    while True:
+        try:
+            return cholesky(build(jitter), lower=True, overwrite_a=True, check_finite=False), jitter
+        except LinAlgError as e:
+            jitter = start if jitter == 0 else jitter * factor
+            if jitter > max_jitter * (1 + 1e-12):
+                raise LinAlgError(f'{what} is not positive definite even with a jitter of {max_jitter:g} of its '
+                                  f'diagonal ({e})') from e
+
+
 def fit_white_min(d: np.ndarray, g: np.ndarray, white_min: float, n_alpha: int,
                   f: Optional[np.ndarray] = None, c: Optional[np.ndarray] = None) -> CovarianceFit:
     """
@@ -353,7 +382,8 @@ class CovarianceFitter:
     kernels of the periodic terms, with the white variance >= white_min; and the SNR of the periodic terms
     """
     def __init__(self, d: np.ndarray, g: np.ndarray, sigma: np.ndarray, eps: float, gb: np.ndarray,
-                 lags: np.ndarray, white_min: float = 0.):
+                 lags: np.ndarray, white_min: float = 0., jitter_start: float = 1e-8, jitter_factor: float = 10.,
+                 jitter_max: float = 0.1):
         self.n_alpha = gb.shape[1]
         self.white_min = white_min
         self.n_days = gb.shape[0]
@@ -361,7 +391,23 @@ class CovarianceFitter:
         self.lags = lags
         self.n_lags = d.shape[0]
 
-        self.chol = cholesky(sigma + eps * np.mean(np.diag(sigma)) * np.eye(self.n_lags), lower=True)
+        # Sigma is estimated, and from gappy series it can be slightly indefinite: if the Cholesky fails, inflate
+        # the variance of every lag by (1 + jitter), escalating up to jitter_max (relative jitter: the diagonal of
+        # Sigma differs between lags). self.jitter = 0 when Sigma is positive definite
+        if not np.all(np.isfinite(sigma)):
+            raise ValueError('CovarianceFitter: Sigma has non-finite values')
+        base = sigma + eps * np.mean(np.diag(sigma)) * np.eye(self.n_lags)
+        diag = np.diag(sigma).copy()
+
+        def build(jitter: float) -> np.ndarray:
+            s = base.copy()
+            if jitter:
+                s[np.diag_indices(self.n_lags)] += jitter * diag
+            return s
+
+        self.chol, self.jitter = cholesky_jitter(build, 'Sigma', jitter_start, jitter_factor, jitter_max)
+        if self.jitter:
+            logger.debug(f'CovarianceFitter: Sigma needed a jitter of {self.jitter:.0e} of its diagonal')
         self.dw = solve_triangular(self.chol, d, lower=True)
         self.gw = solve_triangular(self.chol, g, lower=True)
 
@@ -912,7 +958,8 @@ class GlsResult:
 
 def gls_fit(t: np.ndarray, y: np.ndarray, a: np.ndarray, c_lag: np.ndarray, irate: Optional[int] = None,
             nugget: float = 0., variance_factors: bool = True,
-            n_neq: Optional[np.ndarray] = None, c_neq: Optional[np.ndarray] = None) -> GlsResult:
+            n_neq: Optional[np.ndarray] = None, c_neq: Optional[np.ndarray] = None,
+            jitter_start: float = 1e-8, jitter_factor: float = 10., jitter_max: float = 1.) -> GlsResult:
     """
     GLS fit of y = A x with C_il = c_lag(|t_i - t_l|). Never forms C^-1. Optional constraints are added to
     the normal equations as N + n_neq, c + c_neq.
@@ -923,19 +970,12 @@ def gls_fit(t: np.ndarray, y: np.ndarray, a: np.ndarray, c_lag: np.ndarray, irat
     def build(jitter: float) -> np.ndarray:
         c = c_lag[np.abs(np.subtract.outer(t, t))]
         if jitter:
-            c[np.diag_indices(n)] += jitter
+            c[np.diag_indices(n)] += jitter * c_lag[0]
         return c
 
-    # if the Cholesky fails, add 1e-8 * mean(diag(C)) * I, x10 until it works
-    jitter = 0.
-    while True:
-        try:
-            lc = cholesky(build(jitter), lower=True, overwrite_a=True, check_finite=False)
-            break
-        except LinAlgError:
-            jitter = 1e-8 * c_lag[0] if jitter == 0 else jitter * 10
-            if jitter > c_lag[0]:
-                raise
+    # if the Cholesky fails, add jitter * C(0) * I, jitter = 1e-8, x10, ... up to C(0) (cholesky_jitter)
+    lc, jitter = cholesky_jitter(build, 'the GLS covariance', jitter_start, jitter_factor, jitter_max)
+    jitter *= c_lag[0]
     if jitter:
         logger.info(f'GLS: Cholesky needed a jitter of {jitter:.3e} ({jitter / c_lag[0]:.1e} of C(0))')
 
@@ -1014,6 +1054,7 @@ class NoiseModelResult:
     sigma_ct: np.ndarray            # model residual covariance used for Sigma, lags 0..N-1
     sigma: np.ndarray               # covariance of the empirical covariance at the fitted lags
     reference: CovarianceFit        # weighted, no periodic terms
+    sigma_jitter: float             # jitter (relative to its diagonal) Sigma needed to be positive definite; 0 if none
     detection: Union[JointDetection, StepwiseDetection]
     # covariance functions at lags 0..N-1 (white noise included at lag 0)
     c_lag_final: np.ndarray
@@ -1072,6 +1113,9 @@ class NoiseModelResult:
         if chi2_dof > FLAG_CHI2_DOF:
             out.append(('chi2', f'chi2/dof of the final fit {chi2_dof:.2f} > {FLAG_CHI2_DOF:g}: unmodeled signal '
                                 f'left (e.g. a mismatched postseismic term)'))
+        if self.sigma_jitter:
+            out.append(('sigma_jitter', f'Sigma was not positive definite: the variance of every lag was inflated '
+                                        f'by {100 * self.sigma_jitter:g}% (jitter {self.sigma_jitter:g})'))
         return out
 
     @property
@@ -1183,6 +1227,8 @@ class NoiseModelResult:
         out.update({'effective_alpha': {'reference': alpha_dict(self.alpha_reference),
                                         'final': alpha_dict(self.alpha_final)},
                     'gls': gls_dict(self.gls, self.c_lag_final[0]),
+                    # jitter (relative to its diagonal) Sigma needed to be positive definite; 0 if none
+                    'sigma_jitter_relative': num(self.sigma_jitter),
                     'timings': self.timings,
                     # data of the diagnostic figure: covariances at lags 0..Tmax [days], detection statistics
                     'diagnostics': diagnostics})
@@ -1266,7 +1312,8 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
 
     # weighted reference fit (Section 7.3) and detection of periodic terms (Section 8)
     tt = time()
-    fitter = CovarianceFitter(d, g, sigma, settings.eps, gb, lags, settings.white_min)
+    fitter = CovarianceFitter(d, g, sigma, settings.eps, gb, lags, settings.white_min, settings.jitter_start,
+                              settings.jitter_factor, settings.sigma_jitter_max)
     reference = fitter.fit()
     if settings.detection == 'joint':
         detection = JointHarmonicFit(fitter, proj, gamma, gtf[:t1], htf[:t1], settings).run(reference)
@@ -1288,7 +1335,8 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     # GLS of the ETM with the final covariance only: the spec's refit with the reference covariance (no periodic
     # terms) is not done, it is not a useful diagnostic and doubles the cost of this step
     gls = gls_fit(t, y, a, c_fin, irate, fin.nugget, settings.variance_factors,
-                  n_neq if has_constraints else None, c_neq)
+                  n_neq if has_constraints else None, c_neq, settings.jitter_start, settings.jitter_factor,
+                  settings.gls_jitter_max)
     timings['gls'] = time() - tt
 
     # effective spectral index (Section 10)
@@ -1308,7 +1356,7 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     return NoiseModelResult(settings=settings, t=t, n_days=n_days, tmax=tmax, x0=x0, v0=v0,
                             n_tau=proj.n_tau[:t1], gamma=gamma, gb=gb,
                             gtf=gtf, htf=htf, lags=lags, fit0=fit0, sigma_ct=ct, sigma=sigma,
-                            reference=reference, detection=detection,
+                            reference=reference, sigma_jitter=fitter.jitter, detection=detection,
                             c_lag_final=c_fin, colored_lag_final=colored, signal_lag=signal_lag, gls=gls,
                             alpha_reference=alpha_reference, alpha_final=alpha_final, signal=signal,
                             timings=timings)
