@@ -694,6 +694,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         if np.sum(inliers) <= a.shape[1]:
             logger.warning('NoiseCovarianceGLS: not enough inliers to estimate the noise model, '
                            'keeping the robust fit')
+            rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         mjd = np.rint(time_vector_mjd).astype(int)
@@ -701,6 +702,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         if np.any(np.diff(mjd[inliers]) <= 0):
             logger.warning('NoiseCovarianceGLS: epochs are not unique days in increasing order, '
                            'keeping the robust fit')
+            rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         has_constraints = bool(np.any(n_neq_left))
@@ -715,6 +717,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         except (np.linalg.LinAlgError, ValueError) as e:
             logger.warning(f'NoiseCovarianceGLS: could not estimate the noise model ({e}), '
                            f'keeping the robust fit')
+            rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         gls = nm.gls

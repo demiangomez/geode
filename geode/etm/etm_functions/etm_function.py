@@ -119,7 +119,8 @@ class EtmFunction(ABC):
         parameter_dict['frequencies'] = parameter_dict['frequencies'].tolist()
         parameter_dict['relaxation'] = parameter_dict['relaxation'].tolist()
 
-        if parameter_dict['params'][0].size:
+        params0 = parameter_dict['params'][0]
+        if isinstance(params0, np.ndarray) and params0.size:
             parameter_dict['params'] = [i.tolist() for i in parameter_dict['params']]
             parameter_dict['sigmas'] = [i.tolist() for i in parameter_dict['sigmas']]
             parameter_dict['covar'] = [i.tolist() for i in parameter_dict['covar']]
