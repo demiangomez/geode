@@ -18,8 +18,11 @@ from pathlib import Path
 # app
 from ..core.etm_config import EtmConfig
 
-# Logo path in the visualization folder
-LOGO_PATH = Path(__file__).parent / 'geode_logo.png'
+# Pre-shrunk variant of geode_logo.png (used at full resolution by other
+# reports, e.g. station_report.py/station_kmz.py/campaign_planner/report.py):
+# the ETM plot only displays this at ~200px wide, and resampling the full
+# 2373x1156 source with lanczos interpolation on every savefig() cost ~1s.
+LOGO_PATH = Path(__file__).parent / 'geode_logo_small.png'
 from ..visualization.time_series_template import TimeSeriesTemplate
 from ..visualization.histogram_template import HistogramTemplate
 from ..visualization.noise_model_template import NoiseModelTemplate
