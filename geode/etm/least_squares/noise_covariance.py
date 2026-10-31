@@ -194,7 +194,10 @@ class EpochProjector:
         """divide pair sums by the pair counts (NaN where there are no pairs)"""
         n_tau = self.n_tau[:s.shape[0]]
         with np.errstate(invalid='ignore', divide='ignore'):
-            return s / (n_tau[:, None] if s.ndim > 1 else n_tau)
+            out = s / (n_tau[:, None] if s.ndim > 1 else n_tau)
+        # without pairs the FFT pair sum is round-off, not 0, and the division would give +-inf
+        out[n_tau == 0] = np.nan
+        return out
 
     def empirical_covariance(self, v: np.ndarray, n_lags: int) -> np.ndarray:
         """Empirical covariance over observed pairs, no mean removal (Section 3)"""
@@ -1305,8 +1308,10 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     fit0 = fit_white_min(d, g, settings.white_min, na)
 
     # weight matrix Sigma from the unweighted fit, held fixed (Section 7.2)
-    ct = gtf @ fit0.w + htf * fit0.nugget
-    ct[~np.isfinite(ct)] = 0.
+    # zero at lags without pairs (NaN kernels; e.g. long lags of a series with a few early epochs and a long gap)
+    has_pairs = np.all(np.isfinite(gtf), axis=1) & np.isfinite(htf)
+    ct = np.zeros(n_days)
+    ct[has_pairs] = gtf[has_pairs] @ fit0.w + htf[has_pairs] * fit0.nugget
     sigma = proj.gamma_covariance(lags, ct, settings.fft_workers)
     timings['sigma'] = time() - tt
 
