@@ -168,25 +168,43 @@ class EpochProjector:
     """
     Pair structure of a set of epochs and the residual operator M0 = I - A K0 of a linear ETM estimator
     (pair_setup.m). It is data-independent: it depends only on the epochs, A and K0.
+
+    Every sum over pairs of epochs (t_i, t_l) at a lag tau = t_l - t_i is computed as a correlation on the
+    *daily grid*: a vector with one entry per day from the first epoch to the last, holding the value of the
+    epoch on observed days and zero on missing days. Correlations on that grid are done with FFTs of length
+    fft_len >= 2N - 1, so that no lag wraps around the circle.
+
+    n = number of observed epochs, u = number of ETM parameters (columns of A), N = n_days
     """
     def __init__(self, t: np.ndarray, a: np.ndarray, k0: np.ndarray):
+        # observed epochs: integer days from the first one (t[0] = 0), strictly increasing, gaps allowed (n)
         self.t = t
+        # ETM design matrix of the observed epochs (n x u), time columns in years
         self.a = a
+        # step-1 WLS estimator (u x n): x0 = K0 y, so the step-1 residuals are v0 = (I - A K0) y = M0 y
         self.k0 = k0
+        # N: span in days = length of the daily grid; lags 0..N-1 are possible
         self.n_days = int(t[-1] + 1)
+        # largest lag of the empirical covariance (Tmax = N / 2)
         self.tmax = self.n_days // 2
+        # FFT length of the correlations: 2**ceil(log2(2N)) >= 2N - 1 (no wrap-around at any lag)
         self.fft_len = fft_length(self.n_days)
 
         n_days, fft_len = self.n_days, self.fft_len
 
+        # observation indicator on the daily grid: w[d] = 1 if day d is observed, 0 otherwise (N)
         self.w = np.zeros(n_days)
         self.w[t] = 1.
-        # number of observed pairs at lags 0..N-1
+        # number of observed pairs at lags 0..N-1: n_tau[tau] = sum_d w[d] w[d + tau] (autocorrelation of w;
+        # n_tau[0] = n). The empirical covariance and the projected kernels are pair sums divided by n_tau
         self.n_tau = np.rint(np.fft.irfft(np.abs(np.fft.rfft(self.w, fft_len)) ** 2, fft_len)[:n_days])
 
-        # daily-grid copies of A and K0.T and their FFTs
+        # daily-grid copies of A (af, N x u) and of K0.T (kf, N x u): row d holds the row of the epoch observed on
+        # day d, zeros on missing days. project() uses them to build the pair sums of M0 R M0' as correlations
         self.af = to_grid(t, a, n_days)
         self.kf = to_grid(t, k0.T, n_days)
+        # their real FFTs along the days, zero padded to fft_len (fft_len / 2 + 1 x u each), computed once per
+        # epoch set and ETM because every projected kernel reuses them
         self.fa = np.fft.rfft(self.af, fft_len, axis=0)
         self.fk = np.fft.rfft(self.kf, fft_len, axis=0)
 
@@ -314,16 +332,17 @@ class EpochProjector:
 @dataclass
 class CovarianceFit:
     """Result of one NNLS fit of the noise model to the empirical covariance (Section 7.4)"""
-    w: np.ndarray                   # power-law variances
-    w_p: np.ndarray                 # variances of the periodic terms (a^2 / 2), in fit order
-    nugget: float                   # white-noise variance
-    chi2: float
-    dof: int
+    w: np.ndarray                   # power-law variances, one per alpha (5)
+    w_p: np.ndarray                 # variances of the periodic terms (a^2 / 2), in fit order (m)
+    nugget: float                   # white-noise variance (>= white_min)
+    chi2: float                     # misfit: squared norm of the (whitened) residual of the fit
+    dof: int                        # K - number of free variables > 0 (a white variance at its minimum is not free)
     # frequencies of the periodic terms [cycles/day] and their projected cosines (lags 0..Tmax, one column each)
     f: np.ndarray = field(default_factory=lambda: np.array([]))
     c: np.ndarray = field(default_factory=lambda: np.zeros((0, 0)))
-    x: np.ndarray = field(default_factory=lambda: np.array([]))     # NNLS solution, last element = s
-    dw: np.ndarray = field(default_factory=lambda: np.array([]))
+    x: np.ndarray = field(default_factory=lambda: np.array([]))     # NNLS solution [w, w_p, s], white = white_min + s
+    dw: np.ndarray = field(default_factory=lambda: np.array([]))    # columns fitted (whitened for weighted fits)
+    # spectrum of the fit's power law + white (circulant embedding), computed on first use by noise_bin (SNR)
     noise_lambda: Optional[np.ndarray] = None
 
     @property
@@ -501,11 +520,11 @@ class JointCandidate:
 @dataclass
 class JointDetection:
     """Result of the joint harmonic fit"""
-    final_fit: CovarianceFit
+    final_fit: CovarianceFit    # power laws + white + the selected periods (the covariance used by the GLS)
     snr: np.ndarray             # SNR of the final periods in the final fit
     snr_harmonic: np.ndarray    # SNR of the final periods in the harmonic fit (NaN: added by the final check)
-    candidates: List[JointCandidate]
-    harmonic_fit: CovarianceFit
+    candidates: List[JointCandidate]    # every candidate, strongest misfit peak first
+    harmonic_fit: CovarianceFit         # power laws + white + all candidates together (after refinement)
     spec_f: np.ndarray          # frequencies of the lag spectrum [cycles/day]
     band: np.ndarray            # indices of the search band in spec_f
     spec_s: np.ndarray          # misfit spectrum of the reference fit
@@ -523,38 +542,62 @@ class JointHarmonicFit:
     """
     Joint harmonic fit (Section 8.2, joint_harmonic_fit.m): candidate periods from the spectrum of the misfit
     of the covariance fit, all fitted together as cosine kernels, kept when their SNR in that fit is >= snr_min
+
+    A periodic signal in the residuals adds an oscillation cos(2 pi f tau) to their empirical covariance. A fit
+    with power laws + white cannot follow it, so it stays in the misfit gamma - fit, where its frequency shows as
+    a peak of the misfit's spectrum (over the lags). The steps (run):
+        1. reference fit: power laws + white (done before, passed to run)
+        2. candidates: peaks of the misfit spectrum, relative to the noise of the fit at each frequency
+        3. harmonic fit: power laws + white + ALL candidates at once (so that they do not take each other's power,
+           nor is their power taken by the power laws); their frequencies are refined within +- 1 bin
+        4. decision: a candidate is kept if its SNR in the harmonic fit is >= snr_min (and its variance > 0)
+        5. refit with the kept periods only; terms whose variance goes to 0 drop out
+        6. final check: peaks of the misfit spectrum left by that fit are added if they pass the same SNR rule
+    Frequencies are in cycles/day inside this class; reports give cycles/yr and periods in days.
     """
     # trial shifts of the frequency refinement [bins of 1/N], in this order
     SHIFTS = np.array([-1, -2 / 3, -1 / 3, 1 / 3, 2 / 3, 1])
 
     def __init__(self, fitter: CovarianceFitter, proj: EpochProjector, gamma: np.ndarray, gt: np.ndarray,
                  ht: np.ndarray, settings: NoiseCovarianceSettings):
+        # weighted NNLS fits (with Sigma) and the projection of kernels for this epoch set and ETM
         self.fitter = fitter
         self.proj = proj
         self.st = settings
         self.n_days = proj.n_days
         self.tmax = proj.tmax
+        # empirical covariance of the residuals, lags 0..Tmax
         self.gamma = gamma
         # projected power-law and white kernels at lags 0..Tmax
         self.gt = gt
         self.ht = ht
 
         # lag spectrum grid [cycles/day] and the search band
+        # FFT length: the misfit has Tmax lags; zero padding (x pad) gives a finer frequency grid than 1/Tmax, so
+        # that a peak is not missed between two grid frequencies
         self.lf = settings.jhf_pad * 2 ** int(np.ceil(np.log2(self.tmax)))
+        # frequencies of the real FFT of length lf [cycles/day]
         self.fr = np.arange(self.lf // 2 + 1) / self.lf
+        # search band: periods from N / min_cycles (at least min_cycles cycles in the series) down to p_min days
         self.inb = np.flatnonzero((self.fr >= settings.jhf_min_cycles / self.n_days) &
                                   (self.fr <= 1 / settings.jhf_p_min))
-        # half a resolution bin of the lag spectrum
+        # half a resolution bin of the lag spectrum: a peak of the final check closer than this to a kept period
+        # is the same period
         self.dsep = 1 / (2 * self.tmax)
 
     def proj_cos(self, f: np.ndarray) -> np.ndarray:
-        """projected cosine kernels at frequencies f [cycles/day], lags 0..Tmax"""
+        """
+        projected cosine kernels at frequencies f [cycles/day], lags 0..Tmax: what a sinusoid at f looks like in
+        the empirical covariance of the residuals after the ETM fit. One call per candidate and per refinement
+        trial, so it must be fast (rank-2 projection, a few ms)
+        """
         f = np.atleast_1d(np.asarray(f, dtype=float))
         if not f.size:
             return np.zeros((self.tmax + 1, 0))
         return self.proj.project_cosines(f, self.tmax + 1, cycles_per_day=True)
 
     def snr(self, cf: CovarianceFit) -> np.ndarray:
+        """SNR of each periodic term of cf: its power over that of the fit's power law + white in its bin"""
         return self.fitter.snr(cf, cumulative=True)
 
     def misfit_ratio(self, cf: CovarianceFit) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -562,14 +605,21 @@ class JointHarmonicFit:
         Spectrum S of the misfit gamma - fitted covariance at lags 1..Tmax (an oscillation s cos(2 pi f tau) in
         the misfit gives a peak of height ~ s) and its ratio R to the noise per bin of the fit (band only)
         """
+        # fitted (projected) covariance at lags 0..Tmax: power laws + white + the periodic terms of the fit
         model = self.gt @ cf.w + self.ht * cf.nugget
         if cf.w_p.size:
             model = model + cf.c @ cf.w_p
+        # misfit at lags 1..Tmax (lag 0 holds the white noise and is left out), without its mean
         r = self.gamma[1:self.tmax + 1] - model[1:self.tmax + 1]
         r = r - r.mean()
+        # amplitude spectrum over the lags, normalized by the number of lags (Tmax) so that an oscillation
+        # s cos(2 pi f tau) in the misfit [mm^2] gives a peak of height ~ s at f (within a few % for 3+ cycles over
+        # the lags, ~10% for 1-2). A sinusoid of amplitude a [mm] left in the residuals gives s ~ a^2 / 2
         s = 2 * np.abs(np.fft.rfft(r, self.lf)) / self.tmax
+        # noise per frequency bin: variance of the fit's power law + white in one resolution bin (band only)
         sb = np.full(self.fr.size, np.nan)
         sb[self.inb] = self.fitter.noise_bin(cf, self.fr[self.inb], cumulative=True)
+        # R = S / noise: how strong the oscillation left in the misfit is compared with the noise at that frequency
         return s / sb, s, sb
 
     def local_peaks(self, r: np.ndarray, threshold: float) -> np.ndarray:
@@ -585,19 +635,24 @@ class JointHarmonicFit:
         """
         fitter = self.fitter
         f, c = f.copy(), c.copy()
+        # chi2 of the joint fit with the frequencies refined so far (the baseline of every trial)
         cur = fitter.fit(f, c).chi2
         for i in order:
+            # best so far for term i: its current frequency and projected kernel
             best, fb, cb = cur, f[i], c[:, i].copy()
             for d in self.SHIFTS / self.n_days:
+                # the same joint fit with only term i moved by d (its projected kernel recomputed)
                 ct = c.copy()
                 ct[:, i] = self.proj_cos(f[i] + d)[:, 0]
                 trial = fitter.fit(f, ct)
                 if trial.chi2 < best:
                     best, fb, cb = trial.chi2, f[i] + d, ct[:, i].copy()
+            # keep the best shift (or none) and move on to the next term
             f[i], c[:, i], cur = fb, cb, best
         return f, c, fitter.fit(f, c)
 
     def run(self, reference: CovarianceFit) -> JointDetection:
+        """detection starting from the reference fit (step 1: power laws + white, no periodic terms)"""
         st = self.st
         fitter = self.fitter
         n_days = self.n_days
@@ -608,6 +663,8 @@ class JointHarmonicFit:
         r0, s0, sb0 = self.misfit_ratio(reference)
         ip = self.local_peaks(r0, st.jhf_cand_ratio)
         ip = ip[np.argsort(-r0[ip], kind='stable')]
+        # fh: candidate frequencies [cycles/day], strongest first; a weaker peak too close to a stronger one is
+        # the same signal (spectral leakage) and is skipped
         fh = []
         for i in ip:
             if len(fh) >= st.jhf_cand_max:
@@ -616,9 +673,12 @@ class JointHarmonicFit:
                 continue
             fh.append(fr[i])
         fh = np.array(fh, dtype=float)
+        # ch: their projected cosine kernels (lags 0..Tmax). ch[0] is the fraction of a sinusoid's variance that
+        # survives the ETM fit: the annual and semiannual are mostly absorbed by the ETM's own periodic terms
         ch = self.proj_cos(fh)
         keep = ch[0] >= st.jhf_keep_min
         fh, ch = fh[keep], ch[:, keep]
+        # frequencies before refinement, for the report
         fh0 = fh.copy()
 
         # 3. harmonic fit and refinement of the frequencies with variance > 0, strongest (w_P * C0) first
@@ -627,13 +687,16 @@ class JointHarmonicFit:
             order = np.argsort(-(harm.w_p * ch[0]), kind='stable')
             order = order[harm.w_p[order] > 0]
             fh, ch, harm = self.refine(fh, ch, order)
+        # variance of each candidate in the (refined) harmonic fit; 0 = the fit does not want it
         wh = harm.w_p
 
-        # 4. decision with the SNR in the harmonic fit
+        # 4. decision with the SNR in the harmonic fit: with all candidates in, the power laws are not inflated
+        # by unmodeled periodic power, so the noise each period is compared with is the right one
         qh = self.snr(harm)
         passed = (qh >= st.jhf_snr_min) & (wh > 0)
 
         # 5. refit with the kept periods; zero-variance terms drop out
+        # (fc, cc: frequencies and projected kernels of the periods in the model from here on; rf: their fit)
         fc, cc = fh[passed], ch[:, passed]
         rf = fitter.fit(fc, cc)
         while fc.size and np.any(rf.w_p <= 0):
@@ -652,10 +715,13 @@ class JointHarmonicFit:
         added = np.array([])
         removed = []
         if fx.size:
+            # f2, c2: kept + found periods; is_added marks the found ones
             f2, c2 = np.concatenate([fc, fx]), np.hstack([cc, self.proj_cos(fx)])
             is_added = np.r_[np.zeros(fc.size, dtype=bool), np.ones(fx.size, dtype=bool)]
             r2 = fitter.fit(f2, c2)
             while f2.size:
+                # only the added terms are tested on their SNR (kept terms get +inf); any term with variance 0,
+                # kept or added, is removed first (-inf)
                 q2 = self.snr(r2)
                 q2[~is_added] = np.inf
                 q2[r2.w_p <= 0] = -np.inf
@@ -667,10 +733,13 @@ class JointHarmonicFit:
                 r2 = fitter.fit(f2, c2)
             if is_added.any():
                 f2, c2, r2 = self.refine(f2, c2, np.flatnonzero(is_added))
+            # the added periods after refinement (the kept ones are not refined again, so they are unchanged)
             added = np.setdiff1d(f2, fc)
             fc, cc, rf = f2, c2, r2
 
         # 7. outcomes of the candidates and SNR of the final periods
+        # in this order of precedence: zero in the harmonic fit > accepted (in the final set) > zero after refit
+        # (passed the SNR, dropped in step 5 or 6) > below threshold
         outcomes = np.array(['below threshold'] * fh.size, dtype=object)
         outcomes[passed] = 'zero after refit'
         for i in range(fh.size):
@@ -680,12 +749,15 @@ class JointHarmonicFit:
         candidates = [JointCandidate(f0=float(a), f=float(b), w=float(w), snr=float(q), outcome=str(o))
                       for a, b, w, q, o in zip(fh0, fh, wh, qh, outcomes)]
 
+        # SNR in the harmonic fit of each final period (NaN for the ones added by the final check, which were not
+        # in the harmonic fit)
         snr_harmonic = np.full(fc.size, np.nan)
         for i, fi in enumerate(fc):
             k = np.flatnonzero(np.abs(fh - fi) < 1e-12)
             if k.size:
                 snr_harmonic[i] = qh[k[0]]
 
+        # final check action on each final period, for the report
         action = ['added' if np.any(np.abs(added - fi) < 1e-12) else 'passed' for fi in fc]
 
         return JointDetection(final_fit=rf, snr=self.snr(rf), snr_harmonic=snr_harmonic, candidates=candidates,
@@ -1270,6 +1342,10 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     has_constraints = n_neq is not None and np.any(n_neq)
 
     # step 1: WLS fit of the ETM (Section 2)
+    # recompute the residuals REMOVING the outliers: while
+    # the change is insignificant for the purpose of the ETM,
+    # leaving them changes the parameters enough that the empirical
+    # covariance is affected
     ap = a * p0[:, None]
     nmat = a.T @ ap + (n_neq if has_constraints else 0)
     k0 = np.linalg.solve(nmat, ap.T)
@@ -1290,28 +1366,45 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     gb = np.column_stack([dcorr_pln(n_days, alpha) for alpha in settings.alphas])
     delta = np.zeros(n_days)
     delta[0] = 1.
+    # project the 5 power-law kernels and the white kernel in one call (shared FFTs): what each would look like
+    # in the empirical covariance of the residuals after the ETM fit; gtf: power laws (N x 5), htf: white (N)
     kt = proj.project(np.column_stack([gb, delta]))
     gtf, htf = kt[:, :-1], kt[:, -1]
     timings['kernels'] = time() - tt
 
     # lag set and unweighted fit (Sections 6, 7.1)
     tt = time()
+    # fitted lags [days]: every lag 0..k (k = 16), then a ratio of about 1 + 1/k up to Tmax (K ~ 96 for 10 years,
+    # 110 for 23 years). Short lags are dense, where the covariance changes fast; long lags are sparse
     lags = geo_lags(settings.lag_k, tmax)
+    # design matrix of the covariance fit (K x 6): the projected kernels at the fitted lags, 5 power laws + white.
+    # The model of the empirical covariance is d @ [w (5 power-law variances), white variance]
     d = np.column_stack([gtf[lags], htf[lags]])
+    # data of the covariance fit (K): the empirical covariance of the residuals at the fitted lags
     g = gamma[lags]
+    # a lag without observed pairs has no empirical covariance (NaN): drop it from the fit
     valid = np.isfinite(g) & np.all(np.isfinite(d), axis=1)
     if not np.all(valid):
         logger.debug(f'estimate_noise_model: dropping {np.sum(~valid)} lags without pairs')
         lags, d, g = lags[valid], d[valid], g[valid]
 
+    # unweighted fit: non-negative power-law variances and white variance >= white_min (NNLS). Its only use is
+    # to build Sigma below (the weight of the real fits), which is then held fixed
     na = gb.shape[1]
     fit0 = fit_white_min(d, g, settings.white_min, na)
 
     # weight matrix Sigma from the unweighted fit, held fixed (Section 7.2)
+    # ct: covariance of the residuals predicted by the unweighted fit (projected power laws + projected white with
+    # its variances), at ALL lags 0..N-1, not only the fitted ones: the covariance between the empirical
+    # covariances at two lags involves the residual covariance at every distance between epochs.
     # zero at lags without pairs (NaN kernels; e.g. long lags of a series with a few early epochs and a long gap)
     has_pairs = np.all(np.isfinite(gtf), axis=1) & np.isfinite(htf)
     ct = np.zeros(n_days)
     ct[has_pairs] = gtf[has_pairs] @ fit0.w + htf[has_pairs] * fit0.nugget
+    # Sigma (K x K): covariance of the empirical covariance at the fitted lags if the noise followed ct: how
+    # uncertain each gamma(tau) is (diagonal) and how strongly neighboring lags move together (off-diagonal). The
+    # weighted fits below use its inverse (through its Cholesky factor), so precise, independent lags count more.
+    # It is computed once and not updated with the later fits
     sigma = proj.gamma_covariance(lags, ct, settings.fft_workers)
     timings['sigma'] = time() - tt
 
