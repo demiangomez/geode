@@ -43,6 +43,12 @@ class EtmStackerConfig(BaseDataClass):
     grid_spacing: float = 25  # in km
     min_span_completion: float = 75.0
     min_time_span: float = 2.5
+    # Extension point for the sparse-station contribution described in
+    # sparse_station_constraints.md. Off by default: when False, sparse stations are
+    # detected and set aside (self.sparse_stations) exactly as before, but never feed
+    # back into the shared normal-equation system. No constraint-building code for
+    # this exists yet -- see that file for the open design questions.
+    sparse_constraints_enabled: bool = False
 
 
 @dataclass
@@ -104,6 +110,13 @@ class Station:
     is_interseismic: bool = False
     etm_constraints: List = None
     posterior_wrms: List = None
+
+    # Cache for the sparse-station "free fit" (see sparse_station_constraints.md):
+    # a plain, uncontaminated ETM fit (no cherry-picked earthquakes) used to clean a
+    # sparse station's data before it could feed back into the shared system. Only
+    # ever populated for stations in EtmStacker.sparse_stations, and only when
+    # EtmStackerConfig.sparse_constraints_enabled is True.
+    free_fit: 'EtmEngine' = None
 
     def __str__(self):
         return f'{self.network_code}.{self.station_code}'
