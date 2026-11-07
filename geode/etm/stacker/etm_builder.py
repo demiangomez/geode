@@ -271,15 +271,18 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
 
 def build_free_fit(cnn: Cnn, network_code: str, station_code: str) -> Optional[EtmEngine]:
     """
-    Lazily compute the "Step 1" unconstrained ETM fit (polynomial + periodic + whatever
-    mechanical/default-detected jumps it finds on its own, no cherry-picked earthquakes)
-    for a sparse station whose main build skipped it (e.g. loaded from JSON via -load_json).
+    Lazily compute the same "Step 1" unconstrained ETM fit (polynomial + periodic +
+    whatever mechanical/default-detected jumps it finds on its own, no cherry-picked
+    earthquakes) that build_etm above already computes for every non-JSON station --
+    for a sparse station whose main build skipped that step (e.g. loaded from JSON via
+    -load_json).
 
-    This is the "free, uncontaminated fit" the sparse_station_constraints.md spec requires
-    before a sparse station's data can be cleaned of nuisance terms -- see that file for why
-    the station's own cherry-picked ETM (station.etm) must not be used for this. Only called
-    for stations that have already turned out to be sparse, never unconditionally, so it does
-    not slow down -load_json runs for full stations.
+    A sparse station's own cherry-picked ETM (station.etm) is not a safe stand-in for
+    this fit: it jointly estimates nuisance terms (constant/periodic/mechanical jumps)
+    alongside geophysical jumps, so using its output to clean the station's data would
+    reintroduce that bias -- this free fit is the uncontaminated one. Only called for
+    stations that have already turned out to be sparse, never unconditionally, so it
+    does not slow down -load_json runs for full stations.
     """
     try:
         unconstrained_config = EtmConfig(network_code, station_code, cnn=cnn)

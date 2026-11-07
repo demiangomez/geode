@@ -43,11 +43,11 @@ class EtmStackerConfig(BaseDataClass):
     grid_spacing: float = 25  # in km
     min_span_completion: float = 75.0
     min_time_span: float = 2.5
-    # Extension point for the sparse-station contribution described in
-    # sparse_station_constraints.md. Off by default: when False, sparse stations are
-    # detected and set aside (self.sparse_stations) exactly as before, but never feed
-    # back into the shared normal-equation system. No constraint-building code for
-    # this exists yet -- see that file for the open design questions.
+    # Off by default: when False, sparse stations are detected and set aside
+    # (self.sparse_stations) exactly as before, but never feed back into the shared
+    # normal-equation system. Turning this on currently only causes a free fit to be
+    # cached on each sparse station (Station.free_fit below) -- the constraint-building
+    # code that would actually let their data inform the shared fields does not exist yet.
     sparse_constraints_enabled: bool = False
 
 
@@ -111,10 +111,14 @@ class Station:
     etm_constraints: List = None
     posterior_wrms: List = None
 
-    # Cache for the sparse-station "free fit" (see sparse_station_constraints.md):
-    # a plain, uncontaminated ETM fit (no cherry-picked earthquakes) used to clean a
-    # sparse station's data before it could feed back into the shared system. Only
-    # ever populated for stations in EtmStacker.sparse_stations, and only when
+    # Cache for a sparse station's "free fit": the same kind of plain, no-cherry-picked
+    # ETM fit that etm_builder.build_etm already computes for every station (there, to
+    # get unbiased obs_sigmas and detect mechanical jumps for every station, not just
+    # sparse ones). It is cached here too because a sparse station's own cherry-picked
+    # ETM (station.etm) is not a safe stand-in for it: that fit jointly estimates
+    # nuisance terms (constant/periodic/mechanical jumps) alongside geophysical jumps,
+    # so using its output to clean the station's data would reintroduce that bias.
+    # Only ever populated for stations in EtmStacker.sparse_stations, and only when
     # EtmStackerConfig.sparse_constraints_enabled is True.
     free_fit: 'EtmEngine' = None
 

@@ -265,9 +265,10 @@ class EarthquakeCatalogMixin:
                     )
                 )
 
-        # Extension point for the sparse-station contribution described in
-        # sparse_station_constraints.md: no constraint-building code exists yet (the
-        # design is still open -- see that file), this only marks where it plugs in.
+        # Extension point: sparse stations (self.sparse_stations) have no owned
+        # parameters and currently never contribute equations to the shared system --
+        # this is where a future constraint built from their cleaned data (see
+        # Station.free_fit) would be registered. Not implemented yet.
         if self.config.sparse_constraints_enabled and self.sparse_stations:
             tqdm.write(f'sparse_constraints_enabled is set but no sparse constraint '
                        f'contribution is implemented yet ({len(self.sparse_stations)} '
