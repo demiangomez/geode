@@ -63,6 +63,10 @@ class FieldVisualizer:
         self._stations_lat = None
         self._stations_data = None
         self._stations_names = None
+        self._sparse_lon = None
+        self._sparse_lat = None
+        self._sparse_data = None
+        self._sparse_names = None
         self._covar = None
         self._on_station_click = None
         self._field_names = None
@@ -78,7 +82,12 @@ class FieldVisualizer:
             stations_names: List[str],
             on_station_click: Optional[Callable[[int], None]] = None,
             available_fields: Optional[List[str]] = None,
-            covar: Optional[List[np.ndarray]] = None
+            covar: Optional[List[np.ndarray]] = None,
+            sparse_lon: np.ndarray = None,
+            sparse_lat: np.ndarray = None,
+            sparse_data: List[np.ndarray] = None,
+            sparse_names: List[str] = None,
+            on_sparse_click: Optional[Callable[[int], None]] = None
     ) -> plt.Figure:
         """
         Create the field visualization.
@@ -103,6 +112,12 @@ class FieldVisualizer:
             Names for each field
         covar : List[np.ndarray], optional
             Covariance data for uncertainty ellipses
+        sparse_lon, sparse_lat : np.ndarray, optional
+            Sparse station coordinates
+        sparse_data : List[np.ndarray], optional
+            Sparse station data for each field, each (3, n_sparse)
+        sparse_names : List[str], optional
+            Sparse station names
 
         Returns
         -------
@@ -119,6 +134,11 @@ class FieldVisualizer:
         self._stations_lat = stations_lat
         self._stations_data = stations_data
         self._stations_names = stations_names
+        self._sparse_lon = sparse_lon
+        self._sparse_lat = sparse_lat
+        self._sparse_data = sparse_data
+        self._sparse_names = sparse_names
+        self._on_sparse_click = on_sparse_click
         self._covar = covar
         self._on_station_click = on_station_click
         self._field_names = available_fields or [f"Field {i}" for i in range(len(data))]
@@ -135,6 +155,10 @@ class FieldVisualizer:
 
         # Transform station coordinates
         self.state.x_stn, self.state.y_stn = self.renderer.transform(stations_lon, stations_lat)
+
+        # Transform sparse station coordinates
+        if sparse_lon is not None and len(sparse_lon) > 0:
+            self.state.x_sparse, self.state.y_sparse = self.renderer.transform(sparse_lon, sparse_lat)
 
         # Process and display first field
         self._process_data(0)
@@ -215,6 +239,12 @@ class FieldVisualizer:
         stn_data = self._stations_data[field_index]
         self.state.ve_stn = stn_data[0, :] * 1000.0
         self.state.vn_stn = stn_data[1, :] * 1000.0
+
+        # Sparse station data
+        if self._sparse_data is not None and len(self._sparse_data) > field_index:
+            sp_data = self._sparse_data[field_index]
+            self.state.ve_sparse = sp_data[0, :] * 1000.0
+            self.state.vn_sparse = sp_data[1, :] * 1000.0
 
         # Create interpolation grid
         grid_spacing = self.config.grid_spacing_m
@@ -329,7 +359,7 @@ class FieldVisualizer:
         # Draw station markers and vectors
         scatter = ax.scatter(
             self.state.x_stn, self.state.y_stn,
-            s=10, c='blue', marker='o',
+            s=10, c='black', marker='o',
             zorder=10,
             transform=self.renderer.projection
         )
@@ -348,6 +378,30 @@ class FieldVisualizer:
                 transform=self.renderer.projection
             )
             self.state.quivers_stn[index] = q_stn
+
+        # Draw sparse station markers and vectors
+        if self.state.x_sparse is not None and len(self.state.x_sparse) > 0:
+            scatter_sp = ax.scatter(
+                self.state.x_sparse, self.state.y_sparse,
+                s=20, c='lime', marker='o',
+                zorder=10,
+                transform=self.renderer.projection
+            )
+            self.state.scatter_sparse[index] = scatter_sp
+
+            if index != 2 and self.state.ve_sparse is not None:
+                q_sp = ax.quiver(
+                    self.state.x_sparse, self.state.y_sparse,
+                    self.state.ve_sparse, self.state.vn_sparse,
+                    scale=scale,
+                    color=self.config.vector_color,
+                    width=self.config.vector_width,
+                    edgecolor=self.config.vector_edge_color,
+                    linewidth=self.config.vector_edge_width,
+                    zorder=6,
+                    transform=self.renderer.projection
+                )
+                self.state.quivers_sparse[index] = q_sp
 
         ax.set_title(label, fontsize=12, fontweight='bold')
 
@@ -555,6 +609,16 @@ class FieldVisualizer:
                 self.state.scatter_artists[i].remove()
                 self.state.scatter_artists[i] = None
 
+            # Remove sparse scatter
+            if self.state.scatter_sparse[i] is not None:
+                self.state.scatter_sparse[i].remove()
+                self.state.scatter_sparse[i] = None
+
+            # Remove sparse quivers
+            if self.state.quivers_sparse[i] is not None:
+                self.state.quivers_sparse[i].remove()
+                self.state.quivers_sparse[i] = None
+
             # Remove contour lines
             if self.state.contour_lines[i] is not None:
                 for coll in self.state.contour_lines[i].collections:
@@ -593,7 +657,8 @@ class FieldVisualizer:
 
         # 5. Update interaction handler with new scatter artists
         if self.interaction is not None:
-            self.interaction.update_scatters(self.state.scatter_artists)
+            self.interaction.update_scatters(self.state.scatter_artists,
+                                            self.state.scatter_sparse)
 
         # 6. Restore view state
         for i, ax in enumerate(self.axes):
@@ -657,6 +722,26 @@ class FieldVisualizer:
             )
             self.state.quivers_stn[i] = q_stn
 
+            # Update sparse station quivers
+            if self.state.quivers_sparse[i] is not None:
+                self.state.quivers_sparse[i].remove()
+                self.state.quivers_sparse[i] = None
+
+            if (self.state.x_sparse is not None and len(self.state.x_sparse) > 0
+                    and self.state.ve_sparse is not None):
+                q_sp = ax.quiver(
+                    self.state.x_sparse, self.state.y_sparse,
+                    self.state.ve_sparse, self.state.vn_sparse,
+                    scale=scale,
+                    color=self.config.vector_color,
+                    width=self.config.vector_width,
+                    edgecolor=self.config.vector_edge_color,
+                    linewidth=self.config.vector_edge_width,
+                    zorder=6,
+                    transform=self.renderer.projection
+                )
+                self.state.quivers_sparse[i] = q_sp
+
         self.fig.canvas.draw_idle()
 
     def _setup_widgets(self) -> None:
@@ -691,7 +776,12 @@ class FieldVisualizer:
             x=self.state.x_stn,
             y=self.state.y_stn,
             names=self._stations_names,
-            on_click=self._on_station_click
+            on_click=self._on_station_click,
+            sparse_scatters=self.state.scatter_sparse,
+            sparse_x=self.state.x_sparse,
+            sparse_y=self.state.y_sparse,
+            sparse_names=self._sparse_names,
+            on_sparse_click=self._on_sparse_click
         )
 
         # Keep reference

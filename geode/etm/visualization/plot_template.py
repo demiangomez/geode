@@ -65,7 +65,7 @@ class PlotTemplate(ABC):
 
     def generate_title(self, plot_data: TimeSeriesPlotData, output_config: PlotOutputConfig) -> str:
         """Generate plot title"""
-        base_title = (f"{plot_data.station_id} ({plot_data.stack_name.upper()} {plot_data.completion:.2f}% - "
+        base_title = (f"{plot_data.station_id} ({plot_data.stack_name.upper()} {plot_data.completion:.2f}%/{plot_data.span_completion:.2f}% - "
                       f"{self.config.modeling.least_squares_strategy.adjustment_model.description}) "
                       f"lat: {plot_data.latitude:.5f} lon: {plot_data.longitude:.5f}")
         return base_title

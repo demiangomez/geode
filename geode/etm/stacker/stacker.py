@@ -26,6 +26,7 @@ from ..core.type_declarations import SolutionType, FitStatus, JumpType
 from ..data.solution_data import SolutionDataException
 from ..least_squares.design_matrix import DesignMatrixException
 from ..etm_functions.jumps import JumpFunction
+from ..etm_functions.polynomial import PolynomialFunction
 from ..visualization.plot_fields import plot_velocity_field
 from ...dbConnection import Cnn
 from ...pyDate import Date
@@ -45,6 +46,7 @@ class EtmStacker:
 
         # Core data
         self.stations: List[Station] = []
+        self.sparse_stations: List[Station] = []
         self.normal_equations: List[NormalEquations] = []
         self.earthquakes: List[Earthquake] = []
         self.collided_earthquakes: Set[str] = set()  # IDs of earthquakes that lost collision check
@@ -120,8 +122,27 @@ class EtmStacker:
         if etm is None:
             return
 
+        if (etm.solution_data.time_vector[-1] -
+                etm.solution_data.time_vector[0]) < self.config.min_time_span:
+            tqdm.write(print_yellow(
+                f' -- Station {network_code}.{station_code} has less than '
+                f'{self.config.min_time_span} years of data, skipping'))
+            return
+
+        is_sparse = etm.solution_data.span_completion < self.config.min_span_completion
+
+        if is_sparse:
+            tqdm.write(print_yellow(
+                f' -- Station {network_code}.{station_code} span completion '
+                f'{etm.solution_data.span_completion:.1f}% < {self.config.min_span_completion:.1f}%, '
+                f'adding as sparse station'))
+
         # Create station
         station = self._create_station(etm)
+
+        if is_sparse:
+            self.sparse_stations.append(station)
+            return
 
         # Create normal equations
         neq = self._create_normal_equations(station)
@@ -131,18 +152,29 @@ class EtmStacker:
         self.normal_equations.append(neq)
 
     def remove_station(self, station_id: str):
-        remove_from_index = 0
-        for i, station in enumerate(self.stations):
-            # remove from the parameter range the station that has been removed
-            # this is applied to any stations that come after the removed site
-            station.normal_equations.parameter_range -= remove_from_index
-            station.normal_equations.parameter_start_idx -= remove_from_index
+        # sparse stations are observation-only (no owned parameters), so removal
+        # is immediate -- no normal_equations/parameter_range renumbering needed
+        for i, station in enumerate(self.sparse_stations):
             if stationID(station) == station_id:
-                self.total_parameters -= station.normal_equations.parameter_count
-                self.total_equations -= station.normal_equations.equation_count
+                self.sparse_stations.pop(i)
+                tqdm.write(f' -- Removed sparse station {station_id}')
+                self.solved = False
+                return
+
+        for i, station in enumerate(self.stations):
+            if stationID(station) == station_id:
+                removed_param_count = station.normal_equations.parameter_count
+                removed_eq_count = station.normal_equations.equation_count
+                self.total_parameters -= removed_param_count
+                self.total_equations -= removed_eq_count
                 self.normal_equations.pop(i)
                 self.stations.pop(i)
-                remove_from_index = station.normal_equations.parameter_count
+                # remove from the parameter range the station that has been removed;
+                # this is applied to any stations that come after the removed site
+                for station_after in self.stations[i:]:
+                    station_after.normal_equations.parameter_range -= removed_param_count
+                    station_after.normal_equations.parameter_start_idx -= removed_param_count
+                break
 
         # no need to rebuild the registry or the grids
         # they will contain a couple dead sites but they don't affect the calculations
@@ -647,11 +679,18 @@ class EtmStacker:
                   stn.normal_equations.weighted_observations[2] for stn in self.stations)
 
         dof = self.total_equations * 3 + self.total_constraints - (self.total_parameters * 3)
-        c_vpv = self._sum_constraint_weighted_residuals()
-        o_vpv = lpl - system_ceq.T @ x
 
-        # see Kyle Snow eq 6.36 and 6.37a (y^T P y − c^T N^−1 c)
-        self.variance = (o_vpv + c_vpv) / dof
+        # see Kyle Snow eq 6.36 and 6.37a (y^T P y − c^T N^−1 c): since the constraint
+        # rows are already folded into system_neq/system_ceq before solving, this is
+        # the TOTAL weighted residual sum (observations + constraints combined), not
+        # the observation-only part.
+        total_vpv = lpl - system_ceq.T @ x
+        # isolate the constraint-only contribution for the diagnostic breakdown below;
+        # subtract (not add) it from the total to get the observation-only residual sum
+        c_vpv = self._sum_constraint_weighted_residuals()
+        o_vpv = total_vpv - c_vpv
+
+        self.variance = total_vpv / dof
         # update the covariance
         self.covariance *= self.variance
         # compute variance of unit weight for each stations
@@ -1139,7 +1178,13 @@ class EtmStacker:
         input_lon = [stn.lon for stn in self.stations]
         input_lat = [stn.lat for stn in self.stations]
 
-        available_fields, station_data, grid_lon, grid_lat, fields, fcovar = [], [], [], [], [], []
+        sparse_names = [stationID(stn) for stn in self.sparse_stations]
+        sparse_lon = np.array([stn.lon for stn in self.sparse_stations])
+        sparse_lat = np.array([stn.lat for stn in self.sparse_stations])
+        n_sparse = len(self.sparse_stations)
+
+        available_fields, station_data, sparse_data, grid_lon, grid_lat, fields, fcovar = \
+            [], [], [], [], [], [], []
 
         postseismic = []
         for ifield in self.fields:
@@ -1150,6 +1195,7 @@ class EtmStacker:
 
             parameters = np.zeros((3, len(self.stations)))
             station_data.append(parameters)
+            sparse_params = np.full((3, n_sparse), np.nan)
             available_fields.append(ifield.description)
             lon, lat = ifield.get_interpolation_grid_geographic()
             grid_lon.append(lon)
@@ -1170,6 +1216,15 @@ class EtmStacker:
                             # assign values to where they belong
                             parameters[:, idx] += (f.constrained_parameters *
                                                    np.log10(1 + self.config.relaxation.max()/f.relaxation))
+                            # predicted value at each sparse station (summed across relaxations)
+                            dt_weight = np.log10(1 + self.config.relaxation.max()/f.relaxation)
+                            for k, stn in enumerate(self.sparse_stations):
+                                vals, _ = f.get_values_geo(stn.lon, stn.lat)
+                                if vals is not None:
+                                    if np.isnan(sparse_params[:, k]).all():
+                                        sparse_params[:, k] = 0.0
+                                    for j in range(3):
+                                        sparse_params[j, k] += vals[j][0] * dt_weight
                     # append postseismic field to keep track of which earthquakes were processed already
                     postseismic.append(ifield.event.id)
                     fields.append(r_field)
@@ -1180,11 +1235,23 @@ class EtmStacker:
                     parameters[:, idx] = ifield.constrained_parameters
                     fields.append(ifield.enu_field)
 
+                    value_idx = 1 if ifield.base_type == ConstraintType.INTERSEISMIC else 0
+                    for k, stn in enumerate(self.sparse_stations):
+                        vals, _ = ifield.get_values_geo(stn.lon, stn.lat)
+                        if vals is not None:
+                            for j in range(3):
+                                sparse_params[j, k] = vals[j][value_idx]
+
+            sparse_data.append(sparse_params)
+
         # do the thing
         return plot_velocity_field(grid_lon, grid_lat, fields,
                                    np.array(input_lon), np.array(input_lat), station_data, input_names,
                                    self.plot_constrained_etm, available_fields, plot_sigmas=sigmas,
-                                   covar=fcovar)
+                                   covar=fcovar,
+                                   sparse_lon=sparse_lon, sparse_lat=sparse_lat,
+                                   sparse_data=sparse_data, sparse_names=sparse_names,
+                                   on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None)
 
     def plot_constrained_etm(self, station_index, folder=None):
         cnn = Cnn('gnss_data.cfg')
@@ -1223,6 +1290,120 @@ class EtmStacker:
         etm.run_adjustment(cnn=cnn, try_save_to_db=False, try_loading_db=False)
         etm.plot()
         print('(EtmStacker) > ', end='', flush=True)
+
+    def plot_constrained_sparse_etm(self, sparse_station_index, folder=None):
+        cnn = Cnn('gnss_data.cfg')
+
+        stn = self.sparse_stations[sparse_station_index]
+
+        tqdm.write(f'Estimating constrained etm for sparse station {stationID(stn)}')
+
+        config = self._apply_config(stn.network_code, stn.station_code, cnn)
+        config.solution.solution_type = SolutionType.PPP
+
+        # Build constraints from interpolated field values
+        config.modeling.least_squares_strategy.constraints = \
+            self._build_sparse_etm_constraints(stn)
+        config.modeling.prefit_models = copy.deepcopy(stn.etm.config.modeling.prefit_models)
+
+        for const in config.modeling.least_squares_strategy.constraints:
+            par = ''
+            for p in const.p.params:
+                par += '[' + ' '.join([f'{a * 1000.:.2f}' for a in p.tolist()]) + '] '
+
+            tqdm.write(f' -- Etm constrain: {const} {par}')
+
+        if folder is None:
+            config.plotting_config.interactive = True
+        else:
+            config.plotting_config.filename = folder
+
+        config.plotting_config.plot_show_outliers = True
+        config.plotting_config.plot_residuals_mode = True
+        etm = EtmEngine(config, cnn=cnn, silent=True)
+
+        mechanical = etm.jump_manager.get_active_mechanical_jumps()
+        for jump in mechanical:
+            jump.fit = False
+
+        try:
+            etm.run_adjustment(cnn=cnn, try_save_to_db=False, try_loading_db=False)
+            etm.plot()
+        except Exception as e:
+            tqdm.write(f'Could not fit constrained ETM for {stationID(stn)}: {e}')
+        print('(EtmStacker) > ', end='', flush=True)
+
+    @staticmethod
+    def _sanitize_sigma(sigma):
+        """Replace NaN/negative sigmas with 1e-4 (cap floor)."""
+        if np.isnan(sigma) or sigma <= 0:
+            return 1e-4
+        return sigma
+
+    def _build_sparse_etm_constraints(self, stn):
+        col = [1, 0, 2]
+        MULT = 100
+        constraints = []
+
+        # Velocity from the interseismic field
+        for ifield in self.fields:
+            if ifield.base_type == ConstraintType.INTERSEISMIC:
+                vals, sigs = ifield.get_values_geo(stn.lon, stn.lat)
+                if vals is not None:
+                    poly = PolynomialFunction(stn.etm.config)
+                    for j in range(3):
+                        poly.p.params[j][1] = vals[col[j]][1]
+                        poly.p.sigmas[j][1] = self._sanitize_sigma(sigs[col[j]][1] / MULT)
+                    constraints.append(poly)
+                break
+
+        # Coseismic and postseismic from earthquake fields
+        for event in self.earthquakes:
+            jump = stn.etm.jump_manager.get_geophysical_jump(event.id)
+            if not (jump and jump.fit):
+                continue
+
+            jc = JumpFunction(stn.etm.config, time_vector=np.array([0]),
+                              date=jump.date, jump_type=jump.p.jump_type, fit=False)
+
+            if jump.p.jump_type < JumpType.POSTSEISMIC_ONLY:
+                for ifield in self.fields:
+                    if (ifield.base_type == ConstraintType.COSEISMIC and
+                            ifield.event.id == event.id):
+                        x, y = ifield.grids.transform_coordinate(stn.lon, stn.lat)
+                        vals, sigs = ifield.get_values_proj(x, y)
+                        if vals is not None:
+                            for j in range(3):
+                                jc.p.params[j][0] = vals[col[j]][0]
+                                jc.p.sigmas[j][0] = self._sanitize_sigma(sigs[col[j]][0] / MULT)
+                        break
+
+            for relax in self.config.relaxation:
+                idj = jump.get_relaxation_cols(relax, False)
+                if not idj:
+                    continue
+                for ifield in self.fields:
+                    if (ifield.base_type == ConstraintType.POSTSEISMIC and
+                            ifield.event.id == event.id and
+                            ifield.relaxation == relax):
+                        x, y = ifield.grids.transform_coordinate(stn.lon, stn.lat)
+                        vals, sigs = ifield.get_values_proj(x, y)
+                        if vals is not None:
+                            for j in range(3):
+                                jc.p.params[j][idj] = vals[col[j]][0]
+                                jc.p.sigmas[j][idj] = self._sanitize_sigma(sigs[col[j]][0] / MULT)
+                        break
+
+            # tie any unconstrained parameters to zero
+            for j in range(3):
+                nan_mask = np.isnan(jc.p.params[j])
+                if np.any(nan_mask):
+                    jc.p.params[j][nan_mask] = 0.0
+                    jc.p.sigmas[j][nan_mask] = 1e-4
+
+            constraints.append(jc)
+
+        return constraints
 
     def _extract_results(self) -> Tuple[List, List]:
 
@@ -1291,10 +1472,15 @@ class EtmStacker:
                                    f'(zero-constrained: no SW-Okada model was built)')
                         continue
 
-                    self.fields.append(
-                        EtmStackerField.create_field(
-                            self.stations, self.solution, self.covariance, self.grids, constraint)
-                    )
+                    try:
+                        self.fields.append(
+                            EtmStackerField.create_field(
+                                self.stations, self.solution, self.covariance, self.grids, constraint)
+                        )
+                    except numpy.linalg.linalg.LinAlgError:
+                        tqdm.write(f'Skipping field interpolation for {constraint.short_description()} '
+                                   f'(singular matrix: not enough independent stations)')
+                        continue
 
         else:
             tqdm.write('System has not been solved! Invoke solve first')

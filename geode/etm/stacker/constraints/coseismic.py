@@ -79,7 +79,7 @@ class CoseismicConstraint(SWOkada):
         coseismic_stations = []
         for stn in all_stations:
             jump = stn.etm.jump_manager.get_geophysical_jump(self.event.id)
-            if jump and jump.p.jump_type == JumpType.COSEISMIC_JUMP_DECAY:
+            if jump and jump.p.jump_type < JumpType.POSTSEISMIC_ONLY:
                 if jump.fit:
                     coseismic_stations.append(stn)
                 else:

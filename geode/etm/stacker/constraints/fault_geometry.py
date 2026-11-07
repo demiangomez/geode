@@ -66,9 +66,6 @@ class FaultGeometry:
         # array is shorter than the index values from the full list).
 
         self.station_list = [stn for stn in stations if stn.get_coseismic_column(event.id) is not None]
-        # if not enough coseismic observations, choose postseismic with the largest relaxation value
-        if len(self.station_list) < 2:
-            self.station_list = [stn for stn in stations if stn.get_postseismic_column(event.id, relaxation) is not None]
 
         if len(self.station_list) < 2:
             # 0 stations  → nothing to fit.

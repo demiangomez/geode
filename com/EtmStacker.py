@@ -815,6 +815,17 @@ def main():
                         help=f"Tension parameter for method spline2d. "
                              f"Default value is {def_config.tension}")
 
+    parser.add_argument('-ts', '--min_time_span', type=float, default=def_config.min_time_span,
+                        metavar='years',
+                        help=f"Minimum time span (in years) to include a station. "
+                             f"Default is {def_config.min_time_span} years")
+
+    parser.add_argument('-sc', '--min_span_completion', type=float, default=def_config.min_span_completion,
+                        metavar='percent',
+                        help=f"Minimum span completion (%%) to include a station. Stations with fewer "
+                             f"observations relative to their data span are dropped. "
+                             f"Default is {def_config.min_span_completion}%%")
+
     parser.add_argument('-s_score', '--s_score_mag_limit', type=float, default=6.0, metavar='magnitude',
                         help="Limit the s-score search to earthquakes with magnitude >= {magnitude}. Default is 6.0")
 
@@ -872,7 +883,9 @@ def main():
             station_weight_scale=args.station_weight,
             vertical_method=args.vertical_method,
             vertical_load_radius=args.vertical_load_radius,
-            tension=args.tension
+            tension=args.tension,
+            min_span_completion=args.min_span_completion,
+            min_time_span=args.min_time_span
         )
 
         etm_stacker = EtmStacker(config)

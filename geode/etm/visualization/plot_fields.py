@@ -36,7 +36,12 @@ def plot_velocity_field(
         coastline_resolution: str = 'i',
         colorbar_extend: str = 'both',
         plot_sigmas: bool = False,
-        covar: list = None
+        covar: list = None,
+        sparse_lon: np.ndarray = None,
+        sparse_lat: np.ndarray = None,
+        sparse_data: list = None,
+        sparse_names: list = None,
+        on_sparse_click: Optional[callable] = None
 ) -> plt.Figure:
     """
     Plot geodetic velocity or displacement field on a map with 3 subplots (East, North, Up).
@@ -127,5 +132,10 @@ def plot_velocity_field(
         stations_names=stations_names,
         on_station_click=on_station_click,
         available_fields=available_fields,
-        covar=covar
+        covar=covar,
+        sparse_lon=sparse_lon,
+        sparse_lat=sparse_lat,
+        sparse_data=sparse_data,
+        sparse_names=sparse_names,
+        on_sparse_click=on_sparse_click
     )

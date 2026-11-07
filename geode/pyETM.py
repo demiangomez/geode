@@ -450,6 +450,7 @@ class PppSoln:
 
             # gaps: find all days without solutions which can be considered gaps in data
             self.gaps = np.setdiff1d(self.mjds, self.mjd)
+            self.span_completion = (1.0 - len(self.gaps) / len(self.mjds)) * 100.0
 
         elif len(self.blunders) >= 1:
             raise pyETMException('No viable PPP solutions available for %s (all blunders!)\n'
@@ -567,6 +568,7 @@ class GamitSoln:
 
                     # gaps: find all days without solutions which can be considered gaps in data
                     self.gaps = np.setdiff1d(self.mjds, self.mjd)
+                    self.span_completion = (1.0 - len(self.gaps) / len(self.mjds)) * 100.0
                 else:
                     dd = np.sqrt(np.sum(
                         np.square(a[:, 0:3] - np.array([stn['auto_x'], stn['auto_y'], stn['auto_z']])), axis=1))
@@ -675,6 +677,7 @@ class ListSoln(GamitSoln):
 
                     # gaps: find all days without solutions which can be considered gaps in data
                     self.gaps = np.setdiff1d(self.mjds, self.mjd)
+                    self.span_completion = (1.0 - len(self.gaps) / len(self.mjds)) * 100.0
                 else:
                     dd = np.sqrt(np.sum(np.square(a[:, 0:3] -
                                                   np.array([self.auto_x[0],
@@ -2456,12 +2459,13 @@ class ETM:
 
             # ################# FILTERED PLOT #################
 
-            f.suptitle(LABEL('station') + ' %s (%s %.2f%%) lat: %.5f lon: %.5f\n'
+            f.suptitle(LABEL('station') + ' %s (%s %.2f%%/%.2f%%) lat: %.5f lon: %.5f\n'
                                           '%s\n%s\n'
                                           'NEU wrms [mm]: %5.2f %5.2f %5.2f %s %s' %
                        (stationID(self),
                         self.soln.stack_name.upper(),
                         self.soln.completion,
+                        self.soln.span_completion,
                         self.soln.lat,
                         self.soln.lon,
                         self.Linear.print_parameters(self.ce_pos, self.soln.lat, self.soln.lon),
@@ -2534,9 +2538,9 @@ class ETM:
 
             f, axis = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(16, 10))  # type: plt.subplots
 
-            f.suptitle(LABEL('station') + ' %s (%s %.2f%%) lat: %.5f lon: %.5f'
+            f.suptitle(LABEL('station') + ' %s (%s %.2f%%/%.2f%%) lat: %.5f lon: %.5f'
                        % (stationID(self), self.soln.type.upper(), self.soln.completion,
-                          self.soln.lat, self.soln.lon) +
+                          self.soln.span_completion, self.soln.lat, self.soln.lon) +
                        '\n' + LABEL('not_enough'), fontsize=9, family='monospace')
 
             for i, ax in enumerate((axis[0], axis[1], axis[2])):
@@ -2622,12 +2626,12 @@ class ETM:
 
             f, axis = plt.subplots(nrows=2, ncols=2, figsize=(16, 10))  # type: plt.subplots
 
-            f.suptitle(LABEL('station') + ' %s (%s %.2f%%) lat: %.5f lon: %.5f\n'
+            f.suptitle(LABEL('station') + ' %s (%s %.2f%%/%.2f%%) lat: %.5f lon: %.5f\n'
                                           'VAR (N E U)      : %s\n'
                                           'COV (N-E N-U E-U): %s'
                        % (stationID(self),
                           self.soln.type.upper(), self.soln.completion,
-                          self.soln.lat, self.soln.lon,
+                          self.soln.span_completion, self.soln.lat, self.soln.lon,
                           ' '.join('%10.3e' % i for i in np.diag(self.covar)),
                           ' '.join('%10.3e' % i for i in [self.covar[0, 1], self.covar[0, 2], self.covar[1, 2]])),
                        fontsize=9, family='monospace')

@@ -56,6 +56,7 @@ class PlotDataPreparer:
             solution_type=solution_data.soln,
             stack_name=solution_data.stack_name,
             completion=solution_data.completion,
+            span_completion=solution_data.span_completion,
             latitude=solution_data.lat[0],
             longitude=solution_data.lon[0],
             north_data=component_data[0],
@@ -88,6 +89,7 @@ class PlotDataPreparer:
             solution_type=solution_data.soln,
             stack_name=solution_data.stack_name,
             completion=solution_data.completion,
+            span_completion=solution_data.span_completion,
             latitude=solution_data.lat[0],
             longitude=solution_data.lon[0],
             noise_models=[result.noise_model for result in etm_fit.results]

@@ -41,6 +41,8 @@ class EtmStackerConfig(BaseDataClass):
     vertical_load_radius: float = 50  # in km
     tension: float = 0.10
     grid_spacing: float = 25  # in km
+    min_span_completion: float = 75.0
+    min_time_span: float = 2.5
 
 
 @dataclass

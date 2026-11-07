@@ -76,12 +76,13 @@ def plot_map_view(pngfile, etm, lneu, fil, event, co_jump):
 
     fneu = etm.factor * 1000
 
-    f.suptitle(LABEL('station') + ' %s (%s %.2f%%) lat: %.5f lon: %.5f - Event: %s\n'
+    f.suptitle(LABEL('station') + ' %s (%s %.2f%%/%.2f%%) lat: %.5f lon: %.5f - Event: %s\n'
                                   '%s\n%s\n'
                                   'NEU wrms [mm]: %5.2f %5.2f %5.2f %s %s' %
                (stationID(etm),
                 etm.soln.stack_name.upper(),
                 etm.soln.completion,
+                etm.soln.span_completion,
                 etm.soln.lat,
                 etm.soln.lon,
                 event.yyyyddd(),

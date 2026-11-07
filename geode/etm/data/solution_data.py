@@ -109,6 +109,7 @@ class SolutionData(ABC):
         # Common attributes
         self.solutions: int = 0
         self.completion: float = 0.0
+        self.span_completion: float = 0.0
         self.soln: str = ""
         self.stack_name: str = ""
         self.project: str = ""
@@ -285,6 +286,7 @@ class SolutionData(ABC):
             self.time_vector_cont_mjd = ts
             self.time_vector_cont = np.array([Date(mjd=mjd).fyear for mjd in ts])
             self.gaps = np.setdiff1d(self.time_vector_cont_mjd, mjd_array)
+            self.span_completion = (1.0 - len(self.gaps) / len(ts)) * 100.0
 
     def compute_hash(self, additional_data: str = "") -> int:
         """Compute hash for the solution data"""
@@ -397,6 +399,7 @@ class SolutionData(ABC):
             'station_code': self.station_code,
             'solutions': self.solutions,
             'completion': self.completion,
+            'span_completion': self.span_completion,
             'soln': self.soln,
             'stack_name': self.stack_name,
             'project': self.project,

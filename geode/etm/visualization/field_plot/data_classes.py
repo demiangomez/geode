@@ -119,6 +119,8 @@ class PlotState:
     colorbars: List[Optional[object]] = field(default_factory=lambda: [None, None, None])
     ellipses: List[List[object]] = field(default_factory=lambda: [[], [], []])
     scatter_artists: List[Optional[object]] = field(default_factory=lambda: [None, None, None])
+    scatter_sparse: List[Optional[object]] = field(default_factory=lambda: [None, None, None])
+    quivers_sparse: List[Optional[object]] = field(default_factory=lambda: [None, None, None])
     contour_lines: List[Optional[object]] = field(default_factory=lambda: [None, None, None])
     contour_labels: List[List[object]] = field(default_factory=lambda: [[], [], []])
 
@@ -143,3 +145,9 @@ class PlotState:
     y_stn: Optional[np.ndarray] = None
     ve_stn: Optional[np.ndarray] = None
     vn_stn: Optional[np.ndarray] = None
+
+    # Sparse station projected coordinates
+    x_sparse: Optional[np.ndarray] = None
+    y_sparse: Optional[np.ndarray] = None
+    ve_sparse: Optional[np.ndarray] = None
+    vn_sparse: Optional[np.ndarray] = None

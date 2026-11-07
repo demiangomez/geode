@@ -38,6 +38,7 @@ class TimeSeriesPlotData:
     solution_type: str
     stack_name: str
     completion: float
+    span_completion: float
     latitude: float
     longitude: float
 
@@ -74,6 +75,7 @@ class NoiseModelPlotData:
     solution_type: str
     stack_name: str
     completion: float
+    span_completion: float
     latitude: float
     longitude: float
 
