@@ -17,6 +17,7 @@ from .diagnostics import DiagnosticsMixin
 from .grid_system import GridSystem
 from .types import ConstraintType
 from .constraints import ConstraintRegistry
+from .constraints import sparse as sparse_constraint
 from ..core.etm_engine import EtmEngine
 from ..core.data_classes import Earthquake
 from ...dbConnection import Cnn
@@ -33,8 +34,8 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
 
     The actual work is split across sibling modules, each mixed in or called explicitly:
       - etm_builder.py: per-station ETM construction (called directly, not mixed in --
-        it's a plain function of its inputs, with no `self` access, so that it can later
-        be handed to a parallel job server one station at a time).
+        it's a plain function of its inputs, with no `self` access, so it can be handed
+        to a multiprocessing pool one station at a time -- see add_stations_parallel).
       - earthquake_catalog.py (EarthquakeCatalogMixin): which earthquakes are modeled and
         the constraints that follow from them.
       - normal_equations.py (NormalEquationsMixin): per-station normal equations and their
@@ -123,8 +124,67 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                                        json_folder, save_json_folder)
         if result is None:
             return
-        etm, unconstrained_etm = result
+        # unconstrained_etm (Step 1's own fit, robust-least-squares) isn't used here: a
+        # sparse station gets its own dedicated, GLS-fit free fit instead -- see below.
+        etm, _ = result
+        self._add_built_station(etm, network_code, station_code)
 
+    def add_stations_parallel(self, cnn: Cnn, stnlist: List[dict],
+                              json_folder: str = None, save_json_folder: str = None):
+        """Same end result as calling add_station for every entry in stnlist, but builds
+        each station's ETM (etm_builder.build_etm -- the slow DB-fetch + least-squares
+        step, especially with config.gls_for_all_stations) across
+        config.parallel_workers worker processes instead of one at a time, using plain
+        local multiprocessing (not com/PlotETM.py's dispy/pyJobServer cluster: that
+        pattern dispatches to whatever gnss_data.cfg's node_list says, which here is a
+        separate machine set up for something else entirely -- this is "all available
+        cores" of the machine the stacker itself is running on).
+
+        Folding a built ETM into self.stations/self.sparse_stations/
+        self.normal_equations/self.total_parameters always happens here, serially, in
+        this (the main) process -- see etm_builder's own module docstring on why that
+        split (worker builds, caller folds) is deliberate. pool.imap (not
+        imap_unordered) preserves stnlist's order, so which stations end up in
+        self.stations and their parameter_range assignment is identical regardless of
+        parallel_workers.
+
+        cnn is used directly only when config.parallel_workers <= 1 (falls back to the
+        ordinary serial add_station loop below); otherwise each worker opens its own
+        fresh connection (see etm_builder.build_station_job) since a connection opened
+        here, before forking, must never be reused by a worker process.
+        """
+        if self.config.parallel_workers <= 1:
+            for stn in stnlist:
+                self.add_station(cnn, stn['NetworkCode'], stn['StationCode'],
+                                 json_folder, save_json_folder)
+            return
+
+        import multiprocessing as mp
+
+        jobs = [(self.config, stn['NetworkCode'], stn['StationCode'], json_folder, save_json_folder)
+                for stn in stnlist]
+
+        tqdm.write(f' -- Building {len(jobs)} station(s) across '
+                  f'{self.config.parallel_workers} worker processes')
+
+        ctx = mp.get_context('fork')
+        with ctx.Pool(processes=self.config.parallel_workers) as pool:
+            for network_code, station_code, etm, error in pool.imap(etm_builder.build_station_job, jobs):
+                if error is not None:
+                    tqdm.write(print_yellow(
+                        f' -- Worker exception building {network_code}.{station_code}, skipping:\n{error}'))
+                    continue
+                if etm is None:
+                    # build_etm/add_station's own skip conditions already explained
+                    # themselves via tqdm.write from inside the worker process
+                    continue
+                self._add_built_station(etm, network_code, station_code)
+
+    def _add_built_station(self, etm: EtmEngine, network_code: str, station_code: str):
+        """Fold an already-built ETM (etm_builder.build_etm's result) into the stack:
+        the min_time_span/sparse checks, Station creation, and (for a full station) its
+        normal equations -- shared by add_station (serial) and add_stations_parallel.
+        """
         if (etm.solution_data.time_vector[-1] -
                 etm.solution_data.time_vector[0]) < self.config.min_time_span:
             tqdm.write(print_yellow(
@@ -144,12 +204,11 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         station = etm_builder.create_station(etm)
 
         if is_sparse:
-            if self.config.sparse_constraints_enabled:
-                # Reuse the Step 1 fit when build_etm already computed one (e.g. a
-                # database build); otherwise (e.g. loaded from JSON, which skips Step 1
-                # for speed) compute it lazily now, only for this one sparse station.
-                station.free_fit = (unconstrained_etm if unconstrained_etm is not None
-                                    else etm_builder.build_free_fit(cnn, network_code, station_code))
+            # station.free_fit is NOT built here, even when sparse_constraints_enabled:
+            # it needs a model-validity date (see constraints/sparse.overall_validity_date),
+            # which needs every station added and constraints registered -- neither is
+            # true yet at this point in the add_station loop. build_system() builds it
+            # once that's available.
             self.sparse_stations.append(station)
             return
 
@@ -189,17 +248,33 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         # they will contain a couple dead sites but they don't affect the calculations
         self.solved = False
 
-    def build_system(self):
-        """Build the complete stacking system."""
+    def build_system(self, cnn: Cnn = None):
+        """Build the complete stacking system.
+
+        cnn is only required when self.config.sparse_constraints_enabled: it's needed to
+        build each sparse station's model-validity-windowed free fit, which can only
+        happen now (once constraints are registered below) -- see
+        constraints.sparse.build_sparse_free_fits.
+        """
         # 1. Create grids
         self.grids = GridSystem.create_from_stations(self.stations,
                                                      grid_spacing=self.config.grid_spacing,
                                                      grid_load_radius=self.config.vertical_load_radius,
                                                      method=self.config.vertical_method,
-                                                     tension=self.config.tension)
+                                                     tension=self.config.tension,
+                                                     extent_stations=self.sparse_stations)
 
         # 3. Register all constraints
         self._register_constraints()
+
+        # 4. Sparse stations' validity-windowed free fits (needs station_list, populated
+        # by _register_constraints above)
+        if self.config.sparse_constraints_enabled:
+            if cnn is None:
+                raise EtmStackerException(
+                    'build_system: sparse_constraints_enabled is True but no cnn was given '
+                    '(needed to build each sparse station\'s free fit)')
+            sparse_constraint.build_sparse_free_fits(self, cnn)
 
     def get_constraint_summary(self) -> Dict:
         """Get summary of constraint system."""

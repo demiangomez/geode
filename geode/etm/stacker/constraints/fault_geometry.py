@@ -222,36 +222,41 @@ class FaultGeometry:
         sites_nam = [stationID(stn) for stn in stations]
         N = len(stations)
 
-        # Filter stations for plane determination: all three sigma components < 0.001 m
-        sigma_threshold = 0.001
-        keep_idx = []
-        filtered_sites = []
-        for idx, j in enumerate(jumps):
-            s_n = j.p.sigmas[0][0] if len(j.p.sigmas[0]) > 0 else np.inf
-            s_e = j.p.sigmas[1][0] if len(j.p.sigmas[1]) > 0 else np.inf
-            s_u = j.p.sigmas[2][0] if len(j.p.sigmas[2]) > 0 else np.inf
-            if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
-                keep_idx.append(idx)
-            else:
-                filtered_sites.append(sites_nam[idx])
+        # REMOVED (kept for reference in case this needs revisiting): this used to
+        # pre-filter stations for plane determination to only those with all three
+        # jump-offset component sigmas < 1mm, same sigma_threshold=0.001 as the
+        # postseismic eligibility gate removed from constraints/postseismic.py (see
+        # that file for the full explanation). Here the consequence was benign --
+        # len(keep_idx) < 2 already had a graceful fallback to "use all stations" --
+        # but under gls_for_all_stations essentially no station ever clears 1mm (GLS
+        # honestly inflates parameter sigmas), so this filter was already permanently
+        # falling through to that fallback. Removed as dead code rather than kept
+        # as a no-op filter. (2026-11)
+        #
+        # sigma_threshold = 0.001
+        # keep_idx = []
+        # filtered_sites = []
+        # for idx, j in enumerate(jumps):
+        #     s_n = j.p.sigmas[0][0] if len(j.p.sigmas[0]) > 0 else np.inf
+        #     s_e = j.p.sigmas[1][0] if len(j.p.sigmas[1]) > 0 else np.inf
+        #     s_u = j.p.sigmas[2][0] if len(j.p.sigmas[2]) > 0 else np.inf
+        #     if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
+        #         keep_idx.append(idx)
+        #     else:
+        #         filtered_sites.append(sites_nam[idx])
+        # if filtered_sites:
+        #     tqdm.write(f'  Stations excluded from plane determination '
+        #                f'(sigma >= {sigma_threshold:.3f} m in >= 1 component): '
+        #                + ', '.join(filtered_sites))
 
-        if filtered_sites:
-            tqdm.write(f'  Stations excluded from plane determination '
-                       f'(sigma >= {sigma_threshold:.3f} m in >= 1 component): '
-                       + ', '.join(filtered_sites))
-
+        keep_idx = list(range(N))
         if len(keep_idx) < 2:
             # A single station produces a 1×1 NN-distance matrix whose diagonal
             # is forced to inf, making local_reg = inf and get_qpw return NaN.
             # At least 2 stations are needed for a finite nearest-neighbour offset
             # and a meaningful plane RMS comparison.
-            if keep_idx:
-                tqdm.write(f'  WARNING: Only {len(keep_idx)} station passes the sigma filter '
-                           f'(minimum 2 required); using all stations for plane determination')
-            else:
-                tqdm.write('  WARNING: No stations pass the sigma filter; '
-                           'using all stations for plane determination')
-            keep_idx = list(range(N))
+            tqdm.write(f'  WARNING: Only {len(keep_idx)} station available '
+                       f'(minimum 2 required) for plane determination')
 
         keep_idx = np.array(keep_idx)
         N_filt = len(keep_idx)

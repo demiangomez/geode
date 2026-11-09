@@ -104,6 +104,37 @@ def fill_region_with_grid(x_points, y_points, radius, apply_buffer=True) -> Tupl
     return grid_x, grid_y, hull_x, hull_y
 
 
+def fill_rectangular_region(lon_min: float, lon_max: float, lat_min: float, lat_max: float,
+                            grid_spacing_km: float, origin_lon: float, origin_lat: float
+                            ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Fill a rectangular lon/lat extent with a regular grid, spaced ~grid_spacing_km apart
+    (converted to degrees using the extent's own mean latitude, so cells stay roughly
+    square in km terms even though the grid is regular in lon/lat, not in the projection).
+
+    Unlike fill_region_with_grid, this doesn't shape the grid to a convex hull around any
+    particular set of points -- the caller controls the extent directly, then (for the
+    interpolation/display grid) land/ocean masking is applied separately, so the region
+    actually shown is cut at the coastline, not by what stations happen to surround.
+
+    Returns (grid_x, grid_y, grid_lon, grid_lat): the first two in the azimuthal-
+    equidistant projection centered at (origin_lon, origin_lat), the same
+    projected-coordinate convention the rest of this module uses.
+    """
+    mean_lat = (lat_min + lat_max) / 2.0
+    lat_step_deg = grid_spacing_km / 111.0
+    lon_step_deg = grid_spacing_km / (111.0 * max(np.cos(np.deg2rad(mean_lat)), 0.1))
+
+    lon_vals = np.arange(lon_min, lon_max + lon_step_deg, lon_step_deg)
+    lat_vals = np.arange(lat_min, lat_max + lat_step_deg, lat_step_deg)
+    grid_lon, grid_lat = np.meshgrid(lon_vals, lat_vals)
+    grid_lon = grid_lon.ravel()
+    grid_lat = grid_lat.ravel()
+
+    grid_x, grid_y = azimuthal_equidistant(origin_lon, origin_lat, grid_lon, grid_lat)
+    return grid_x, grid_y, grid_lon, grid_lat
+
+
 def visualize_disks(x_points, y_points, hull_x, hull_y, grid_x, grid_y, radius):
     """
     Visualize the scattered points, convex hull, grid points, and circles.
@@ -201,8 +232,17 @@ class GridSystem:
                              grid_spacing: float = 20,
                              grid_load_radius: float = 50,
                              method='rectload',
-                             tension: float = 0.10) -> 'GridSystem':
-        """Factory method to create grid system from stations."""
+                             tension: float = 0.10,
+                             extent_stations: List['Station'] = None) -> 'GridSystem':
+        """Factory method to create grid system from stations.
+
+        extent_stations, when given, are additional stations (typically sparse ones,
+        which own no global parameter and so don't anchor grids_origin, the SW
+        regularization offset, or the vertical-response/load grid below) whose
+        coordinates widen the interpolation/display grid's rectangular lon/lat extent,
+        so the field can be visually inspected around them too even though they don't
+        otherwise participate in building this GridSystem.
+        """
         lat = np.array([stn.lat for stn in stations])
         lon = np.array([stn.lon for stn in stations])
 
@@ -237,11 +277,25 @@ class GridSystem:
             stn.projected_coords = (stations_projected[0, i], stations_projected[1, i])
 
         ################################################################################
-        # create the grid and save it
-        grid_x, grid_y, _, _ = fill_region_with_grid(x, y, grid_spacing / 2)
+        # create the interpolation/display grid and save it: a rectangular lon/lat
+        # extent covering `stations` and extent_stations (if given), cut only at the
+        # coastline below -- not shaped to a convex hull around `stations`, so a station
+        # outside that hull (e.g. a sparse one, now a real participant in the inversion
+        # via the sparse-constraint mechanism) is still visible on the map.
+        extent_lon = list(lon)
+        extent_lat = list(lat)
+        if extent_stations:
+            extent_lon += [stn.lon for stn in extent_stations]
+            extent_lat += [stn.lat for stn in extent_stations]
+        # same 4x-radius padding fill_region_with_grid's hull buffer used, converted to degrees
+        pad_deg = (grid_spacing / 2 * 4) / 111.0
+        lon_min, lon_max = min(extent_lon) - pad_deg, max(extent_lon) + pad_deg
+        lat_min, lat_max = min(extent_lat) - pad_deg, max(extent_lat) + pad_deg
 
-        # find the lat lon of points to apply the land/ocean mask
-        glon, glat = inverse_azimuthal(grids_origin[0], grids_origin[1], grid_x, grid_y)
+        grid_x, grid_y, glon, glat = fill_rectangular_region(
+            lon_min, lon_max, lat_min, lat_max, grid_spacing, grids_origin[0], grids_origin[1])
+
+        # cut at the coastline
         mask = mask_ocean_points(glon, glat, grid_spacing * 4)
         grid_x = grid_x[mask]
         grid_y = grid_y[mask]
@@ -441,6 +495,49 @@ class GridSystem:
         return azimuthal_equidistant(np.array(self.origin[0]), np.array(self.origin[1]),
                                      np.array(lon), np.array(lat))
 
+    def compute_vertical_response_at_point(self, lon: float, lat: float,
+                                           reference_stations: List['Station'],
+                                           method: str, tension: float = 0.10) -> np.ndarray:
+        """
+        Compute the vertical elastic/spline response at an arbitrary new point -- one
+        that was not part of the station set this grid was built from (e.g. a sparse
+        station being evaluated as a prediction target). The result is dimensioned and
+        built the same way create_from_stations populated every Station.vertical_response,
+        so it can be passed as target_station.vertical_response to
+        compute_vertical_interpolant_at_point.
+
+        reference_stations must be the SAME full station list (and order doesn't matter,
+        but completeness does) that create_from_stations used -- every existing station's
+        vertical_response is a fingerprint against that exact set, and this point's
+        fingerprint has to be computed against the same set to be comparable. This is
+        independent of whichever (possibly deduplicated) subset is later used as the
+        constraining/source stations for the actual interpolation.
+        """
+        if method != 'spline2d':
+            raise NotImplementedError(
+                f"compute_vertical_response_at_point only supports vertical_method="
+                f"'spline2d' so far (got '{method}'). diskload/rectload would need the "
+                f"same disk/rect load-grid machinery create_from_stations uses, rebuilt "
+                f"for an arbitrary point.")
+
+        x, y = self.transform_coordinate(lon, lat)
+        source_x = np.array([stn.projected_coords[0] for stn in reference_stations])
+        source_y = np.array([stn.projected_coords[1] for stn in reference_stations])
+
+        # Same length_scale/tension convention as _compute_spline_responses, but length_scale
+        # is derived from the (already-built) interpolation grid extents, since that's all
+        # that's left to query post-construction (tension isn't stored on self either).
+        length_scale = np.abs(
+            (np.max(self.interpolation_grid[0]) - np.min(self.interpolation_grid[0])) +
+            1j * (np.max(self.interpolation_grid[1]) - np.min(self.interpolation_grid[1]))
+        ) / 50
+        if length_scale == 0:
+            length_scale = 1.0
+        p = np.sqrt(tension / (1 - tension)) / length_scale
+
+        r = np.abs((x - source_x) + 1j * (y - source_y))
+        return spline2dgreen(r, p)
+
     def compute_horizontal_interpolant_at_point(self, target_x: float, target_y: float,
                                                 source_x: np.ndarray,
                                                 source_y: np.ndarray,
@@ -545,6 +642,26 @@ class GridSystem:
         return ku
 
     @staticmethod
+    def _clipped_variance(predict_cova: np.ndarray, source: str) -> np.ndarray:
+        """
+        diag(predict_cova) is a propagated variance (A @ Cov @ A.T) and should never be
+        negative, but when A's own normal matrix is near-singular (ill-conditioned
+        dislocation model, e.g. too few/weakly-geometered constraining stations for an
+        event), np.linalg.inv's floating-point roundoff can leak a handful of diagonal
+        entries slightly negative -- never by more than numerical noise, since a
+        genuinely negative variance isn't possible. Clip those to zero before sqrt
+        instead of propagating NaN.
+        """
+        diag = np.diag(predict_cova)
+        negative = diag < 0
+        if np.any(negative):
+            tqdm.write(f'WARNING: {source}: clipping {np.sum(negative)}/{diag.size} negative variance '
+                       f'entries to zero (min={diag[negative].min():.3e}); likely a near-singular '
+                       f'dislocation model for this event/station set.')
+            diag = np.where(negative, 0., diag)
+        return diag
+
+    @staticmethod
     def _determine_svd_truncation(s):
         """
         Determine the truncation to apply so that the answer has no more than 7 times more
@@ -591,7 +708,8 @@ class GridSystem:
         predict_cova = at @ covar @ at.T
 
         values = np.reshape(result, (3, active_points))
-        enu_sigmas = np.reshape(np.sqrt(np.diag(predict_cova)), (3, active_points))
+        enu_sigmas = np.reshape(np.sqrt(self._clipped_variance(predict_cova, 'interpolate_field')),
+                                (3, active_points))
         # extract the ENU covariance
         en_cov = np.diag(predict_cova, k=active_points)[:active_points]  # Cov(E,N)
         eu_cov = np.diag(predict_cova, k=2 * active_points)[:active_points]  # Cov(E,U)
@@ -644,7 +762,15 @@ class GridSystem:
         c_field[1, :] = kn @ obs_h
         c_field[2, :] = ku @ observations[2]
 
-        p = np.linalg.inv(covar)
+        # pinv, not inv: two stations at (near-)identical coordinates -- e.g. igs.qui3/
+        # igs.qui4, tied together by constrain_nearby_stations -- make their rows/columns
+        # in `a` numerically duplicate, so a.T @ p @ a (and sometimes covar itself) is
+        # exactly or near-exactly rank-deficient. The leave-one-out system built during
+        # constraint collection (sw_okada.py's _compute_interpolation_coefficients)
+        # already tolerates this via lstsq; a plain inv here would just raise LinAlgError
+        # and the caller (solver.py's interpolate_fields_to_grid) would silently drop the
+        # whole field even though the constraint itself solved fine.
+        p = np.linalg.pinv(covar)
 
         # compute uncertainties
         # Build combined kernel matrix that maps full observation vector to grid predictions
@@ -655,10 +781,11 @@ class GridSystem:
         a_u = np.hstack([np.zeros((active_points, 2 * N_obs)), ku])  # ku maps L_u only, pad for L_e, L_n
         a_ = np.vstack((a_e, a_n, a_u))
         # extend covar
-        covar_e = np.linalg.inv(a.T @ p @ a)
+        covar_e = np.linalg.pinv(a.T @ p @ a)
         predict_cova = a_ @ covar_e @ a_.T
         # reshape the result
-        enu_sigma = np.reshape(np.sqrt(np.diag(predict_cova)), (3, active_points))
+        enu_sigma = np.reshape(np.sqrt(self._clipped_variance(predict_cova, 'predict_seismic_deformation')),
+                               (3, active_points))
 
         # extract the ENU covariance
         en_cov = np.diag(predict_cova, k=active_points)[:active_points]  # Cov(E,N)

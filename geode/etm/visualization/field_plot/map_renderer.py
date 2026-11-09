@@ -5,9 +5,9 @@ Cartopy-based map renderer for field visualization.
 import numpy as np
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import geopandas as gpd
-from shapely.geometry import Point
+from shapely.geometry import Point, shape
 
 
 class CartopyRenderer:
@@ -15,7 +15,11 @@ class CartopyRenderer:
     Handles Cartopy map setup, coordinate transforms, and map features.
     """
 
-    def __init__(self, resolution: str = '50m'):
+    # Plate boundary line segments (lon, lat), loaded once and shared across instances
+    _plate_boundaries: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None
+
+    def __init__(self, resolution: str = '50m', show_plate_boundaries: bool = True,
+                 plate_boundary_color: str = 'darkred', plate_boundary_width: float = 0.8):
         """
         Initialize the renderer.
 
@@ -23,8 +27,17 @@ class CartopyRenderer:
         ----------
         resolution : str
             Cartopy feature resolution: '10m', '50m', or '110m'
+        show_plate_boundaries : bool
+            Overlay the Bird (2003) PB2002 tectonic plate boundaries
+        plate_boundary_color : str
+            Line color for plate boundaries
+        plate_boundary_width : float
+            Line width for plate boundaries
         """
         self.resolution = resolution
+        self.show_plate_boundaries = show_plate_boundaries
+        self.plate_boundary_color = plate_boundary_color
+        self.plate_boundary_width = plate_boundary_width
         self.data_crs = ccrs.PlateCarree()
         self.projection = None
         self._extent = None
@@ -121,6 +134,19 @@ class CartopyRenderer:
             facecolor='none'
         )
         ax.add_feature(states_provinces, edgecolor='dimgray', linewidth=0.4, linestyle=':')
+
+        # Add tectonic plate boundaries
+        if self.show_plate_boundaries:
+            for lon, lat in self._load_plate_boundaries():
+                ax.plot(
+                    lon, lat,
+                    color=self.plate_boundary_color,
+                    linewidth=self.plate_boundary_width,
+                    linestyle='-',
+                    alpha=0.8,
+                    zorder=2,
+                    transform=self.data_crs
+                )
 
         # Add gridlines with labels
         gl = ax.gridlines(
@@ -231,6 +257,50 @@ class CartopyRenderer:
         lat_grid = coords[:, 1].reshape(original_shape)
 
         return lon_grid, lat_grid
+
+    @classmethod
+    def _load_plate_boundaries(cls) -> List[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Load the Bird (2003) PB2002 tectonic plate polygons and return their
+        boundaries as a flat list of (lon, lat) line segments, ready to plot
+        with ax.plot(). Loaded once and cached on the class.
+
+        Returns
+        -------
+        list of (lon, lat) tuples
+            One entry per plate polygon exterior (adjacent plates sharing a
+            boundary each contribute their own copy of it).
+        """
+        if cls._plate_boundaries is not None:
+            return cls._plate_boundaries
+
+        import json
+
+        try:
+            # Python 3.9+
+            from importlib.resources import files
+            data_path = files('geode.elasticity.data').joinpath('PB2002_plates.json')
+            with data_path.open('r') as f:
+                geojson = json.load(f)
+        except (ImportError, AttributeError):
+            # Python 3.7-3.8 fallback
+            from importlib.resources import path as resource_path
+            import geode.elasticity.data
+
+            with resource_path(geode.elasticity.data, 'PB2002_plates.json') as p:
+                with open(p) as f:
+                    geojson = json.load(f)
+
+        lines = []
+        for feature in geojson['features']:
+            geom = shape(feature['geometry'])
+            polygons = geom.geoms if geom.geom_type == 'MultiPolygon' else [geom]
+            for poly in polygons:
+                x, y = poly.exterior.coords.xy
+                lines.append((np.array(x), np.array(y)))
+
+        cls._plate_boundaries = lines
+        return lines
 
     @staticmethod
     def mask_ocean_points(lon: np.ndarray, lat: np.ndarray, buffer_distance: float = 0.0) -> np.ndarray:

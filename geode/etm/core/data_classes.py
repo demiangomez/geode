@@ -54,6 +54,13 @@ class AdjustmentResults(BaseDataClass):
     iterations: int = 0
     # report of the estimated noise model (NoiseCovarianceGLS only)
     noise_model: dict = field(default_factory=dict)
+    # NoiseCovarianceGLS only: the fitted lag-indexed covariance function itself (NoiseModelResult.c_lag_final,
+    # Cov(lag) for lag = 0..n_days-1 of this component's own fit), not just the zero-lag variance noise_model
+    # already carries. Kept so a caller can rebuild the same colored-noise covariance (as a Toeplitz matrix of
+    # pairwise integer-day lags) for a DIFFERENT time vector of this station/component, without re-running the
+    # noise-model estimation -- e.g. the stacker's sparse-station weighting. Empty when the adjustment model
+    # wasn't NoiseCovarianceGLS, or it fell back to the plain robust fit.
+    noise_covariance_lag: np.ndarray = field(default_factory=lambda: np.array([]))
 
     def __post_init__(self):
         super().__post_init__()
@@ -61,7 +68,7 @@ class AdjustmentResults(BaseDataClass):
         # Convert lists to numpy arrays if needed
         array_fields = ['parameters', 'parameter_sigmas', 'residuals', 'empirical_covariance',
                         'covariance_function_params', 'stochastic_signal', 'obs_sigmas', 'covariance_matrix',
-                        'outlier_flags', 'periodogram_frequencies', 'periodogram_power']
+                        'outlier_flags', 'periodogram_frequencies', 'periodogram_power', 'noise_covariance_lag']
         for field_name in array_fields:
             value = getattr(self, field_name)
             if isinstance(value, list):

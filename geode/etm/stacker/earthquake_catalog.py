@@ -6,7 +6,6 @@ that follow from them.
 
 import math
 from datetime import datetime as _dt
-from typing import List
 
 import numpy as np
 from tqdm import tqdm
@@ -15,7 +14,7 @@ from . import etm_builder
 from .constraints import InterseismicConstraint, CoseismicConstraint, PostseismicConstraint
 from .constraints.fault_geometry import FaultGeometry
 from ..core.data_classes import Earthquake
-from ..core.s_score import ScoreTable
+from ..core.s_score import batch_score_scan
 from ..core.type_declarations import JumpType
 from ...dbConnection import Cnn
 from ...pyDate import Date
@@ -30,8 +29,9 @@ class EarthquakeCatalogMixin:
         """
         Pre-compute the canonical earthquake list before any station ETMs are fitted.
 
-        For each station in stnlist, queries ScoreTable with the configured
-        magnitude_limit to find all events with s-score > 0.  Events provided
+        Scans every station in stnlist in one batched query (see
+        core.s_score.batch_score_scan) with the configured magnitude_limit to find all
+        events with s-score > 0.  Events provided
         via config.earthquakes_cherry_picked (--force) are merged on top without
         a magnitude-limit check (identical to per-station behaviour).
 
@@ -52,37 +52,41 @@ class EarthquakeCatalogMixin:
             sdate = Date(year=1975, doy=1)
         edate = Date(datetime=_dt.utcnow())
 
-        seen_ids: set = set()
-        candidate_events: List[Earthquake] = []
-        # Maps event_id -> set of station IDs (net.code) that see the event.
-        # Used by the collision check: two close events only collide if they
-        # share at least one common station.
-        event_stations: dict = {}
-
         tqdm.write(f'Pre-computing earthquake list for {len(stnlist)} stations '
                    f'(mag >= {self.config.earthquake_magnitude_limit})...')
 
-        # s-score scan for every station
-        for stn in stnlist:
-            net, code = stn['NetworkCode'], stn['StationCode']
+        # Batch every station's coordinates into one query instead of one round-trip
+        # per station -- with 70+ stations this was a meaningful fraction of this
+        # function's own wall-clock time before the per-event ScoreTable cost even
+        # starts.
+        values_list = ', '.join(
+            f"""('{stn['NetworkCode']}', '{stn['StationCode']}')""" for stn in stnlist
+        )
+        coords = {}
+        if values_list:
             rs = cnn.query_float(
-                'SELECT lat, lon FROM stations '
-                f'WHERE "NetworkCode" = \'{net}\' AND "StationCode" = \'{code}\'',
+                f'SELECT "NetworkCode", "StationCode", lat, lon FROM stations '
+                f'WHERE ("NetworkCode", "StationCode") IN ({values_list})',
                 as_dict=True
             )
-            if not rs:
+            for row in rs:
+                coords[(row['NetworkCode'], row['StationCode'])] = (float(row['lat']), float(row['lon']))
+
+        # s-score scan for every station at once -- batch_score_scan does the same
+        # per-(station, event) scoring ScoreTable does, but in a single query instead of
+        # one full scan of the earthquakes table per station (see its own docstring).
+        scan_stations = []
+        for stn in stnlist:
+            net, code = stn['NetworkCode'], stn['StationCode']
+            if (net, code) not in coords:
                 tqdm.write(f'  WARNING: Could not get coordinates for {net}.{code}, skipping')
                 continue
-            lat, lon = float(rs[0]['lat']), float(rs[0]['lon'])
+            lat, lon = coords[(net, code)]
+            scan_stations.append((net, code, lat, lon))
 
-            score = ScoreTable(cnn, net, code, lat, lon, sdate, edate,
-                               magnitude_limit=self.config.earthquake_magnitude_limit,
-                               include_all_events=True)
-            for eq in score.table:
-                if eq.id not in seen_ids:
-                    seen_ids.add(eq.id)
-                    candidate_events.append(eq)
-                event_stations.setdefault(eq.id, set()).add(f'{net}.{code}')
+        candidate_events, event_stations = batch_score_scan(
+            cnn, scan_stations, sdate, edate, self.config.earthquake_magnitude_limit)
+        seen_ids = {eq.id for eq in candidate_events}
 
         tqdm.write(f'  s-score scan: {len(candidate_events)} unique events from '
                    f'{len(stnlist)} stations')
@@ -264,15 +268,6 @@ class EarthquakeCatalogMixin:
                         is_collision=event.id in self.collided_earthquakes
                     )
                 )
-
-        # Extension point: sparse stations (self.sparse_stations) have no owned
-        # parameters and currently never contribute equations to the shared system --
-        # this is where a future constraint built from their cleaned data (see
-        # Station.free_fit) would be registered. Not implemented yet.
-        if self.config.sparse_constraints_enabled and self.sparse_stations:
-            tqdm.write(f'sparse_constraints_enabled is set but no sparse constraint '
-                       f'contribution is implemented yet ({len(self.sparse_stations)} '
-                       f'sparse station(s) will not contribute to the solve).')
 
     def _recompute_affected_stations(self, cnn: Cnn, mask: Mask,
                                      json_folder: str = None, save_json_folder: str = None):

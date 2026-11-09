@@ -45,10 +45,68 @@ class EtmStackerConfig(BaseDataClass):
     min_time_span: float = 2.5
     # Off by default: when False, sparse stations are detected and set aside
     # (self.sparse_stations) exactly as before, but never feed back into the shared
-    # normal-equation system. Turning this on currently only causes a free fit to be
-    # cached on each sparse station (Station.free_fit below) -- the constraint-building
-    # code that would actually let their data inform the shared fields does not exist yet.
+    # normal-equation system. When True, each sparse station gets a dedicated
+    # NoiseCovarianceGLS free fit (Station.free_fit) and its cleaned data is folded
+    # directly into the base normal equations -- see constraints/sparse.py.
     sparse_constraints_enabled: bool = False
+    # How many full stations need to already have data before the network's spatial
+    # fields are trusted at all (see constraints/sparse.overall_validity_date): the
+    # validity date is the epoch by which at least this many full stations have data,
+    # full stop -- a property of the network's own coverage, not of any one field.
+    sparse_validity_min_stations: int = 2
+    # Overrides the auto-computed "model validity" start date (fyear) that
+    # constraints/sparse.py uses to drop epochs predating adequate full-station coverage
+    # (see overall_validity_date there) -- both for folding a sparse station's data into
+    # the system and for windowing its diagnostic constrained-ETM plot. None (default)
+    # keeps the auto-computed date.
+    sparse_validity_override: Union[float, None] = None
+    # Experimental: a common-mode (rank-1, not-diagonal) trust ceiling added to every
+    # sparse station's own observation covariance before whitening -- see
+    # constraints/sparse._whiten_and_weight's docstring. 0.0 (default) leaves behavior
+    # unchanged; this is here to test the idea empirically, not yet validated.
+    sparse_common_mode_sigma: float = 0.0
+    # Experimental: when True, a sparse station's contribution is collapsed to one point
+    # estimate per field (via pseudo-inverse) and injected as a constraint capped at that
+    # field's own h_sigma/v_sigma, instead of being folded into the base system at full
+    # data strength -- see constraints/sparse._collapse_to_tempered_constraint. False
+    # (default) keeps the original direct-injection behavior.
+    sparse_constraint_mode: bool = False
+    # On by default: tightens (never loosens) the mutual-constraint weight on a full
+    # station's own velocity/postseismic-decay ties when that station's own
+    # normal-equation diagonal implies far more confidence than its external tie, which
+    # happens when velocity and a relaxation term are highly correlated in that
+    # station's own fit (e.g. a postseismic event whose decay has mostly saturated by
+    # the time most data arrives, making it look almost like a straight trend line) --
+    # see constraints/adaptive_weight.py. A well-conditioned station's own diagonal
+    # never triggers this, so it's a no-op for most stations.
+    adaptive_constraint_weighting_enabled: bool = True
+    # Caps the ratio between a flagged station's own diagonal and its external tie's
+    # weight at this value (own_diag / tie_weight <= target_ratio). Smaller means the
+    # external (spatially-interpolated) field is trusted more over that station's own
+    # data; empirically the result is insensitive to this below ~1 (converges to the
+    # field-only prediction) and degrades gradually, not sharply, above it -- see
+    # constraints/adaptive_weight.py's module docstring for the reasoning. 5.0 was
+    # validated against a severely entangled case (~0.88 correlation) without visibly
+    # affecting well-conditioned stations.
+    adaptive_constraint_target_ratio: float = 5.0
+    # Off by default (slow -- see parallel_workers below): fit every full station's own
+    # ETM (both the unconstrained Step 1 and the cherry-picked Step 2 build_etm does, so
+    # the Step 3 obs_sigmas/noise_covariance_lag restoration stays unbiased -- see
+    # etm_builder.build_etm) with NoiseCovarianceGLS instead of the default robust least
+    # squares, and use the resulting colored-noise covariance (not a diagonal weight) in
+    # that station's own contribution to the shared normal equations -- see
+    # normal_equations._create_normal_equations. This complements, not replaces,
+    # adaptive_constraint_weighting_enabled: GLS corrects an overconfident own-diagonal
+    # (the actual cause), the adaptive weight corrects the remaining imbalance once that
+    # diagonal is honest. Off by default because full-network GLS is considerably
+    # slower than robust least squares; use parallel_workers to offset that cost.
+    gls_for_all_stations: bool = False
+    # Number of worker processes used to build each station's own ETM (the unit of work
+    # etm_builder.build_etm already does independently per station -- see its own module
+    # docstring). 1 (default) runs serially, same as before this existed. Only affects
+    # how stations are built, not the shared normal-equation solve itself, which stays
+    # single-process. See stacker.add_stations_parallel.
+    parallel_workers: int = 1
 
 
 @dataclass

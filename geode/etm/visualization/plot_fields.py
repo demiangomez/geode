@@ -41,7 +41,10 @@ def plot_velocity_field(
         sparse_lat: np.ndarray = None,
         sparse_data: list = None,
         sparse_names: list = None,
-        on_sparse_click: Optional[callable] = None
+        on_sparse_click: Optional[callable] = None,
+        show_plate_boundaries: bool = True,
+        plate_boundary_color: str = 'darkred',
+        plate_boundary_width: float = 0.8
 ) -> plt.Figure:
     """
     Plot geodetic velocity or displacement field on a map with 3 subplots (East, North, Up).
@@ -91,6 +94,12 @@ def plot_velocity_field(
         If True, plot uncertainty ellipses instead of vectors
     covar : list of np.ndarray, optional
         Covariance data for uncertainty ellipses
+    show_plate_boundaries : bool, default=True
+        Overlay the Bird (2003) PB2002 tectonic plate boundaries
+    plate_boundary_color : str, default='darkred'
+        Line color for plate boundaries
+    plate_boundary_width : float, default=0.8
+        Line width for plate boundaries
 
     Returns
     -------
@@ -116,7 +125,10 @@ def plot_velocity_field(
         colorbar_extend=colorbar_extend,
         plot_sigmas=plot_sigmas,
         output_file=output_file,
-        title=title
+        title=title,
+        show_plate_boundaries=show_plate_boundaries,
+        plate_boundary_color=plate_boundary_color,
+        plate_boundary_width=plate_boundary_width
     )
 
     # Create visualizer and plot

@@ -8,7 +8,11 @@ import numpy as np
 from tqdm import tqdm
 
 from .data_classes import NormalEquations, Station
+from ..least_squares.noise_covariance import build_toeplitz_covariance, cholesky_whiten_design
 from ...Utils import stationID
+
+# NEU (fit.results/l index) -> ENU label, matching the [1, 0, 2] iteration order below.
+_NEU_TO_ENU_LABEL = {1: 'E', 0: 'N', 2: 'U'}
 
 
 class NormalEquationsMixin:
@@ -20,6 +24,7 @@ class NormalEquationsMixin:
         # get the observations without the jumps
         l = station.etm.solution_data.transform_to_local()
         a = station.etm.design_matrix.matrix
+        t_mjd = station.etm.solution_data.time_vector_mjd
 
         n = []
         c = []
@@ -35,11 +40,34 @@ class NormalEquationsMixin:
         prior_wrms = []
         # rearrange the NEU to ENU
         for i in [1, 0, 2]:
-            p = np.diag(1 / station.etm.fit.results[i].obs_sigmas ** 2) * weight_scale
-            n.append(a.T @ p @ a)
-            c.append(a.T @ p @ l[i])
-            lpl.append(l[i].T @ p @ l[i])
-            observation_weights.append(1 / station.etm.fit.results[i].obs_sigmas ** 2)
+            noise_lag = station.etm.fit.results[i].noise_covariance_lag
+            if noise_lag.size:
+                # This component was fit with NoiseCovarianceGLS (see
+                # EtmStackerConfig.gls_for_all_stations) and carries a real colored-noise
+                # covariance -- whiten the design against the full covariance instead of
+                # treating epochs as independent, the same technique
+                # constraints/sparse.py already uses for a sparse station's own data.
+                # weight_scale multiplies the weight, i.e. divides the covariance.
+                c_mat = build_toeplitz_covariance(t_mjd, noise_lag) / weight_scale
+                n_i, c_i, lpl_i = cholesky_whiten_design(
+                    a, l[i], c_mat, f'{stationID(station)} {_NEU_TO_ENU_LABEL[i]}')
+                n.append(n_i)
+                c.append(c_i)
+                lpl.append(lpl_i)
+                # The actual weighting used above is the full (non-diagonal) covariance,
+                # not this. This diagonal, white-noise-equivalent stand-in (the
+                # reciprocal of the zero-lag/same-epoch variance) exists only so
+                # downstream diagnostics that assume a per-epoch diagonal weight (the
+                # per-station WRMS report in solver.py, and the legacy do_vce command in
+                # etm_stacker_vce.py, which also rescales this array directly) still
+                # have something to work with -- it is not what the solve itself used.
+                observation_weights.append(np.full(a.shape[0], weight_scale / noise_lag[0]))
+            else:
+                p = np.diag(1 / station.etm.fit.results[i].obs_sigmas ** 2) * weight_scale
+                n.append(a.T @ p @ a)
+                c.append(a.T @ p @ l[i])
+                lpl.append(l[i].T @ p @ l[i])
+                observation_weights.append(1 / station.etm.fit.results[i].obs_sigmas ** 2)
             prior_wrms.append(station.etm.fit.results[i].wrms)
 
         neq = NormalEquations(

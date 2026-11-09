@@ -365,6 +365,10 @@ class SWOkada(BaseConstraint):
         Layout: [E-from-E | E-from-N | zeros] for ke,
                 [N-from-E | N-from-N | zeros] for kn,
                 [zeros    | zeros    | U-from-U] for ku.
+        Also doubles as a one-way prediction-row builder for a target with no owned
+        parameter (station.normal_equations is None -- a sparse station being evaluated,
+        not a mutually-constrained full station): _get_target_cols returns target_idx=None
+        in that case, and the -1 self-term below is simply omitted.
         """
         _ke, _kn, _ku = self.compute_constraint_coefficients(station, constraining, grids)
 
@@ -375,10 +379,11 @@ class SWOkada(BaseConstraint):
         target_idx, idx = self._get_target_cols(station, constraining)
         N_other = len(idx)
 
-        # Target station coefficient (-1)
-        ke[0, target_idx] = -1
-        kn[0, target_idx + total_parameters] = -1
-        ku[0, target_idx + total_parameters * 2] = -1
+        # Target station coefficient (-1), omitted when there is no owned parameter
+        if target_idx is not None:
+            ke[0, target_idx] = -1
+            kn[0, target_idx + total_parameters] = -1
+            ku[0, target_idx + total_parameters * 2] = -1
 
         # East prediction: from east and north observations (SW coupling)
         ke[0, idx] = _ke[:N_other]

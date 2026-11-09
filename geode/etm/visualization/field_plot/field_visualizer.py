@@ -38,7 +38,12 @@ class FieldVisualizer:
             Configuration for the visualization. Uses defaults if not provided.
         """
         self.config = config or FieldPlotConfig()
-        self.renderer = CartopyRenderer(resolution=self.config.coastline_resolution)
+        self.renderer = CartopyRenderer(
+            resolution=self.config.coastline_resolution,
+            show_plate_boundaries=self.config.show_plate_boundaries,
+            plate_boundary_color=self.config.plate_boundary_color,
+            plate_boundary_width=self.config.plate_boundary_width
+        )
         self.state = PlotState()
 
         self.fig = None

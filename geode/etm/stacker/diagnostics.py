@@ -10,9 +10,11 @@ import numpy as np
 from tqdm import tqdm
 
 from . import etm_builder
+from .constraints import sparse as sparse_constraint
 from .types import ConstraintType
 from ..core.etm_engine import EtmEngine
 from ..core.type_declarations import SolutionType, JumpType
+from ..core.data_classes import AdjustmentModels
 from ..etm_functions.polynomial import PolynomialFunction
 from ..etm_functions.jumps import JumpFunction
 from ..visualization.plot_fields import plot_velocity_field
@@ -23,7 +25,7 @@ from ...Utils import stationID
 class DiagnosticsMixin:
     """Mixed into EtmStacker: read-only consumer of self.stations/self.fields/self.config."""
 
-    def plot_grid_result(self, sigmas=False):
+    def plot_grid_result(self, sigmas=False, output_file=None):
 
         input_names = [stationID(stn) for stn in self.stations]
         input_lon = [stn.lon for stn in self.stations]
@@ -102,19 +104,33 @@ class DiagnosticsMixin:
                                    covar=fcovar,
                                    sparse_lon=sparse_lon, sparse_lat=sparse_lat,
                                    sparse_data=sparse_data, sparse_names=sparse_names,
-                                   on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None)
+                                   on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None,
+                                   output_file=output_file)
 
-    def _run_constrained_etm(self, cnn: Cnn, stn, constraints, folder=None, catch_errors=False):
+    def _run_constrained_etm(self, cnn: Cnn, stn, constraints, folder=None, catch_errors=False,
+                             validity_date=None):
         """
         Shared by plot_constrained_etm and plot_constrained_sparse_etm: build an ETM for
         `stn` with `constraints` installed (the stacked solution, or for a sparse station
         the interpolated field), run it, and plot it.
+
+        validity_date (fyear), when given, windows the fit to epochs from that date on --
+        see constraints/sparse.overall_validity_date. Plotting the full span including
+        pre-validity epochs is exactly how you'd confirm the model doesn't -- and isn't
+        expected to -- explain a sparse station before the full-station network itself
+        had enough data; this windows the diagnostic to the span it's actually meant to
+        cover.
         """
         etm_config = etm_builder.apply_config(self.config, stn.network_code, stn.station_code, cnn)
         etm_config.solution.solution_type = SolutionType.PPP
         etm_config.modeling.least_squares_strategy.constraints = constraints
         # add the prefit models that got removed from the ETM when we did the stack
         etm_config.modeling.prefit_models = copy.deepcopy(stn.etm.config.modeling.prefit_models)
+        if validity_date is not None:
+            tqdm.write(f' -- Windowing constrained ETM for {stationID(stn)} to {validity_date:.3f} onward '
+                       f'(model validity: fewer than {self.config.sparse_validity_min_stations} '
+                       f'full stations with data before then)')
+            etm_config.modeling.data_model_window = [[validity_date, 9999.]]
 
         for const in etm_config.modeling.least_squares_strategy.constraints:
             par = ''
@@ -130,6 +146,15 @@ class DiagnosticsMixin:
 
         etm_config.plotting_config.plot_show_outliers = True
         etm_config.plotting_config.plot_residuals_mode = True
+        # Always RobustLeastSquares here, regardless of config.gls_for_all_stations: the
+        # whole point of this diagnostic is to see how well the station's own data
+        # matches the externally-imposed (network) constraint. A GLS fit's stochastic
+        # signal is a collocation prediction built from the residuals against that
+        # constraint -- it can't tell a real misfit (the constraint disagreeing with the
+        # data) apart from genuine correlated noise, so it smooths right over exactly
+        # the disagreement this plot exists to show. RLS has no stochastic signal, so the
+        # residuals plotted are a direct, untouched measure of that disagreement.
+        etm_config.modeling.least_squares_strategy.adjustment_model = AdjustmentModels.ROBUST_LEAST_SQUARES
         etm = EtmEngine(etm_config, cnn=cnn, silent=True)
 
         # deactivate mechanical jumps
@@ -157,7 +182,9 @@ class DiagnosticsMixin:
         cnn = Cnn('gnss_data.cfg')
         stn = self.sparse_stations[sparse_station_index]
         tqdm.write(f'Estimating constrained etm for sparse station {stationID(stn)}')
-        self._run_constrained_etm(cnn, stn, self._build_sparse_etm_constraints(stn), folder, catch_errors=True)
+        validity_date = sparse_constraint.overall_validity_date(self)
+        self._run_constrained_etm(cnn, stn, self._build_sparse_etm_constraints(stn), folder,
+                                  catch_errors=True, validity_date=validity_date)
 
     @staticmethod
     def _sanitize_sigma(sigma):

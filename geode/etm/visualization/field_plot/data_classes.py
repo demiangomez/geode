@@ -73,6 +73,9 @@ class FieldPlotConfig:
     land_color: str = 'wheat'
     ocean_color: str = 'lightblue'
     land_alpha: float = 0.3
+    show_plate_boundaries: bool = True
+    plate_boundary_color: str = 'darkred'
+    plate_boundary_width: float = 0.8
 
     # Colormap settings
     cmap: str = 'RdBu_r'

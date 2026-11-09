@@ -91,8 +91,14 @@ class CoseismicConstraint(SWOkada):
 
     def _get_target_cols(self, station: Station,
                          constraining: List[Station]) -> Tuple[int, np.ndarray]:
-        """Get column indices for target and constraining stations."""
-        target_idx = station.get_coseismic_column(self.event.id)
+        """Get column indices for target and constraining stations.
+
+        target_idx is None when the station has no owned parameter (e.g. a sparse
+        station used only as a one-way prediction target via SWOkada._build_k_matrix,
+        not a mutually-constrained full station).
+        """
+        target_idx = (station.get_coseismic_column(self.event.id)
+                      if station.normal_equations is not None else None)
         idx = np.array([
             stn.get_coseismic_column(self.event.id)
             for stn in constraining if stn != station

@@ -77,7 +77,13 @@ class InterseismicConstraint(BaseConstraint):
                         constraining: List[Station],
                         grids: 'GridSystem',
                         total_parameters: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Build K matrix for interseismic constraint (Convention A)."""
+        """Build K matrix for interseismic constraint (Convention A).
+
+        Also doubles as a one-way prediction-row builder for a target with no owned
+        parameter (station.normal_equations is None -- a sparse station being evaluated,
+        not a mutually-constrained full station): _get_target_cols returns target_idx=None
+        in that case, and the -1 self-term below is simply omitted.
+        """
         _ke, _kn, _ku = self.compute_constraint_coefficients(station, constraining, grids)
 
         ke = np.zeros((1, total_parameters * 3))
@@ -86,9 +92,10 @@ class InterseismicConstraint(BaseConstraint):
 
         target_idx, idx = self._get_target_cols(station, constraining)
 
-        ke[0, target_idx] = -1
-        kn[0, target_idx + total_parameters] = -1
-        ku[0, target_idx + total_parameters * 2] = -1
+        if target_idx is not None:
+            ke[0, target_idx] = -1
+            kn[0, target_idx + total_parameters] = -1
+            ku[0, target_idx + total_parameters * 2] = -1
         # at the velocity position of the site, place constraint
         ke[0, np.concatenate((idx, idx + total_parameters))] = _ke
         kn[0, np.concatenate((idx, idx + total_parameters))] = _kn
@@ -98,8 +105,9 @@ class InterseismicConstraint(BaseConstraint):
         return ke, kn, ku
 
     def _get_target_cols(self, station: Station, constraining: List[Station]):
-        # Target station gets -1
-        target_idx = station.get_velocity_column()
+        # Target station gets -1 -- None when the station has no owned parameter (e.g. a
+        # sparse station used only as a one-way prediction target)
+        target_idx = station.get_velocity_column() if station.normal_equations is not None else None
 
         # Constraining stations get interpolation weights
         idx = np.array([stn.get_velocity_column() for stn in constraining])

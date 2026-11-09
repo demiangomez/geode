@@ -45,11 +45,12 @@ from geode.etm.core.data_classes import ModelingParameters, SolutionType
 from geode.etm.core.s_score import Earthquake
 from geode.etm.core.logging_config import setup_etm_logging
 from geode.etm.core.etm_stacker import EtmStacker, ConstraintType, EtmStackerConfig
+from geode.etm.stacker.constraints import sparse as sparse_constraint
 from geode.etm.core.etm_stacker_vce import EtmStackerVCEEnhanced
 from geode.etm.core.type_declarations import JumpType
 from geode.dbConnection import Cnn
 from geode.Utils import add_version_argument, station_list_help
-from geode.Utils import stationID, process_stnlist
+from geode.Utils import stationID, process_stnlist, process_date_str
 from geode.pyDate import Date
 from geode.etm.data.solution_data import SolutionData
 
@@ -177,6 +178,64 @@ class EtmStackerShell(cmd.Cmd):
         print()
         return True
 
+    def do_sparse(self, arg):
+        """
+        Turn sparse-station constraints on/off without restarting the CLI, so the same
+        session can be re-solved with and without them for comparison.
+        syntax: sparse [on|off]  (no argument toggles the current state)
+        """
+        arg = arg.strip().lower()
+        if arg in ('on', 'true', '1'):
+            new_state = True
+        elif arg in ('off', 'false', '0'):
+            new_state = False
+        elif arg == '':
+            new_state = not self.etm_stacker.config.sparse_constraints_enabled
+        else:
+            print('Usage: sparse [on|off]')
+            return
+
+        self.etm_stacker.config.sparse_constraints_enabled = new_state
+
+        if new_state and self.etm_stacker.sparse_stations:
+            missing = [stn for stn in self.etm_stacker.sparse_stations if stn.free_fit is None]
+            if missing:
+                print(f'Building free fits for {len(missing)} sparse station(s)...')
+                sparse_constraint.build_sparse_free_fits(self.etm_stacker, self.cnn)
+
+        print(f'Sparse-station constraints: {"ON" if new_state else "OFF"}. Invoke solve again when ready.')
+
+    def do_adaptive_ratio(self, arg):
+        """
+        Set the adaptive per-station constraint target ratio, or turn the mechanism on/
+        off, without restarting the CLI -- see -adaptive_target_ratio/
+        -no_adaptive_weighting and constraints/adaptive_weight.py. Only changes the
+        config; invoke solve again to see its effect.
+        syntax: adaptive_ratio [value|on|off]  (no argument prints the current setting)
+        """
+        arg = arg.strip().lower()
+        config = self.etm_stacker.config
+        if arg == '':
+            state = 'ON' if config.adaptive_constraint_weighting_enabled else 'OFF'
+            print(f'Adaptive constraint weighting: {state}, target_ratio={config.adaptive_constraint_target_ratio}')
+            return
+        if arg in ('on', 'true'):
+            config.adaptive_constraint_weighting_enabled = True
+        elif arg in ('off', 'false'):
+            config.adaptive_constraint_weighting_enabled = False
+        else:
+            try:
+                ratio = float(arg)
+            except ValueError:
+                print('Usage: adaptive_ratio [value|on|off]')
+                return
+            config.adaptive_constraint_target_ratio = ratio
+            config.adaptive_constraint_weighting_enabled = True
+
+        print(f'Adaptive constraint weighting: '
+             f'{"ON" if config.adaptive_constraint_weighting_enabled else "OFF"}, '
+             f'target_ratio={config.adaptive_constraint_target_ratio}. Invoke solve again when ready.')
+
     def do_vce(self, arg):
         # Run VCE
         vce = EtmStackerVCEEnhanced(self.etm_stacker, max_iterations=20, tolerance=1)
@@ -256,22 +315,32 @@ class EtmStackerShell(cmd.Cmd):
     def do_plot_etm(self, arg):
         """
         plot and save constrained ETM. If folder is provided, save ETM as PNG. Otherwise, show ETM interactively.
+        Works for both full and sparse stations.
         syntax: plot_etm <network.station> [folder]
         """
         if self.etm_stacker.solved:
             parts = arg.split()
+
+            def _resolve_folder():
+                if len(parts) > 1:
+                    folder = parts[1]
+                    print(f'Will save ETM for station {parts[0]} in {folder}')
+                    if not os.path.exists(folder):
+                        os.makedirs(folder)
+                    return folder
+                return None
+
             for i, stn in enumerate(self.etm_stacker.stations):
                 if stationID(stn) == parts[0]:
-                    if len(parts) > 1:
-                        folder = parts[1]
-                        print(f'Will save ETM for station {stationID(stn)} in {folder}')
-                        if not os.path.exists(folder):
-                            os.makedirs(folder)
-                    else:
-                        folder = None
-
-                    self.etm_stacker.plot_constrained_etm(i, folder)
+                    self.etm_stacker.plot_constrained_etm(i, _resolve_folder())
                     break
+            else:
+                for i, stn in enumerate(self.etm_stacker.sparse_stations):
+                    if stationID(stn) == parts[0]:
+                        self.etm_stacker.plot_constrained_sparse_etm(i, _resolve_folder())
+                        break
+                else:
+                    print(f'{parts[0]}: not found in stations or sparse_stations')
             print(self.prompt)
         else:
             print('EtmStacker is not showing as solved. Execute solve first.')
@@ -829,6 +898,58 @@ def main():
     parser.add_argument('-s_score', '--s_score_mag_limit', type=float, default=6.0, metavar='magnitude',
                         help="Limit the s-score search to earthquakes with magnitude >= {magnitude}. Default is 6.0")
 
+    parser.add_argument('-sparse', '--sparse_constraints', action='store_true',
+                        default=def_config.sparse_constraints_enabled,
+                        help="Let sparse stations (those failing -sc/-ts) feed back into the shared "
+                             "interseismic/coseismic/postseismic fields instead of being set aside as "
+                             "observation-only. Default is off.")
+
+    parser.add_argument('-sparse_validity', '--sparse_validity_date', type=str, default=None, metavar='date',
+                        help="Override the per-sparse-station model-validity start date (fyear, yyyy_ddd, "
+                             "yyyy/mm/dd, or gpswk-wkday) used with -sparse: by default each sparse "
+                             "station's data is only used from the date its own fields first have 2+ "
+                             "constraining full stations (before that, the spatial interpolation is a "
+                             "<=1-station guess). This forces one date for every sparse station instead.")
+
+    parser.add_argument('-sparse_constraint_mode', '--sparse_constraint_mode', action='store_true',
+                        default=def_config.sparse_constraint_mode,
+                        help="With -sparse: collapse each sparse station's own field estimate (via "
+                             "pseudo-inverse) and inject it as a constraint capped at that field's own "
+                             "h_sigma/v_sigma, instead of folding its per-epoch data into the base system "
+                             "at full data strength. Validated to resolve cross-station distortion that "
+                             "the default (data-strength) injection can produce; still off by default "
+                             "pending cleanup of the two paths. Recommended when using -sparse.")
+
+    parser.add_argument('-no_adaptive_weighting', '--no_adaptive_weighting', action='store_true',
+                        default=not def_config.adaptive_constraint_weighting_enabled,
+                        help="Disable adaptive per-station mutual-constraint weighting (on by default). "
+                             "That mechanism tightens a full station's own velocity/postseismic-decay tie "
+                             "when its own normal-equation diagonal implies far more confidence than its "
+                             "external tie -- see constraints/adaptive_weight.py. Turning it off restores "
+                             "the single fixed global h_sigma/v_sigma for every station.")
+
+    parser.add_argument('-adaptive_target_ratio', '--adaptive_constraint_target_ratio', type=float,
+                        default=def_config.adaptive_constraint_target_ratio, metavar='ratio',
+                        help="Caps a flagged station's own-diagonal-to-external-tie-weight ratio at this "
+                             f"value (see -no_adaptive_weighting). Default {def_config.adaptive_constraint_target_ratio}.")
+
+    parser.add_argument('-gls_for_all', '--gls_for_all_stations', action='store_true',
+                        default=def_config.gls_for_all_stations,
+                        help="Fit every full station's own ETM with NoiseCovarianceGLS instead of robust "
+                             "least squares, and use its full colored-noise covariance (not a diagonal "
+                             "weight) in that station's own contribution to the shared normal equations. "
+                             "Complements -no_adaptive_weighting's mechanism rather than replacing it: GLS "
+                             "corrects an overconfident own-diagonal, adaptive weighting corrects what's "
+                             "left once that diagonal is honest. Off by default -- considerably slower than "
+                             "robust least squares; see -parallel_workers to offset that cost.")
+
+    parser.add_argument('-parallel_workers', '--parallel_workers', type=int,
+                        default=def_config.parallel_workers, metavar='n',
+                        help="Build station ETMs across this many worker processes (local cores of this "
+                             "machine only) instead of one at a time. Only affects how stations are built, "
+                             f"not the shared normal-equation solve itself. Default {def_config.parallel_workers} "
+                             "(serial).")
+
     parser.add_argument('-load', '--load_from_file', type=str, default=None, metavar='filename',
                         help="Load ETM stacker session from pickle file")
 
@@ -885,20 +1006,26 @@ def main():
             vertical_load_radius=args.vertical_load_radius,
             tension=args.tension,
             min_span_completion=args.min_span_completion,
-            min_time_span=args.min_time_span
+            min_time_span=args.min_time_span,
+            sparse_constraints_enabled=args.sparse_constraints,
+            sparse_validity_override=(process_date_str(args.sparse_validity_date).fyear
+                                      if args.sparse_validity_date else None),
+            sparse_constraint_mode=args.sparse_constraint_mode,
+            adaptive_constraint_weighting_enabled=not args.no_adaptive_weighting,
+            adaptive_constraint_target_ratio=args.adaptive_constraint_target_ratio,
+            gls_for_all_stations=args.gls_for_all_stations,
+            parallel_workers=args.parallel_workers
         )
 
         etm_stacker = EtmStacker(config)
 
         etm_stacker.prepare_earthquake_list(cnn, stnlist)
 
-        for stn in stnlist:
-            # processing station
-            etm_stacker.add_station(cnn, stn['NetworkCode'], stn['StationCode'],
-                                    json_folder=args.load_json,
-                                    save_json_folder=args.save_json)
+        etm_stacker.add_stations_parallel(cnn, stnlist,
+                                          json_folder=args.load_json,
+                                          save_json_folder=args.save_json)
 
-        etm_stacker.build_system()
+        etm_stacker.build_system(cnn)
 
         datestr = datetime.now().strftime('%Y%m%d_%H%M%S')
         etm_stacker.filename = f'etm_stacker_session_{datestr}'

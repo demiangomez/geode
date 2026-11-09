@@ -10,6 +10,8 @@ import numpy as np
 import numpy.linalg.linalg
 from tqdm import tqdm
 
+from .constraints import adaptive_weight
+from .constraints import sparse as sparse_constraint
 from .data_classes import EtmStackerField
 from .types import ConstraintType
 from ...Utils import stationID
@@ -31,6 +33,23 @@ class SolverMixin:
             earthquakes=self.earthquakes
         )
 
+        # Tighten (never loosen) a flagged full station's own velocity/postseismic-decay
+        # mutual-constraint weight when its own diagonal implies far more confidence
+        # than that fixed, global weight -- see constraints/adaptive_weight.py. No-op
+        # when EtmStackerConfig.adaptive_constraint_weighting_enabled is False. Must run
+        # after collect_all_constraints (equations must exist) and before
+        # add_all_constraints (so the tightened sigma is what's actually applied).
+        adaptive_weight.apply_adaptive_weighting(self)
+
+        # Sparse stations' own contribution (if enabled): folded in here, alongside the
+        # base per-station normal equations, before the smoothing constraints below --
+        # see sparse_constraint.py. No-op (returns (0, 0)) when sparse_constraints_enabled
+        # is False. sparse_lpl/sparse_equations must feed into lpl/dof below, same as
+        # neq_contrib/ceq_contrib feed into system_neq/system_ceq here.
+        sparse_lpl, sparse_equations = sparse_constraint.add_sparse_contributions(
+            self, system_neq, system_ceq
+        )
+
         # Solve: Apply constraints to system and do not modify original NEQs
         self.total_constraints = self.constraint_registry.add_all_constraints(
             system_neq, self.total_parameters
@@ -47,8 +66,10 @@ class SolverMixin:
         lpl = sum(stn.normal_equations.weighted_observations[0] +
                   stn.normal_equations.weighted_observations[1] +
                   stn.normal_equations.weighted_observations[2] for stn in self.stations)
+        lpl += sparse_lpl
 
-        dof = self.total_equations * 3 + self.total_constraints - (self.total_parameters * 3)
+        dof = (self.total_equations * 3 + sparse_equations +
+               self.total_constraints - (self.total_parameters * 3))
 
         # see Kyle Snow eq 6.36 and 6.37a (y^T P y − c^T N^−1 c): since the constraint
         # rows are already folded into system_neq/system_ceq before solving, this is

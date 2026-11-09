@@ -105,27 +105,39 @@ class PostseismicConstraint(SWOkada):
         if self.is_collision:
             return [], constraining + to_constrain
 
-        # No coseismic plane available.  Determine_plane will be called fresh using
-        # these stations' jump parameters.  Apply the same sigma filter it uses
-        # (all three component sigmas < 1 mm) to check whether at least one station
-        # is well-determined enough to anchor the plane selection.
-        sigma_threshold = 0.001
-        for stn in constraining:
-            jump = stn.etm.jump_manager.get_geophysical_jump(self.event.id)
-            if jump is None:
-                continue
-            s_n = jump.p.sigmas[0][0] if len(jump.p.sigmas[0]) > 0 else np.inf
-            s_e = jump.p.sigmas[1][0] if len(jump.p.sigmas[1]) > 0 else np.inf
-            s_u = jump.p.sigmas[2][0] if len(jump.p.sigmas[2]) > 0 else np.inf
-            if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
-                # At least one anchor station exists — proceed normally.
-                return constraining, to_constrain
+        # REMOVED (kept for reference in case this needs revisiting): this used to
+        # gate on whether at least one constraining station had all three jump-offset
+        # component sigmas < 1mm, on the theory that otherwise FaultGeometry.
+        # determine_plane would be anchoring on noisy data. When no station cleared
+        # that bar, it returned ([], constraining + to_constrain), which routes
+        # through BaseConstraint.collect_constraints' "no constraining stations"
+        # branch -- that branch hardcodes constraint_sigma = [1e-6, 1e-6, 1e-6] (a
+        # ONE-MICROMETER zero-tie), completely bypassing h_sigma/v_sigma,
+        # adaptive_weight, sparse settings, and update_constraint -- nothing could
+        # reach it. Under gls_for_all_stations, GLS honestly inflates parameter
+        # sigmas (an honestly-deflated normal-equation diagonal means an inflated
+        # covariance), which pushed essentially every station's jump-offset sigma
+        # over the 1mm bar for essentially every event -- i.e. this fired for the
+        # whole network simultaneously, hard-zeroing every postseismic decay
+        # parameter network-wide regardless of any weighting. Confirmed as the
+        # actual root cause of the field collapsing to ~1e-5m with GLS on (2026-11).
+        #
+        # sigma_threshold = 0.001
+        # for stn in constraining:
+        #     jump = stn.etm.jump_manager.get_geophysical_jump(self.event.id)
+        #     if jump is None:
+        #         continue
+        #     s_n = jump.p.sigmas[0][0] if len(jump.p.sigmas[0]) > 0 else np.inf
+        #     s_e = jump.p.sigmas[1][0] if len(jump.p.sigmas[1]) > 0 else np.inf
+        #     s_u = jump.p.sigmas[2][0] if len(jump.p.sigmas[2]) > 0 else np.inf
+        #     if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
+        #         return constraining, to_constrain
+        # tqdm.write(f'PostseismicConstraint({self.event.id} {self.relaxation:.3f}): '
+        #            f'no station with all component sigmas < {sigma_threshold * 1000:.0f} mm '
+        #            f'and no coseismic plane available; zero-tying all parameters')
+        # return [], constraining + to_constrain
 
-        # All stations have poorly determined parameters: zero-tie to prevent excursion.
-        tqdm.write(f'PostseismicConstraint({self.event.id} {self.relaxation:.3f}): '
-                   f'no station with all component sigmas < {sigma_threshold * 1000:.0f} mm '
-                   f'and no coseismic plane available; zero-tying all parameters')
-        return [], constraining + to_constrain
+        return constraining, to_constrain
 
     def get_parameters_and_covariance(self, solution: np.ndarray, covariance: np.ndarray):
         """Return postseismic relaxation amplitudes and their covariance sub-matrix."""
@@ -149,8 +161,11 @@ class PostseismicConstraint(SWOkada):
             return np.array([]), np.array([])
 
     def _get_target_cols(self, station: Station, constraining: List[Station]):
-
-        target_idx = station.get_postseismic_column(self.event.id, self.relaxation)
+        # target_idx is None when the station has no owned parameter (e.g. a sparse
+        # station used only as a one-way prediction target via SWOkada._build_k_matrix,
+        # not a mutually-constrained full station).
+        target_idx = (station.get_postseismic_column(self.event.id, self.relaxation)
+                      if station.normal_equations is not None else None)
         idx = np.array([stn.get_postseismic_column(self.event.id, self.relaxation)
                         for stn in constraining if stn != station]).flatten()
 

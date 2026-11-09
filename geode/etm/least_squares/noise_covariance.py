@@ -383,6 +383,52 @@ def cholesky_jitter(build: Callable[[float], np.ndarray], what: str, start: floa
                                   f'diagonal ({e})') from e
 
 
+def build_toeplitz_covariance(t_mjd: np.ndarray, noise_lag: np.ndarray) -> np.ndarray:
+    """
+    Expand a lag-indexed colored-noise covariance function (noise_lag[k] = covariance at
+    a k-day lag, e.g. AdjustmentResults.noise_covariance_lag) into the full Toeplitz
+    covariance matrix over the given epochs (t_mjd, in MJD). Lags beyond what noise_lag
+    covers are plateaued at the largest fitted lag rather than indexed out of bounds.
+    """
+    t = np.rint(t_mjd).astype(np.int64)
+    lag_idx = np.abs(t[:, None] - t[None, :])
+    max_lag = noise_lag.size - 1
+    if np.any(lag_idx > max_lag):
+        lag_idx = np.minimum(lag_idx, max_lag)
+    return noise_lag[lag_idx]
+
+
+def cholesky_whiten_design(a: np.ndarray, obs: np.ndarray, c_mat: np.ndarray, label: str = ''
+                           ) -> Tuple[np.ndarray, np.ndarray, float]:
+    """
+    Cholesky-whiten a design matrix `a` and observation vector `obs` against the
+    covariance matrix `c_mat` (e.g. from build_toeplitz_covariance), returning the
+    whitened design's own normal-equation contribution: (a_w.T @ a_w, a_w.T @ obs_w,
+    obs_w @ obs_w) -- i.e. what a diagonal (white-noise) weighting would give via
+    a.T @ P @ a, but accounting for the full covariance between epochs instead of
+    treating them as independent. Never materializes the inverse covariance.
+
+    This is the shared whitening step used both by constraints/sparse.py (reducing a
+    sparse station's own per-epoch data to a joint field-space estimate) and by
+    normal_equations.py (a full station's own contribution to the shared stacker system,
+    when it was fit with NoiseCovarianceGLS) -- the two differ only in what `a`
+    represents (field-space columns vs. the station's own full design matrix), not in
+    how the whitening itself works.
+    """
+    def build(jitter: float) -> np.ndarray:
+        if not jitter:
+            return c_mat
+        out = c_mat.copy()
+        out[np.diag_indices(out.shape[0])] += jitter * c_mat[0, 0]
+        return out
+
+    lc, _ = cholesky_jitter(build, label or 'noise covariance')
+
+    aw = solve_triangular(lc, a, lower=True, check_finite=False)
+    obsw = solve_triangular(lc, obs, lower=True, check_finite=False)
+    return aw.T @ aw, aw.T @ obsw, float(obsw @ obsw)
+
+
 def fit_white_min(d: np.ndarray, g: np.ndarray, white_min: float, n_alpha: int,
                   f: Optional[np.ndarray] = None, c: Optional[np.ndarray] = None) -> CovarianceFit:
     """

@@ -100,6 +100,18 @@ class PlotOutputConfig(BaseDataClass):
     plot_remove_periodic: bool = False
     plot_remove_stochastic: bool = False
     plot_no_model: bool = False
+    # On by default: the model line/confidence band include the fit's own GLS-estimated
+    # stochastic (colored-noise) signal. A cherry-picked (constrained) ETM's own noise
+    # model can be distorted by large residuals near the very geophysical events it's
+    # fitting -- see etm_builder.build_etm's Step 3 docstring, which restores a
+    # constrained fit's obs_sigmas/noise_covariance_lag from the unconstrained run for
+    # exactly this reason. Callers plotting such a fit (before that restoration can even
+    # apply to a plot, since plot() runs first) set this False so the model line/
+    # confidence band stay deterministic-only instead of bending to a noise estimate the
+    # pipeline itself doesn't trust. Unlike plot_remove_stochastic (a user-facing display
+    # toggle that also changes what raw observations are shown), this never touches the
+    # plotted observations -- only whether the model curve includes the stochastic term.
+    trust_stochastic_signal: bool = True
 
     # Missing data
     plot_missing_solutions: bool = False

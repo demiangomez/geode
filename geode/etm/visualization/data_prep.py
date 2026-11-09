@@ -148,15 +148,15 @@ class PlotDataPreparer:
             mask=mask
         )
 
-    @staticmethod
-    def _add_model_and_residuals(data: ComponentData, component_idx: int,
+    def _add_model_and_residuals(self, data: ComponentData, component_idx: int,
                                  solution_data: SolutionData, etm_results: EtmFit) -> None:
         """Add model values and residuals to component data"""
         result = etm_results.results[component_idx]
         design = etm_results.design_matrix
 
-        model_values = (design.alternate_time_vector(solution_data.time_vector_cont)
-                        @ result.parameters) + result.stochastic_signal
+        model_values = design.alternate_time_vector(solution_data.time_vector_cont) @ result.parameters
+        if self.output_config.trust_stochastic_signal:
+            model_values = model_values + result.stochastic_signal
 
         data.model_time_vector = solution_data.time_vector_cont
         data.model_values = model_values * M_TO_MM

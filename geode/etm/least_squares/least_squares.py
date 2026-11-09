@@ -746,6 +746,9 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         # report and diagnostic data (in mm: the JSON output rounds to 6 decimals)
         results.noise_model = nm.summary()
         results.noise_model['units'] = {'variance': 'mm^2', 'rate': 'mm/yr', 'frequency': 'cycles/yr'}
+        # the fitted lag-covariance function itself, converted back to meters^2 (the noise model
+        # works in mm internally, scale = s) so callers never need to know that convention
+        results.noise_covariance_lag = nm.c_lag_final / s ** 2
 
         # compute spectral index of residuals and of the stochastic signal
         if self.compute_periodogram:
