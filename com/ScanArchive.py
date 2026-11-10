@@ -440,7 +440,7 @@ def insert_stninfo(NetworkCode, StationCode, stninfofile):
 
     # ready to insert stuff to station info table
     for stn in stninfo:
-        if stn.get('StationCode').lower() == StationCode:
+        if stn['StationCode'].lower() == StationCode:
             try:
                 # call station info again in case there was a change from other records
                 stnobj = station_info.StationInfo(cnn, NetworkCode, StationCode, allow_empty=True)
