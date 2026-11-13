@@ -1586,7 +1586,7 @@ class Cnn(object):
 
                 debug("Database connection established")
 
-                # run_db_migrations(self)
+                run_db_migrations(self)
 
             except psycopg2.Error as e:
                 raise e
