@@ -42,6 +42,7 @@ that boundary. Do not invent or assume API/frontend code exists in this repo.
 
 ## Living docs
 
+- [workflows.md](workflows.md) — repeatable process patterns (e.g. evaluating a new dependency)
 - [STATUS.md](STATUS.md) — current development focus, outstanding tasks, roadmap notes
 - [known-issues.md](known-issues.md) — known bugs, doc/code drift, dead code (non-sensitive, technical only)
 - [decisions/](decisions/) — ADRs: architectural decisions with rationale and consequences

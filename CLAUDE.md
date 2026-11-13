@@ -24,6 +24,8 @@ of making you rediscover the codebase from scratch.
 
 ## Maintaining the knowledge base
 
+- Evaluating whether to add a new dependency? See
+  [knowledge/workflows.md](knowledge/workflows.md) first — there's a consistent pattern for this.
 - End of a significant task: write a checkpoint (`knowledge/checkpoints/YYYY-MM-DD-slug.md`) — see
   `/geode-checkpoint`.
 - Found a bug, doc drift, or dead code while working on something else: add it to
