@@ -330,6 +330,9 @@ def execute_ppp(rinexinfo, args, stnm, options, sp3types, sp3altrn, brdc_path, e
     # a remote worker's own print() would happen on that node and never reach the local console.
     output = []
 
+    if isinstance(solve_troposphere, list):
+        solve_troposphere = solve_troposphere[0]
+
     # put the correct APR coordinates in the header.
     # stninfo = pyStationInfo.StationInfo(None, allow_empty=True)
     brdc = pyProducts.GetBrdcOrbits(brdc_path, rinexinfo.date, rinexinfo.rootdir)
