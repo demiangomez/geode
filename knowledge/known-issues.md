@@ -70,3 +70,10 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
 - `run_db_migrations()` (`geode/dbConnection.py`) is the only schema-change mechanism and has no
   version table — purely existence-checked idempotent DDL. Verify its call site is actually active
   before assuming new migrations will run; it has been observed commented out in the past.
+- `gamit_antenna_residuals`'s FK to `gamit_stats` (`(project, subnet, year, doy, system)`) only
+  declares `ON DELETE CASCADE`, not `ON UPDATE CASCADE` — the same shape that caused
+  `ppp_antenna_residuals` -> `ppp_soln` to crash `station_merge` (fixed 2026-11-13, see
+  [checkpoints/2026-11-13-ppp-antenna-residuals-fk.md](checkpoints/2026-11-13-ppp-antenna-residuals-fk.md)).
+  Currently harmless because `gamit_stats` is not in `station_merge.TIME_TABLES` and nothing
+  `UPDATE`s its key columns in place. Revisit if `gamit_stats` ever becomes mutable by a
+  merge-like code path.
