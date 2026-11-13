@@ -162,4 +162,4 @@ BSD 3-Clause License
 
 ## Support
 
-For questions, issues, or contributions, please open an issue on the [GitHub repository](https://github.com/demiangomez/Parallel.GAMIT).
+For questions, issues, or contributions, please open an issue on the [GitHub repository](https://github.com/demiangomez/geode).

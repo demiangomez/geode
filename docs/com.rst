@@ -54,10 +54,10 @@ com.CloseStationInfo module
 	:hook:
 	:prog: CloseStationInfo.py
 
-com.CompareDBs module
----------------------
+com.CampaignPlanner module
+---------------------------
 
-.. automodule:: com.CompareDBs
+.. automodule:: com.CampaignPlanner
    :members:
    :undoc-members:
    :show-inheritance:
@@ -76,6 +76,14 @@ com.ConvertDate module
 	:hook:
 	:prog: ConvertDate.py
 
+com.ConvertMetadata module
+---------------------------
+
+.. automodule:: com.ConvertMetadata
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 com.ConvertTrimble module
 -------------------------
 
@@ -89,6 +97,14 @@ com.ConvertTrimble module
 	:func: main
 	:hook:
 	:prog: ConvertTrimble.py
+
+com.CreateEtmFunctions module
+-------------------------------
+
+.. automodule:: com.CreateEtmFunctions
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 com.DRA module
 --------------
@@ -131,6 +147,14 @@ com.DownloadSourcesFill module
 	:func: main
 	:hook:
 	:prog: DownloadSourcesFill.py
+
+com.EtmStacker module
+----------------------
+
+.. automodule:: com.EtmStacker
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 com.FixPlate module
 -------------------
@@ -202,6 +226,22 @@ com.LocateRinex module
 	:hook:
 	:prog: LocateRinex.py
 
+com.MergeStation module
+-------------------------
+
+.. automodule:: com.MergeStation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+com.ModelProcessing module
+-----------------------------
+
+.. automodule:: com.ModelProcessing
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 com.NEQStack module
 -------------------
 
@@ -265,6 +305,14 @@ com.PlotMapView module
 	:func: main
 	:hook:
 	:prog: PlotMapView.py
+
+com.PrintVelocities module
+---------------------------
+
+.. automodule:: com.PrintVelocities
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
 com.QueryETM module
 -------------------
@@ -344,6 +392,30 @@ com.StationInfoEdit module
 	:hook:
 	:prog: StationInfoEdit.py
 
+com.StationKmz module
+-----------------------
+
+.. automodule:: com.StationKmz
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+com.StationReport module
+---------------------------
+
+.. automodule:: com.StationReport
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+com.SyncMetadata module
+--------------------------
+
+.. automodule:: com.SyncMetadata
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 com.SyncOrbits module
 ---------------------
 
@@ -407,14 +479,6 @@ com.Ztd2trp module
 	:func: main
 	:hook:
 	:prog: Ztd2trp.py
-
-com.gamit\_stats module
------------------------
-
-.. automodule:: com.gamit_stats
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 Module contents
 ---------------
