@@ -53,12 +53,21 @@ requirements.
     in the returned dict).
   - `n_clock_jumps` is `analysisResults['ExtraOutputInfo']['nClockJumps']` (also
     `meanClockJumpInterval`/`stdClockJumpInterval` alongside it).
-  - **There is no pre-binned "slips by elevation band" field.** The design doc's schema column
-    (`rinex_qc_signal.slips_by_elev int[]`, documented as "as reported by the tool") is not
-    literally reported by the tool as a single value — `aggregate.py` has to compute it itself,
-    by cross-referencing each per-PRN slip period's start epoch against that satellite's
-    `sat_elevation_angles` at that epoch and bucketing into bands. Noted so a future session
-    doesn't go looking for a field that isn't there.
+  - **Correction after running it against real data (LHCL day 005, 2026) — trust this over the
+    static source-reading above.** `range1_slip_distribution`, `cycle_slip_distribution`,
+    `LLI_slip_distribution` and `slip_distribution_LLI_fusion` (and their `_per_sat` variants) are
+    **not** plain `int`/`np.ndarray` as the `SignalStats` dataclass's own type annotations and
+    docstring claim — at runtime each is actually a `dict` with keys `n_slips_0_10, n_slips_10_20,
+    n_slips_20_30, n_slips_30_40, n_slips_40_50, n_slips_over50, n_slips_NaN, n_slips_Tot`. So the
+    design doc's `rinex_qc_signal.slips_by_elev int[]` column **is** directly reported by the tool
+    after all — `aggregate.py` just reads the six band keys (dropping `n_slips_NaN`/`n_slips_Tot`,
+    the latter being redundant with the scalar `n_slips`) into an ordered array, no cross-referencing
+    of slip periods against elevation arrays needed. `slip_distribution_LLI_fusion` (the
+    deduplicated fusion of the algorithmic and LLI-reported methods) is what `aggregate.py` uses
+    for the primary `n_slips`/`slips_by_elev` columns, over the other three raw methods — it's the
+    most complete single signal gnssmultipath computes. This is a good general lesson for future
+    gnssmultipath-version bumps: verify its dataclass docstrings against an actual run before
+    trusting them, they can drift from the real return shape.
   - **GeoDE does not need to parse `Result_files_CSV/<SYSTEM>_results.csv` at all.** Every value
     the design doc planned to read from that CSV (per-epoch MP, SNR, azimuth, elevation per code)
     is already present in-process in the returned `analysisResults` dict. `runner.py`/

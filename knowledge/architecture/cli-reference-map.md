@@ -9,6 +9,7 @@ lookup, not a usage guide.
 | `ArchiveService.py` | `pyArchiveStruct`, `pyOptions` | Archive ingestion (locks, visit files) |
 | `DownloadSources.py`, `DownloadSourcesFill.py` | `proto_download`, `pyOptions` | Raw data retrieval |
 | `ScanArchive.py` | `pyArchiveStruct`, `pyPPP`, `pyOTL` | RINEX+PPP+OTL ingestion; precursor to `ParallelGamit.py` |
+| `RinexQC.py` | `geode/rinex_qc/`, `pyRinex`, `pyProducts` | Per-signal/per-bin RINEX QC (multipath/SNR/cycle-slips) via `gnssmultipath`; standalone JSON/CSV output in this phase, see [known-issues.md](../known-issues.md) for what's still ahead |
 | `IntegrityCheck.py` | `dbConnection`, `pyArchiveStruct` | DB/archive consistency checks + fixes |
 | `ParallelGamit.py` | `geode/gamit/`, `network.py`, `geode/clustering`, `pyJobServer` | Main GAMIT/GLOBK orchestrator |
 | `ModelProcessing.py` | `geode/clustering` | Subnetwork sizing / runtime estimation |

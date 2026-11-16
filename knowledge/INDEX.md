@@ -39,6 +39,7 @@ that boundary. Do not invent or assume API/frontend code exists in this repo.
 | [architecture/campaign-clustering-elasticity.md](architecture/campaign-clustering-elasticity.md) | `geode/campaign_planner/`, `geode/clustering/`, `geode/elasticity/` + `pyOkada.py` |
 | [architecture/external-django-app.md](architecture/external-django-app.md) | The sibling web app's DB footprint and integration points, as seen from this repo |
 | [architecture/cli-reference-map.md](architecture/cli-reference-map.md) | Which `com/*.py` script imports which library subsystem (quick lookup table) |
+| [architecture/rinex-qc.md](architecture/rinex-qc.md) | `geode/rinex_qc/`, `com/RinexQC.py` — per-signal/per-bin RINEX QC via `gnssmultipath`; Phase 1 done, schema/DB/backfill not yet built |
 
 ## Living docs
 

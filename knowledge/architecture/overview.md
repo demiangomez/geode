@@ -16,7 +16,7 @@ Package name on PyPI is `geode-gnss` (see `pyproject.toml`); the import path is 
   lives in `geode/`.
 - **`geode/`** — the library. Flat core modules directly under `geode/`, plus subpackages for each
   major subsystem: `etm/`, `gamit/`, `metadata/`, `campaign_planner/`, `clustering/`, `elasticity/`,
-  `reports/`, `tests/`.
+  `reports/`, `rinex_qc/`, `tests/`.
 
 See [cli-reference-map.md](cli-reference-map.md) for which script uses which subsystem.
 
@@ -70,7 +70,9 @@ node used for parallel processing (checked at startup by `pyJobServer.test_node`
 
 - `geode/tests/` (pytest): `test_pydate.py`, `test_comparator.py`, `test_make_clusters.py`,
   `test_station_info.py`, `test_station_merge.py`, `test_noise_covariance.py` +
-  `test_noise_covariance_jitter.py`, `test_version.py`.
+  `test_noise_covariance_jitter.py`, `test_version.py`, `test_pyrinex_header.py`,
+  `test_rinex_qc_config.py`, `test_rinex_qc_signals.py`, `test_rinex_qc_orbits.py`,
+  `test_rinex_qc_aggregate.py`.
 - Coverage gaps: nothing tests `etm_engine`, `DesignMatrix`, the `AdjustmentStrategy` classes, any
   of `geode/etm/stacker/`, `geode/gamit/`, `geode/dbConnection.py`, or any `com/*.py` CLI script
   end-to-end.

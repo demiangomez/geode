@@ -342,6 +342,20 @@ com.ReadPackage module
 	:hook:
 	:prog: ReadPackage.py
 
+com.RinexQC module
+------------------
+
+.. automodule:: com.RinexQC
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. sphinx_argparse_cli::
+	:module: com.RinexQC
+	:func: main
+	:hook:
+	:prog: RinexQC.py
+
 com.S\-score module
 -------------------
 
