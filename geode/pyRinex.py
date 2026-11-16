@@ -96,6 +96,7 @@ class RinexRecord(object):
         self.rel_completion    = None
         self.rinex_version     = None
         self.min_time_seconds  = 3600
+        self.header_fixed      = False
 
         # log list to append all actions performed to rinex file
         self.log = []
@@ -421,8 +422,14 @@ class ReadRinex(RinexRecord):
                     # reformat the header line
                     if record in ('TIME OF FIRST OBS',
                                   'TIME OF LAST OBS'):
-                        if self.system == 'M' and not fields[6].strip():
-                            fields[6] = 'GPS'
+                        if not fields[6].strip():
+                            # RINEX 2 allows TIME SYSTEM to be blank for single-GNSS files
+                            # (GPS time is implied), but some tools downstream (e.g.
+                            # gnssmultipath 2.2.0) raise on a blank field regardless of
+                            # system. Always fill it in on the temporary copy.
+                            fields[6] = {'G': 'GPS', 'R': 'GLO', 'E': 'GAL',
+                                        'S': 'GPS'}.get(self.system, 'GPS')
+                            self.header_fixed = True
                             self.log_event('Adding TIME SYSTEM to TIME OF FIRST OBS')
 
                         if first_obs is None:
