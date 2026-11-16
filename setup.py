@@ -43,6 +43,7 @@ if __name__ == "__main__":
         'com/PlotMapView.py',
         'com/PrintVelocities.py',
         'com/QueryETM.py',
+        'com/RinexQC.py',
         'com/S-score.py',
         'com/ScanArchive.py',
         'com/Stacker.py',
