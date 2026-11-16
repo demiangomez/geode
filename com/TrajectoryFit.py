@@ -11,7 +11,6 @@ import base64
 import os
 import json
 import matplotlib.pyplot as plt
-from mpl_toolkits.basemap import Basemap
 import simplekml
 from scipy.interpolate import griddata
 

@@ -21,9 +21,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "numpy==1.26.4",
+    "numpy==2.4.6",
     "pandas",
     "tqdm==4.66.5",
     "anthropic",
@@ -36,16 +36,14 @@ dependencies = [
     "charset-normalizer==3.4.4",
     "earthscope-cli==0.8.2",
     "earthscope-sdk==0.2.0",
-    "basemap==1.4.0",
     "cryptography",
     "dirsync>=2.2.4",
     "geopy==2.4.1",
     #h5py==3.4.0
     #hdf5storage>=0.1.18
-    "usgs-libcomcat",
     "matplotlib>=2.0.0",
     "munch==2.5.0",
-    "netifaces==0.10.9",
+    "netifaces==0.11.0",
     "networkx",
     "paramiko",
     "psutil>=5.6.3",

@@ -4,8 +4,15 @@ Living document — update opportunistically when priorities shift materially, n
 commit. Keep entries short; move resolved items out rather than accumulating a history here (that
 belongs in [checkpoints/](checkpoints/)).
 
-## Active focus (as of 2026-11-13)
+## Active focus (as of 2026-11-16)
 
+- **RINEX QC module** (gnssmultipath-based MP/SNR/cycle-slip stats) is in progress. Its
+  dependency evaluation required bumping GeoDE to **Python ≥3.11** (`numpy` now `2.4.6`,
+  `basemap`/`usgs-libcomcat` removed — see
+  [decisions/0002-python-311-migration.md](decisions/0002-python-311-migration.md) and
+  [checkpoints/2026-11-16-python-311-migration.md](checkpoints/2026-11-16-python-311-migration.md)).
+  Check `git branch`/env before assuming either the QC module or the Python-3.11 baseline is on
+  whatever you're currently looking at if this note is stale.
 - **ETM Stacker spatial-stacking stability.** Per-station velocity/postseismic-decay instability
   for sparsely-constrained stations is not resolved by reweighting the tie strength — the field a
   station ties to is itself built from other stations' independently-ambiguous fits. See

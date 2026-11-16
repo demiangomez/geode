@@ -43,7 +43,7 @@
 - Storage: Varies by network size (estimate ~100MB per station-year for RINEX + products)
 
 **Software Dependencies:**
-- Python 3.10
+- Python 3.11
 - PostgreSQL 12 or higher
 - GAMIT/GLOBK 10.71 or higher
 - GFZRNX
@@ -176,7 +176,7 @@ COPY gamit_htc FROM '/path/to/gamit_htc.csv' DELIMITER ',' CSV HEADER;
 pip install geode
 ```
 
-**Note**: Use Python 3.10 and consider using a virtual environment.
+**Note**: Use Python 3.11 and consider using a virtual environment.
 
 ### 3.3 Configuration File
 
@@ -2261,7 +2261,7 @@ bash   pip install dispy
 ```
 
 Open required ports (51347-51350)
-Verify Python 3.10 on all nodes
+Verify Python 3.11 on all nodes
 
 7.4 File System Issues
 7.4.1 Disk Space
