@@ -1146,7 +1146,7 @@ class EtmFit:
 
     def process_covariance(self):
 
-        cov = np.zeros((3, 1))
+        cov = np.zeros(3)
 
         self.covar = np.diag([r.wrms ** 2 for r in self.results])
 

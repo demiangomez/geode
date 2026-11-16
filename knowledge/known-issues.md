@@ -45,6 +45,31 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
   gitignored build artifacts — harmless, but `geode.egg-info` is leftover cruft from before the
   PyPI package rename and can be deleted without consequence whenever someone's cleaning up.
 
+## NumPy 2.x migration fallout (numpy 1.26.4 -> 2.4.6, commit 3c65737)
+
+- `geode/pyETM.py:2311-2334` (`process_covariance`) has the same bug that was fixed in
+  `geode/etm/least_squares/least_squares.py:1147-1170`: `cov = np.zeros((3, 1))` makes each
+  `cov[k]` a 1-element 1-D array rather than a scalar, and assigning that into a true scalar slot
+  (`self.covar[0, 1] = cov[0]`) raises `ValueError: setting an array element with a sequence.`
+  under numpy>=2.x (numpy 1.x silently squeezed it). **Not fixed** — `pyETM.py` is legacy and must
+  not be modified (see `CLAUDE.md`). Hits whenever `NoiseCovarianceGLS` output chi2/dof check
+  triggers the N/E/U covariance step on a station processed through the legacy path (e.g. old
+  `PlotETM.py` call paths still wired to `pyETM.py` instead of `geode/etm/`).
+- No test in `geode/tests/` exercises `process_covariance` / `NoiseCovarianceGLS`'s
+  N-E/E-U/N-U covariance step directly, which is why this wasn't caught until it was hit live for
+  station `igs.rmbo`. Worth adding regression coverage for `LeastSquares.process_covariance` with
+  non-trivial per-component outlier flags.
+- `np.row_stack` (deprecated alias for `np.vstack`) is still used in `com/NEQStack.py`,
+  `com/FixPlate.py`, and `geode/pyStack.py`. It still works in numpy 2.4.6 (emits
+  `DeprecationWarning`) but is scheduled for removal in a future numpy release. Low priority —
+  `pyStack.py` is legacy-but-load-bearing (see `knowledge/architecture/etm-stacker.md`), and the
+  `com/` call sites are simple one-line swaps to `np.vstack` whenever someone's in that code.
+- A grep sweep for other numpy 2.0 breaking changes (removed scalar aliases like `np.float`/
+  `np.int`/`np.bool`/`np.object`/`np.string_`/`np.unicode_`, removed `np.product`/`np.alltrue`/
+  `np.msort`, `copy=False` semantics, `np.matrix`, `ndarray.newbyteorder`, private `np.core`
+  imports) found no other hits as of 2026-11-16. Full test suite (`pytest geode/tests`) passes
+  (208 passed, 127 skipped) after the `least_squares.py` fix.
+
 ## Dead/broken code
 
 - `geode/elasticity/elastic_gridder.py` imports `from elastic_interpolation import
