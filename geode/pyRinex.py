@@ -543,12 +543,12 @@ class ReadRinex(RinexRecord):
 
         # determine the program to pipe into
         if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_CRINEZ_2):
-            prg2 = ' crx2rnx > "%s"' % self.rinex_path
+            prg2 = ' | crx2rnx > "%s"' % self.rinex_path
         else:
             prg2 = ' > "%s"' % self.rinex_path
 
         # create an uncompression script
-        self.create_script('uncompress.sh', prg1 + '|' + prg2)
+        self.create_script('uncompress.sh', prg1 + prg2)
 
         # run crz2rnx with timeout structure
         cmd = pyRunWithRetry.RunCommand(os.path.join(self.rootdir, 'uncompress.sh'), 45)
