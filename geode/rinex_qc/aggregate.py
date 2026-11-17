@@ -31,8 +31,8 @@ def make_equal_area_grid(ring_width_deg=DEFAULT_RING_WIDTH_DEG,
     in ring i, proportional to cos(ring-centre elevation) so each cell
     covers roughly the same patch of sky (sectors start at 0 deg = north,
     clockwise). Deterministic by construction -- same arguments always
-    produce the same grid; a grid actually stored in qc_grid is never
-    recomputed, only ever referenced by its grid_id.
+    produce the same grid; a grid actually stored in rinex_qc_grids is
+    never recomputed, only ever referenced by its grid_id.
     """
     n_rings = int(round(90.0 / ring_width_deg))
     elev_edges = [round(i * ring_width_deg, 6) for i in range(n_rings + 1)]

@@ -1540,7 +1540,7 @@ def _run_db_migrations(cnn: 'Cnn'):
     # RinexQC: per-signal/per-bin RINEX quality-control statistics
     # (multipath, SNR, cycle slips) computed by the gnssmultipath library.
     # See knowledge/architecture/rinex-qc.md. Four tables and two views:
-    #   qc_grid               -- az-el grid definitions, write-once/versioned
+    #   rinex_qc_grids        -- az-el grid definitions, write-once/versioned
     #   rinex_qc_run          -- one row per QC run (one rinex file x tool x config)
     #   rinex_qc_signal       -- one row per run x signal (gnss/band_attr)
     #   rinex_qc_signal_bins  -- one row per run x signal x grid, bins as arrays
@@ -1549,8 +1549,8 @@ def _run_db_migrations(cnn: 'Cnn'):
     # never drift from what the code actually generates) -- no separate
     # elevation-ring grid is stored; collapse the az-el grid at query time
     # if an elevation-only view is ever needed. A different grid (finer
-    # rings, different sector scheme, ...) is a *new* qc_grid row with a
-    # new id, never an edit to an existing one -- existing runs keep
+    # rings, different sector scheme, ...) is a *new row* in rinex_qc_grids
+    # with a new id, never an edit to an existing one -- existing runs keep
     # pointing at whatever grid_id they were computed with.
     rinex_qc_run_exists = cnn.query_float("""
         SELECT EXISTS (
@@ -1560,7 +1560,7 @@ def _run_db_migrations(cnn: 'Cnn'):
         """, as_dict=True)
 
     if not rinex_qc_run_exists[0]['exists']:
-        print(' >> Creating RinexQC tables (qc_grid, rinex_qc_run, rinex_qc_signal, '
+        print(' >> Creating RinexQC tables (rinex_qc_grids, rinex_qc_run, rinex_qc_signal, '
               'rinex_qc_signal_bins)...')
 
         from .rinex_qc.aggregate import make_equal_area_grid
@@ -1570,7 +1570,7 @@ def _run_db_migrations(cnn: 'Cnn'):
 
         cnn.begin_transac()
         cnn.query("""
-            CREATE TABLE qc_grid (
+            CREATE TABLE rinex_qc_grids (
                 id          smallint PRIMARY KEY,
                 kind        varchar  NOT NULL,
                 elev_edges  real[]   NOT NULL,
@@ -1578,18 +1578,18 @@ def _run_db_migrations(cnn: 'Cnn'):
                 description text
             );
 
-            COMMENT ON TABLE qc_grid IS
+            COMMENT ON TABLE rinex_qc_grids IS
                 'Az-el grid definitions used to bin RinexQC per-epoch statistics. Write-once: a '
                 'changed grid is a new row with a new id, never an edit to an existing one.';
-            COMMENT ON COLUMN qc_grid.kind IS
+            COMMENT ON COLUMN rinex_qc_grids.kind IS
                 'Grid family, e.g. ''azel_equal_area''.';
-            COMMENT ON COLUMN qc_grid.elev_edges IS
+            COMMENT ON COLUMN rinex_qc_grids.elev_edges IS
                 'Elevation ring boundaries in degrees, e.g. {0,5,10,...,90} for 18 5-degree rings.';
-            COMMENT ON COLUMN qc_grid.az_bins IS
+            COMMENT ON COLUMN rinex_qc_grids.az_bins IS
                 'Number of azimuth sectors per elevation ring (same length as elev_edges minus '
                 'one); sectors start at 0 degrees (north) and run clockwise.';
 
-            INSERT INTO qc_grid (id, kind, elev_edges, az_bins, description) VALUES
+            INSERT INTO rinex_qc_grids (id, kind, elev_edges, az_bins, description) VALUES
                 (1, 'azel_equal_area', """ + elev_edges_sql + """, """ + az_bins_sql + """,
                  'Default az-el equal-area grid: 5-degree elevation rings, azimuth sectors per '
                  'ring proportional to cos(ring-centre elevation) so each cell covers roughly the '
@@ -1712,7 +1712,7 @@ def _run_db_migrations(cnn: 'Cnn'):
                 run_id     bigint   NOT NULL REFERENCES rinex_qc_run(id) ON DELETE CASCADE,
                 gnss       char(1)  NOT NULL,
                 band_attr  char(2)  NOT NULL,
-                grid_id    smallint NOT NULL REFERENCES qc_grid(id),
+                grid_id    smallint NOT NULL REFERENCES rinex_qc_grids(id),
                 n_obs      integer[],
                 mp_rms_mm  smallint[],
                 snr_ddbhz  smallint[],
@@ -1739,7 +1739,7 @@ def _run_db_migrations(cnn: 'Cnn'):
                        ring.n_sectors                      AS n_sectors,
                        COALESCE(sum(ring.n_sectors) OVER (PARTITION BY g.id ORDER BY ring.ordinality
                                     ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS cells_before
-                FROM qc_grid g
+                FROM rinex_qc_grids g
                 CROSS JOIN LATERAL unnest(g.az_bins) WITH ORDINALITY AS ring(n_sectors, ordinality)
             )
             SELECT b.run_id, b.gnss, b.band_attr, b.grid_id,
@@ -1761,7 +1761,7 @@ def _run_db_migrations(cnn: 'Cnn'):
 
             COMMENT ON VIEW rinex_qc_bins_long IS
                 'One row per grid cell (unnested from rinex_qc_signal_bins''s flat arrays), with '
-                'the cell''s elevation/azimuth limits resolved from qc_grid. For ad-hoc SQL only; '
+                'the cell''s elevation/azimuth limits resolved from rinex_qc_grids. For ad-hoc SQL only; '
                 'numerical work (pooling, stacking) reads the arrays directly.';
 
             CREATE VIEW rinex_qc_latest AS

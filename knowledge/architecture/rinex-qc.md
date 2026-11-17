@@ -56,7 +56,7 @@ Exit code 0 iff every file finished `ok`/`partial`.
   `slips_by_elev` source — a judgment call among four slightly different slip-detection methods
   `gnssmultipath` computes, not something the design doc specified.
 - **Grid storage is az-el-only**, per Demian's explicit decision: no separate elevation-ring grid is
-  seeded or stored; `qc_grid` holds only the equal-area az-el grid, write-once/versioned (a
+  seeded or stored; `rinex_qc_grids` holds only the equal-area az-el grid, write-once/versioned (a
   different grid needs a new `grid_id`, never an edit to an existing row — not yet implemented,
   this is a Phase 2/schema note for whoever builds it).
 - **`pool()` operates on the stored representation** (`n_obs`/`mp_rms`/`snr_mean` arrays, `NaN` =
@@ -69,7 +69,7 @@ Exit code 0 iff every file finished `ok`/`partial`.
 
 ## Schema (Phase 2, done)
 
-`qc_grid`, `rinex_qc_run`, `rinex_qc_signal`, `rinex_qc_signal_bins` + views `rinex_qc_bins_long`/
+`rinex_qc_grids`, `rinex_qc_run`, `rinex_qc_signal`, `rinex_qc_signal_bins` + views `rinex_qc_bins_long`/
 `rinex_qc_latest`, added to `geode/dbConnection.py`'s `_run_db_migrations()`, including the
 defensive `rinex.api_id` existence-check-and-add (needed because GeoDE Studio's Django app, not
 this repo, normally creates that column, and it may not exist on every install). A few departures
@@ -84,7 +84,7 @@ from the design doc's literal DDL, worth knowing before writing the Phase 3 DB w
   need to join `rinex` every time.
 - The unique key is `(rinex_id, tool, tool_version, config_hash)` — simpler than the doc's 5-column
   version now that `rinex_id` alone identifies the file.
-- `qc_grid` seeds exactly **one** row (`id=1`, the az-el equal-area grid), computed live from
+- `rinex_qc_grids` seeds exactly **one** row (`id=1`, the az-el equal-area grid), computed live from
   `geode.rinex_qc.aggregate.make_equal_area_grid()` at migration time rather than a hardcoded
   literal — so the seeded DB row can never drift from what the code actually generates. No
   elevation-ring grid is seeded (Demian's call — see the checkpoint).
@@ -93,7 +93,7 @@ from the design doc's literal DDL, worth knowing before writing the Phase 3 DB w
   is a `RinexQCConfig` (client-side) notion this schema has no way to query. It relies on
   incremental/backfill runs always targeting the current default config, so in practice the
   newest run per file+tool already is the default-config one.
-- `rinex_qc_bins_long` resolves each unnested cell's elevation/azimuth limits via a `qc_grid`-driven
+- `rinex_qc_bins_long` resolves each unnested cell's elevation/azimuth limits via a `rinex_qc_grids`-driven
   CTE (cumulative sum of `az_bins` per ring via a window function) — validated against a real
   Postgres instance, see the checkpoint for exact numbers.
 
