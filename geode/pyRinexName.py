@@ -19,12 +19,18 @@ TYPE_RINEX  = 1
 TYPE_RINEZ  = 2
 TYPE_CRINEX = 3
 TYPE_CRINEZ_2 = 4
+TYPE_RINEZ_2  = 5
+TYPE_RINEZ_3  = 6
+TYPE_CRINEZ_3 = 7
 
 version_2_ext = {TYPE_CRINEZ  : 'd.Z',
                  TYPE_RINEX   : 'o',
                  TYPE_RINEZ   : 'o.Z',
                  TYPE_CRINEX  : 'd',
-                 TYPE_CRINEZ_2: 'd.gz'}  # some newer files come in d.gz
+                 TYPE_CRINEZ_2: 'd.gz',   # some newer files come in d.gz
+                 TYPE_RINEZ_2 : 'o.gz',   # NOAA CORS also distributes o.gz
+                 TYPE_RINEZ_3 : 'o.zip',
+                 TYPE_CRINEZ_3: 'd.zip'}
 
 version_3_ext = {TYPE_CRINEZ : 'crx.gz',
                  TYPE_RINEX  : 'rnx',
@@ -181,7 +187,7 @@ class RinexNameFormat(object):
 
             # DDG: identify file type from filename
             sfile = re.findall(r'[A-Z0-9]{9}_[RSU]_[0-9]{11}_[0-9]{2}[MHDYU]_[0-9]{2}[CZSMHDU]_'
-                               r'[GREJCISM][OMN]\.(crx|rnx)(.gz|.zip|.bzip2|.bz2)?$', filename)
+                               r'[GREJCISM][OMN]\.(crx|rnx)(.gz|.Z|.zip|.bzip2|.bz2)?$', filename)
             if not sfile:
                 raise RinexNameException('Could not determine the rinex type (malformed filename): ' + filename)
             elif sfile[0][0] == 'rnx':
@@ -216,7 +222,7 @@ class RinexNameFormat(object):
     def split_filename(self, filename):
 
         if self.version < 3:
-            sfile = re.findall(r'(\w{4})(\d{3})(\w*)\.(\d{2})([doOD](?:.gz|.Z)?)$', filename)
+            sfile = re.findall(r'(\w{4})(\d{3})(\w*)\.(\d{2})([doOD](?:.gz|.Z|.zip)?)$', filename)
 
             if sfile:
                 if len(sfile[0][2]) > 1:
@@ -227,7 +233,7 @@ class RinexNameFormat(object):
                                          (filename, str(self.version)))
         else:
             sfile = re.findall(r'([A-Z0-9]{9})_([RSU])_([0-9]{11})_([0-9]{2}[MHDYU])_([0-9]{2}[CZSMHDU])_'
-                               r'([GREJCISM][OMN])\.((?:crx|rnx)(?:.gz|.zip|.bzip2|.bz2)?)$', filename)
+                               r'([GREJCISM][OMN])\.((?:crx|rnx)(?:.gz|.Z|.zip|.bzip2|.bz2)?)$', filename)
             if sfile:
                 return sfile[0]
             else:
