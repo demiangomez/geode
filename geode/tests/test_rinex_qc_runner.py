@@ -88,6 +88,70 @@ def test_detrend_by_arc_drops_arcs_shorter_than_min_length():
     assert np.all(np.isnan(detrended))
 
 
+def test_detrend_by_arc_splits_on_a_gap_even_without_a_slip_flag():
+    # A satellite can set and rise again (or just drop out briefly)
+    # without RINGO ever flagging a slip across the gap -- there's
+    # nothing to compare against when there's no data in between. A
+    # single fit bridging two genuinely unrelated runs produces giant,
+    # physically meaningless residuals right at the gap -- this is the
+    # real production bug (see module docstring): confirmed on a real
+    # file where one "arc" silently spanned a 2643-epoch gap.
+    n = 3000
+    raw = np.full((n, 1), np.nan)
+    first_run = np.arange(10, 30)         # one real pass, offset ~5
+    second_run = np.arange(2700, 2720)    # a much later, unrelated pass, offset ~-5
+    raw[first_run, 0] = 5.0
+    raw[second_run, 0] = -5.0
+    slip = np.zeros((n, 1), dtype=bool)   # no slip flagged anywhere
+
+    detrended = runner._detrend_by_arc(raw, slip)
+    # each run is perfectly constant on its own -- if the gap between
+    # them were bridged by one fit, the huge jump from +5 to -5 across
+    # ~2700 "epochs" of nothing would show up as a large residual right
+    # at the edges of one or both runs; split correctly, each run is its
+    # own constant and detrends to exactly zero.
+    assert np.allclose(detrended[first_run, 0], 0.0, atol=1e-9)
+    assert np.allclose(detrended[second_run, 0], 0.0, atol=1e-9)
+
+
+def test_detrend_by_arc_splits_on_a_small_gap_too():
+    # not just huge gaps -- even a handful of missing epochs produced a
+    # smaller but real version of the same artifact on a different
+    # satellite in the real file this was found on.
+    n = 40
+    raw = np.full((n, 1), np.nan)
+    before_gap = np.arange(0, 15)
+    after_gap  = np.arange(20, 35)        # a 5-epoch gap, no slip flagged
+    raw[before_gap, 0] = 3.0
+    raw[after_gap, 0] = -3.0
+    slip = np.zeros((n, 1), dtype=bool)
+
+    detrended = runner._detrend_by_arc(raw, slip)
+    assert np.allclose(detrended[before_gap, 0], 0.0, atol=1e-9)
+    assert np.allclose(detrended[after_gap, 0], 0.0, atol=1e-9)
+
+
+def test_detrend_by_arc_uses_a_rolling_not_global_window():
+    # a degree-5 fit spanning a long, genuinely continuous run can swing
+    # wildly near its own ends (Runge's-phenomenon-style edge
+    # instability) even with no gap at all -- confirmed on a real
+    # 241-epoch arc. A rolling window keeps every individual fit short
+    # regardless of how long the overall run is.
+    rng = np.random.default_rng(0)
+    n = 300
+    t = np.arange(n, dtype=np.float64)
+    trend = 0.01 * t - 0.00006 * t ** 2  # a slow, smooth curve over the whole run
+    noise = rng.normal(0, 0.1, size=n)
+    raw = (trend + noise).reshape(-1, 1)
+    slip = np.zeros((n, 1), dtype=bool)
+
+    detrended = runner._detrend_by_arc(raw, slip)
+    assert np.all(np.isfinite(detrended))
+    # residuals should look like the injected noise, not blow up near
+    # the ends the way a single whole-run polynomial fit did on real data
+    assert np.nanmax(np.abs(detrended)) < 1.0
+
+
 def test_detrend_by_arc_leaves_missing_data_as_nan():
     raw = np.array([[1.0], [np.nan], [1.0], [1.0], [1.0], [1.0], [1.0], [1.0]])
     slip = np.zeros((8, 1), dtype=bool)

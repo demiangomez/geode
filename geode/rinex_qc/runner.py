@@ -36,11 +36,14 @@ the text summary itself reports around 0.5m). RINGO detrends internally
 for that summary but doesn't expose the result per epoch anywhere we can
 read it (its running-mean qclog output still includes the slip jump
 itself before resetting, which is worse, not better). _detrend_by_arc()
-removes a degree-5 polynomial fit per slip-bounded arc instead -- the
-standard way to separate out the residual ionospheric term (itself
-smoothly time-varying, not whole-arc-constant) from genuine multipath,
-and empirically the closest match found to RINGO's own per-satellite
-numbers (within ~1-10%, vs 5-20x off for a flat per-arc mean).
+removes a degree-5 polynomial trend, fit over a rolling window within
+each slip-bounded arc, instead -- the standard way to separate out the
+residual ionospheric term (itself smoothly time-varying, not
+whole-arc-constant) from genuine multipath. A degree-5 fit landed within
+~1-10% of RINGO's own per-satellite numbers (vs 5-20x off for a flat
+per-arc mean); fit over a *rolling window* rather than the whole arc at
+once after a global per-arc fit turned out to be numerically unstable at
+arc boundaries on real data -- see _detrend_by_arc()'s own docstring.
 """
 import io
 import subprocess
@@ -48,6 +51,7 @@ import time
 
 import numpy as np
 import pandas as pd
+from scipy import signal
 
 from geode.rinex_qc import signals
 
@@ -55,11 +59,16 @@ BAND_CODES = ('1', '2', '5')
 DEFAULT_RINGO_BIN = 'ringo'
 DEFAULT_TIMEOUT_S = 600
 
-# Degree of the per-arc polynomial removed from raw MP before any
-# statistic sees it (see module docstring). An arc shorter than DETREND_DEGREE + 2
-# points can't be fit meaningfully (no degrees of freedom left for a
-# residual) and is dropped entirely rather than left under-detrended.
+# Degree and rolling-window size for the per-arc polynomial detrend
+# removed from raw MP before any statistic sees it (see module
+# docstring and _detrend_by_arc()). DETREND_WINDOW matches RINGO's own
+# default rolling-average window for MP-based slip detection
+# (`s.mp.win`), chosen for consistency rather than independently tuned.
+# An arc shorter than DETREND_DEGREE + 2 points can't be fit meaningfully
+# (no degrees of freedom left for a residual) and is dropped entirely
+# rather than left under-detrended.
 DETREND_DEGREE   = 5
+DETREND_WINDOW   = 51
 MIN_ARC_EPOCHS   = DETREND_DEGREE + 2
 
 
@@ -212,11 +221,34 @@ def _pivot(df, value_col, prns, is_flag=False):
 
 def _detrend_by_arc(raw_mp, slip_mask):
     """
-    Remove a degree-DETREND_DEGREE polynomial fit per slip-bounded arc,
-    column by column (one GNSS satellite per column). A slip-flagged
-    epoch starts a new arc (belongs to the arc after the jump, not
-    before) -- see module docstring for why a polynomial, not a constant
-    mean, is needed here.
+    Remove a degree-DETREND_DEGREE polynomial trend per *continuously
+    observed* arc, column by column (one GNSS satellite per column), fit
+    over a rolling window rather than the whole arc at once. A
+    slip-flagged epoch starts a new arc (belongs to the arc after the
+    jump, not before) -- but a slip flag is not the only thing that ends
+    one: "no slip was flagged" also just means the satellite was never
+    observed long enough in a row to compare against, which is equally
+    true across a brief dropout *and* across the satellite fully setting
+    and rising again hours later. Confirmed on a real file: one
+    slip-bounded "arc" silently spanned a 2643-epoch (~22 hour) gap where
+    the satellite was below the elevation mask the whole time -- two
+    unrelated passes, read by this code as one arc because nothing
+    tripped the slip detector across a gap with no data to compare. A
+    single fit (global or windowed) bridging that gap produced giant,
+    physically meaningless residuals right at the boundary -- enough to
+    overflow rinex_qc_signal_bins.mp_rms_mm's smallint column in
+    production. So an arc is additionally split wherever consecutive
+    *observed* epochs aren't adjacent (any gap at all, not just a large
+    one -- even a handful of missing epochs produced a smaller but real
+    version of the same artifact on a different satellite).
+
+    Within one such continuously-observed run, the polynomial is fit over
+    a rolling window rather than across the whole run at once, since a
+    single high-degree polynomial asked to span a long domain is prone to
+    oscillating wildly near its own ends (Runge's-phenomenon-style edge
+    instability) even without any gap involved. scipy.signal.savgol_filter
+    is a vectorized rolling polynomial fit evaluated at each window's
+    centre -- not a coincidentally-similar tool, the exact one for this.
     """
     detrended = np.full_like(raw_mp, np.nan)
     nepochs, nsats = raw_mp.shape
@@ -228,14 +260,19 @@ def _detrend_by_arc(raw_mp, slip_mask):
         arc_id = np.cumsum(slip_mask[:, j])
         for arc in np.unique(arc_id[valid]):
             idx = np.flatnonzero(valid & (arc_id == arc))
-            if len(idx) < MIN_ARC_EPOCHS:
-                continue  # too short to fit DETREND_DEGREE reliably, drop it
-            # fit against an arc-local, zero-based x axis -- a raw absolute
-            # epoch index (up to a few thousand) raised to the 5th power
-            # makes the Vandermonde matrix poorly conditioned (numpy's
-            # RankWarning); the fit and its residuals are identical either
-            # way, this only changes the numerical stability of getting there.
-            x = (idx - idx[0]).astype(np.float64)
-            coeffs = np.polyfit(x, col[idx], DETREND_DEGREE)
-            detrended[idx, j] = col[idx] - np.polyval(coeffs, x)
+            # further split on any gap between consecutive observed
+            # epochs -- see docstring; np.split on the break points keeps
+            # each piece's own original (non-contiguous-overall) indices.
+            breaks = np.flatnonzero(np.diff(idx) > 1) + 1
+            for run in np.split(idx, breaks):
+                if len(run) < MIN_ARC_EPOCHS:
+                    continue  # too short to fit DETREND_DEGREE reliably, drop it
+                # shrink the window for a run shorter than the default,
+                # but never below what DETREND_DEGREE itself needs;
+                # savgol_filter requires an odd window_length > polyorder.
+                window = min(DETREND_WINDOW, len(run))
+                if window % 2 == 0:
+                    window -= 1
+                trend = signal.savgol_filter(col[run], window, DETREND_DEGREE)
+                detrended[run, j] = col[run] - trend
     return detrended

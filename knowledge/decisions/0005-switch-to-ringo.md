@@ -79,6 +79,26 @@ per-satellite numbers on every satellite checked, vs 15-100%+ off for simpler al
 per-arc mean, linear per-arc detrend) that were tried and rejected first. This is now GeoDE's own
 algorithm to maintain, not a black box inside a library call.
 
+**Owning that algorithm meant owning its bugs too, and a real one reached production the same
+day.** A live `--backfill` run hit `psycopg2.errors.NumericValueOutOfRange: smallint out of range`
+writing `rinex_qc_signal_bins.mp_rms_mm`. Root cause: `_detrend_by_arc()` only split arcs on an
+explicit slip flag, but "no slip flagged" doesn't mean "continuously observed" — it can also mean
+there was nothing to compare against across a long gap (the satellite fully set and rose again
+hours later, or just dropped out briefly). One arc silently spanned a 2643-epoch (~22 hour) gap
+between two unrelated passes; a single fit (global or windowed) bridging it produced ±30-40m
+residuals right at the boundary. Fixed two ways at once: (1) arcs are now further split on *any*
+index discontinuity, not just slip flags, before fitting; (2) the fit itself moved from one
+global polynomial per arc to `scipy.signal.savgol_filter` — a rolling-window polynomial fit,
+chosen because a single high-degree fit over a long-but-genuinely-continuous span is *also*
+prone to Runge's-phenomenon-style edge instability on its own, independent of the gap bug. Also
+added a defense-in-depth guard in `writer._quantize_bins()`: a value that would still overflow
+smallint is now stored as `NULL` for that one cell rather than crashing the whole file's write —
+the gap bug is fixed, but a single bad bin should never again be able to take an entire otherwise-
+good file down with it. Side benefit, not just a crash fix: several satellites' whole-signal RMS
+dropped to match the rest of the file much more closely once the hidden gap-inflation was removed
+(e.g. one file's GLONASS P2 RMS went from an earlier-reported 1.58m to 0.50m) — the bug was
+inflating results across many files to a lesser degree, not just the ones extreme enough to crash.
+
 **Multipath identity is band-level, not exact-code-level, for every signal going forward.** RINGO
 reports MP/GF/MW/slips per band (1/2/5), not per exact RINEX observation code — it never says which
 range+phase attribute it combined for a given band. Every RINGO-sourced `rinex_qc_signal` row has

@@ -142,11 +142,24 @@ def _bins_value(run_id, item, col):
     return {'n_obs': n_obs, 'mp_rms_mm': mp_rms_mm, 'snr_ddbhz': snr_ddbhz}[col]
 
 
+_SMALLINT_MAX = 32767  # postgres smallint range is -32768..32767
+
+
 def _quantize_bins(bins):
     """
     Storage-time quantization: MP in mm, SNR in 0.1 units, both smallint;
     an empty cell (n_obs == 0) is NULL across all three arrays, not zero,
     per rinex_qc_signal_bins' own convention.
+
+    A quantized value outside smallint range is stored as NULL rather
+    than passed through -- a real production crash (one bad bin took
+    down an entire file's write, inside one execute_values() call with
+    no per-row recovery) traced to a since-fixed multipath-detrending bug
+    (runner._detrend_by_arc(), see its docstring) that briefly produced
+    bins over 32m. That root cause is fixed, but this guard stays as a
+    second line of defense: one future bad bin should mean one NULL
+    cell, never the whole file silently losing every other signal's
+    otherwise-good data.
     """
     n_obs, mp_rms_mm, snr_ddbhz = [], [], []
     for i in range(len(bins['n_obs'])):
@@ -156,9 +169,16 @@ def _quantize_bins(bins):
             snr_ddbhz.append(None)
             continue
         n_obs.append(int(bins['n_obs'][i]))
-        mp_rms_mm.append(None if math.isnan(bins['mp_rms'][i]) else int(round(bins['mp_rms'][i] * 1000)))
-        snr_ddbhz.append(None if math.isnan(bins['snr_mean'][i]) else int(round(bins['snr_mean'][i] * 10)))
+        mp_rms_mm.append(_safe_smallint(bins['mp_rms'][i], 1000))
+        snr_ddbhz.append(_safe_smallint(bins['snr_mean'][i], 10))
     return n_obs, mp_rms_mm, snr_ddbhz
+
+
+def _safe_smallint(value, scale):
+    if math.isnan(value):
+        return None
+    quantized = int(round(value * scale))
+    return quantized if abs(quantized) <= _SMALLINT_MAX else None
 
 
 def _json_default(obj):

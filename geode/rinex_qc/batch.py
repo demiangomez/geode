@@ -103,9 +103,17 @@ def callback_handle(job):
         if status == pipeline.STATUS_FAILED:
             tqdm.write(' -- %s: %s' % (station, message))
     elif job.exception:
-        tqdm.write(' -- unhandled error, see %s' % ERRORS_LOG)
+        # an exception here means run_qc_job() itself raised (e.g. inside
+        # write_db(), after process_one_file() already returned 'ok') --
+        # unlike the job.result branch above, nothing has identified which
+        # file this was yet. job.args is whatever submit() was called with
+        # (record, config, force), so pull the identity out of record.
+        record = job.args[0] if job.args else {}
+        station = '%s.%s %s/%s' % (record.get('NetworkCode'), record.get('StationCode'),
+                                   record.get('ObservationYear'), record.get('ObservationDOY'))
+        tqdm.write(' -- %s: unhandled error, see %s' % (station, ERRORS_LOG))
         with open(ERRORS_LOG, 'a') as f:
-            f.write(str(job.exception) + '\n')
+            f.write('%s\n%s\n' % (station, job.exception))
 
 
 def process_batch(JobServer, candidates, config, force=False, desc='RinexQC'):
@@ -125,6 +133,12 @@ def process_batch(JobServer, candidates, config, force=False, desc='RinexQC'):
         callback_handle(job)
         if job.result is not None:
             counts[job.result[0]] += 1
+        elif job.exception:
+            # otherwise an unhandled exception (e.g. inside write_db(),
+            # after process_one_file() already returned 'ok') silently
+            # disappeared from the ok/partial/failed tally entirely --
+            # counted here as failed, same as any other non-success.
+            counts[pipeline.STATUS_FAILED] += 1
 
     pbar = tqdm(total=len(candidates), desc='%-30s' % (' >> ' + desc), ncols=160, disable=None)
 

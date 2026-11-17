@@ -55,12 +55,29 @@ Exit code 0 iff every file finished `ok`/`partial`.
   raw ~2.5m vs its reported ~0.55m). RINGO detrends internally for that summary but never exposes
   the result per epoch anywhere readable (its `qc --qclog` running-mean output still includes the
   raw jump at each slip before resetting, which is worse, not better, for binning). `runner.py`'s
-  `_detrend_by_arc()` fits and removes a **degree-5 polynomial per slip-bounded arc** (arcs shorter
-  than `DETREND_DEGREE + 2` epochs are dropped entirely — too short to fit reliably) before
-  anything downstream — including the per-bin az-el aggregation — ever sees an MP value. Chosen
-  over simpler alternatives (flat per-arc mean: ~1.0-2x off; linear per-arc detrend: ~25-30% off)
+  `_detrend_by_arc()` fits and removes a **degree-5 polynomial, over a rolling window, per
+  continuously-observed run** (not just per slip-bounded arc — see below) before anything
+  downstream — including the per-bin az-el aggregation — ever sees an MP value. Chosen over
+  simpler alternatives (flat per-arc mean: ~1.0-2x off; linear per-arc detrend: ~25-30% off)
   because it's standard practice for isolating the ionospheric term and landed within ~1-10% of
-  RINGO's own numbers on every satellite checked. This also means `obs_code_orig`/`band_attr` for
+  RINGO's own numbers on every satellite checked. Runs shorter than `DETREND_DEGREE + 2` epochs are
+  dropped entirely — too short to fit reliably.
+  **Two real bugs found in this algorithm after it first shipped, both from the same root cause:**
+  a slip-bounded "arc" can silently span a huge gap in actual observation (the satellite set and
+  rose again hours later, or just dropped out briefly) with no slip ever flagged across it, since
+  there's nothing to compare against when there's no data in between. One real file's "arc" spanned
+  a 2643-epoch (~22 hour) gap between two unrelated passes; fitting across it (whether as one global
+  polynomial or one rolling-window fit) produced ±30-40m residuals at the boundary — a real
+  production crash (`psycopg2.errors.NumericValueOutOfRange` writing `rinex_qc_signal_bins.mp_rms_mm`,
+  a `smallint[]` column). Fixed by (1) additionally splitting on *any* gap in observed epochs, not
+  just slip flags, and (2) switching the fit itself from one global polynomial per arc to a rolling
+  window via `scipy.signal.savgol_filter`, since a single high-degree fit over a long-but-genuinely-
+  continuous run is independently prone to Runge's-phenomenon-style edge wobble. `writer._quantize_bins()`
+  also gained a defense-in-depth guard: a value that would still overflow smallint is stored as
+  `NULL` for that one cell, never crashes the whole file's write. See ADR-0005's "Consequences" for
+  the full story, including that this wasn't just a crash fix — several satellites' whole-signal
+  RMS dropped to match the rest of their file once the hidden gap-inflation was removed.
+  This also means `obs_code_orig`/`band_attr` for
   every RINGO-sourced signal is a *band*, not an exact RINEX code (`'MP1'`/`'1?'`, not e.g.
   `'C1C'`/`'1C'`) — RINGO never says which exact range+phase attribute it combined for a band, so
   `mp_partner` is always `NULL` and `snr_band_only` is always `True` for these rows.

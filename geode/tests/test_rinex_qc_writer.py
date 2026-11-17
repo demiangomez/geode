@@ -28,3 +28,17 @@ def test_quantize_bins_handles_multiple_cells_independently():
     assert n_obs == [None, 5, 10]
     assert mp_rms_mm == [None, 50, 300]
     assert snr_ddbhz == [None, 400, 385]
+
+
+def test_quantize_bins_stores_null_instead_of_overflowing_smallint():
+    # a real production crash (one bad bin killed an entire file's write
+    # inside one execute_values() call) traced to a since-fixed
+    # detrending bug that briefly produced >32m bins -- this is the
+    # second line of defense, see _quantize_bins()'s docstring.
+    bins = {'n_obs': np.array([5, 5]),
+           'mp_rms': np.array([40.0, 0.3]),   # 40m -> 40000mm, over smallint's 32767 max
+           'snr_mean': np.array([45.0, 38.5])}
+    n_obs, mp_rms_mm, snr_ddbhz = writer._quantize_bins(bins)
+    assert n_obs == [5, 5]            # n_obs itself is untouched -- it's a real count either way
+    assert mp_rms_mm == [None, 300]   # only the offending cell is nulled
+    assert snr_ddbhz == [450, 385]    # the valid SNR for that same bin survives
