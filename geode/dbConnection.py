@@ -1718,10 +1718,6 @@ def _run_db_migrations(cnn: 'Cnn'):
                 snr_ddbhz  smallint[],
                 PRIMARY KEY (run_id, gnss, band_attr, grid_id)
             );
-            ALTER TABLE rinex_qc_signal_bins
-                ALTER COLUMN n_obs     SET COMPRESSION lz4,
-                ALTER COLUMN mp_rms_mm SET COMPRESSION lz4,
-                ALTER COLUMN snr_ddbhz SET COMPRESSION lz4;
 
             COMMENT ON TABLE rinex_qc_signal_bins IS
                 'One row per RinexQC run x signal x grid; bins stored as flat arrays, one entry '
@@ -1780,6 +1776,35 @@ def _run_db_migrations(cnn: 'Cnn'):
                 'not something this schema stores, so this view cannot filter on it directly.';
         """)
         cnn.commit_transac()
+
+    ##################################################################
+    # RinexQC: best-effort lz4 compression on rinex_qc_signal_bins's array
+    # columns. Storage optimization only, never required for correctness
+    # -- lz4 column compression needs PostgreSQL built with --with-lz4,
+    # which is not guaranteed just because the server is new enough (14+)
+    # to support the feature at all; confirmed unsupported on at least one
+    # real GeoDE deployment. Attempted in its own transaction, separate
+    # from the table creation above, so a server without lz4 support never
+    # breaks table creation (and checked on every connection, not only
+    # when the table is first created, so it still applies automatically
+    # if the server is ever upgraded to support it).
+    bins_compression = cnn.query_float("""
+        SELECT attcompression FROM pg_attribute
+        WHERE attrelid = 'rinex_qc_signal_bins'::regclass AND attname = 'n_obs';
+        """, as_dict=True)
+
+    if bins_compression and bins_compression[0]['attcompression'] != 'l':
+        try:
+            cnn.begin_transac()
+            cnn.query("""
+                ALTER TABLE rinex_qc_signal_bins
+                    ALTER COLUMN n_obs     SET COMPRESSION lz4,
+                    ALTER COLUMN mp_rms_mm SET COMPRESSION lz4,
+                    ALTER COLUMN snr_ddbhz SET COMPRESSION lz4;
+            """)
+            cnn.commit_transac()
+        except DatabaseError:
+            cnn.rollback_transac()
 
 
 def adapt_numpy_array(numpy_array):
