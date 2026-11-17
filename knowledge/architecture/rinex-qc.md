@@ -6,10 +6,11 @@ Module Implementation Instructions"); several things changed from that doc's fir
 actual codebase and `gnssmultipath`'s real behavior were checked — see the ADRs below rather than
 trusting the original doc's assumptions.
 
-**Status as of 2026-11-17: Phase 1 (standalone CLI) and Phase 2 (schema) are done and validated.
-Phase 3 (DB writer, backfill/incremental CLI modes, `ArchiveService.py` hook) is not yet built —
-`writer.py` still only writes JSON/CSV; nothing in this package talks to the database yet.** Check
-`git log`/`git branch` before assuming otherwise.
+**Status as of 2026-11-17: Phases 1, 2 and 3 are all done and validated** (standalone CLI, schema,
+DB writer, `--incremental`/`--backfill` CLI modes, and the `ArchiveService.py` hook). What's left
+is validating against the project's actual documented fixtures (see "What's not built yet" below)
+and dynamic visualization (planned next, no code yet). Check `git log`/`git branch` before
+assuming otherwise.
 
 ## Package layout
 
@@ -21,10 +22,15 @@ Phase 3 (DB writer, backfill/incremental CLI modes, `ArchiveService.py` hook) is
 | `signals.py` | RINEX2→RINEX3 `(gnss, band_attr)` mapping table + `find_snr_code()` (RINEX2 SNR is band-only; RINEX3 tries an exact attribute match first, falls back to band-only). |
 | `runner.py` | The only module that imports `gnssmultipath`. In-process call to `GNSS_MultipathAnalysis`; `write_results_to_csv=False` — **the returned dict already has everything needed**, see below. |
 | `aggregate.py` | `make_equal_area_grid()` (deterministic, 5° elevation rings × cos-weighted azimuth sectors), `bin_indices()` (vectorized), `aggregate_signal()` (per-signal + per-bin stats from one gnssmultipath result), `pool()` (exact n-weighted combination of stored bins — the basis for weekly/yearly stacking). |
-| `writer.py` | Phase 1 only: `<file>_qc.json` + `<file>_qc_bins.csv`. `TODO(db)`: Phase 3 replaces this with a `dbConnection`-based writer; the JSON layout already mirrors the planned DB tables 1:1. |
-| `pipeline.py` | `process_one_file()` — the one place that chains prepare→orbits→runner→signals→aggregate and decides `ok`/`partial`/`failed`. Both `com/RinexQC.py` and the future `ArchiveService.py` hook call this, not each other. |
+| `writer.py` | `write_json_csv()` (Phase 1 standalone output) and `write_db()` (the real DB writer — run+signal+bin rows in one transaction, skip-or-`--force`-replace on a unique-key conflict). `_quantize_bins()` does the storage-time mm/0.1-unit quantization (NULL = empty cell, not zero). |
+| `pipeline.py` | `process_one_file()` — the one place that chains prepare→orbits→runner→signals→aggregate and decides `ok`/`partial`/`failed`. Its `run` dict is always populated, even on failure (seeded from the caller-known `NetworkCode`/`StationCode`/`ObservationYear`/`ObservationDOY`/`rinex_id` when given), so a failed run is always something `write_db()` can store, not a dropped record. |
+| `batch.py` | `find_pending()` (the `rinex` LEFT JOIN `rinex_qc_run` WHERE NULL query, optionally station-restricted/forced/ordered) and `process_batch()` (dispatches `run_qc_job()` over candidates via a caller-owned `pyJobServer.JobServer`). The one shared implementation `com/RinexQC.py`'s `--backfill`/`--incremental` and `ArchiveService.py`'s hook both call — neither reimplements "which files need a QC run". |
 
-`com/RinexQC.py` is the CLI: `rinex_file [rinex_file ...] [--config] [--elev-cutoff] [--systems] [--nav] [--sp3] [--out-dir] [--keep-tool-outputs] [--dry-run]`. Exit code 0 iff every file finished `ok`/`partial`.
+`com/RinexQC.py` has two modes on the same entry point:
+- **Standalone** (default): `rinex_file [rinex_file ...] [--config] [--elev-cutoff] [--systems] [--nav] [--sp3] [--out-dir] [--keep-tool-outputs] [--dry-run]` — writes JSON/CSV, no DB.
+- **Database** (`--backfill` or `--incremental`, mutually exclusive): `[station ...] --backfill|--incremental [--force] [--noparallel]` — the positional argument becomes a station-list (same syntax as `ScanArchive.py` etc., via `geode.Utils.process_stnlist`) instead of file paths; omit it for the whole archive. `--backfill` orders newest-first; `--incremental` doesn't bother (meant for the small set of just-archived files `ArchiveService.py` hands it). `--force` reprocesses even where a run already exists under the current config, replacing it.
+
+Exit code 0 iff every file finished `ok`/`partial`.
 
 ## Non-obvious decisions (read before touching this code)
 
@@ -97,17 +103,49 @@ pytest coverage was added for the migration itself; `geode/dbConnection.py`/the 
 has no existing test harness to extend (a pre-existing, separately tracked gap — see
 `architecture/overview.md`'s "Testing & CI" section).
 
+## Phase 3 (backfill/incremental/ArchiveService hook, done)
+
+- `writer.write_db()` writes raw parameterized SQL inside `begin_transac()`/`commit_transac()`,
+  **not** `Cnn.insert()`/`insert_many()`, which each call `self.cnn.commit()` internally and would
+  break the run+signal+bins atomicity the design doc requires. Bulk signal/bin rows go through
+  `psycopg2.extras.execute_values()` directly on `cnn.cursor` inside that same transaction.
+- `ArchiveService.py`'s `process_rinex_qc()` hook runs at the very end of `main()` (after
+  `print_archive_service_summary()`), reusing the *same* `JobServer` the main archiving pass built
+  — `create_cluster()` can be called again on one `JobServer` after an earlier `close_cluster()`,
+  exactly like `process_visits()`'s two sequential clusters already do. A QC failure never affects
+  archiving: the hook is a separate pass over `rinex` rows, not inline in `process_crinex_file`.
+  `--no_rinex_qc` opts out for one run. `geode.rinex_qc` is imported **locally inside the hook
+  function**, not at `ArchiveService.py`'s top level, so `--no_rinex_qc` (or an install that hasn't
+  added `gnssmultipath` yet) never pulls it into ArchiveService's import graph at all.
+- `com/RinexQC.py`'s positional argument is dual-purpose: direct RINEX file paths in standalone
+  mode, or a station-list (`geode.Utils.process_stnlist` syntax) in `--backfill`/`--incremental`
+  mode. Argparse validates the mutual exclusivity and that standalone mode actually got files.
+
+Validated end-to-end against a disposable Postgres 16 instance + a real archive layout (keys/
+rinex_tank_struct/stations/rinex rows + the real LHCL day-005 file at its computed archive path,
+via a `psycopg2.connect` patch standing in for `gnss_data.cfg`'s hardcoded-port-5432 connection
+path — `Cnn.__init__` has no `port` option, so this was the only way to point a real `Cnn()` at a
+non-default-port throwaway instance): `find_pending()` → `run_qc_job()` → `write_db()` produced
+the exact same run/signal/bin values as the Phase-1-only test earlier; a second `find_pending()`
+call correctly returned empty; a different `config_hash` produced a second row rather than
+replacing the first; `--force` deleted-and-replaced the original row (new id, cascading to its old
+signal/bin rows) without duplicating it. `com/RinexQC.py`'s argument parsing was exercised directly
+via `--dry-run` (no DB/JobServer touched). **Not exercised**: the actual `pyJobServer` parallel
+dispatch for this module specifically (this sandbox lacks the GAMIT/PPP/ATX files
+`pyJobServer.test_node()` checks even in `--noparallel` mode, which is unrelated to RinexQC's own
+correctness) — relies on `dispy` itself already being validated (ADR-0002) and `batch.py` mirroring
+`ScanArchive.py`'s own working `process_ppp()` dispatch pattern exactly.
+
 ## What's not built yet
 
-- `writer.py`'s DB writer (replacing the Phase 1 JSON/CSV `TODO(db)`).
-- `com/RinexQC.py --incremental`/`--backfill` modes, modeled on `com/ScanArchive.py`'s
-  `process_ppp()` (`rinex` LEFT JOIN `rinex_qc_run` WHERE NULL, dispatched via `pyJobServer`).
-- `ArchiveService.py`'s QC hook: a decoupled end-of-run pass (own `JobServer` cluster, like
-  `process_otl`/`process_visits`), not inline in the same per-file job as PPP.
 - Validation against the project's actual documented fixtures (LHCL 1996-251, SANT 2025-212, AGGO
   2025-212) with their exact reference MP RMS/epoch-count/clock-jump values — everything validated
   so far used real-but-different archive data (LHCL/AGGO day 005, 2026) for mechanical correctness,
   not the documented numbers.
+- Dynamic visualization of the results (planned next — a backend module for the separate web
+  frontend; no code yet).
 - `gnssmultipath` dependency acceptance is recorded in [ADR-0003](../decisions/0003-gnssmultipath-dependency.md);
   the Python 3.11 migration it required is [ADR-0002](../decisions/0002-python-311-migration.md).
-  Session logs: [2026-11-16-python-311-migration.md](../checkpoints/2026-11-16-python-311-migration.md).
+  Session logs: [2026-11-16-python-311-migration.md](../checkpoints/2026-11-16-python-311-migration.md),
+  [2026-11-17-rinex-qc-schema.md](../checkpoints/2026-11-17-rinex-qc-schema.md),
+  [2026-11-17-rinex-qc-phase3.md](../checkpoints/2026-11-17-rinex-qc-phase3.md).

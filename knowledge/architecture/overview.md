@@ -72,7 +72,7 @@ node used for parallel processing (checked at startup by `pyJobServer.test_node`
   `test_station_info.py`, `test_station_merge.py`, `test_noise_covariance.py` +
   `test_noise_covariance_jitter.py`, `test_version.py`, `test_pyrinex_header.py`,
   `test_rinex_qc_config.py`, `test_rinex_qc_signals.py`, `test_rinex_qc_orbits.py`,
-  `test_rinex_qc_aggregate.py`.
+  `test_rinex_qc_aggregate.py`, `test_rinex_qc_writer.py`.
 - Coverage gaps: nothing tests `etm_engine`, `DesignMatrix`, the `AdjustmentStrategy` classes, any
   of `geode/etm/stacker/`, `geode/gamit/`, `geode/dbConnection.py`, or any `com/*.py` CLI script
   end-to-end.

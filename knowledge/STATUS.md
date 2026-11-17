@@ -7,14 +7,14 @@ belongs in [checkpoints/](checkpoints/)).
 ## Active focus (as of 2026-11-16)
 
 - **RINEX QC module** (`geode/rinex_qc/`, `com/RinexQC.py` — gnssmultipath-based MP/SNR/cycle-slip
-  stats). **Phase 1 (standalone CLI) and Phase 2 (schema) done** — see
-  [architecture/rinex-qc.md](architecture/rinex-qc.md). **Phase 3 (DB writer, backfill/incremental
-  CLI modes, ArchiveService hook) not started** — `writer.py` still only writes JSON/CSV, nothing
-  talks to the database yet. Needed bumping GeoDE to **Python ≥3.11** first (`numpy` now `2.4.6`,
-  `basemap`/`usgs-libcomcat` removed — see
+  stats). **Phases 1-3 all done**: standalone CLI, schema, DB writer, `--incremental`/`--backfill`,
+  and the `ArchiveService.py` hook — see [architecture/rinex-qc.md](architecture/rinex-qc.md).
+  Still open: validation against the project's actual documented fixtures (everything so far used
+  different real archive data for mechanical correctness, not the documented reference numbers),
+  and the planned-next dynamic-visualization backend module (no code yet). Needed bumping GeoDE to
+  **Python ≥3.11** first (`numpy` now `2.4.6`, `basemap`/`usgs-libcomcat` removed — see
   [decisions/0002-python-311-migration.md](decisions/0002-python-311-migration.md)). Check
-  `git branch`/env before assuming either the QC module's phase or the Python-3.11 baseline is
-  current if this note is stale.
+  `git branch`/env before assuming any of this is current if this note is stale.
 - **ETM Stacker spatial-stacking stability.** Per-station velocity/postseismic-decay instability
   for sparsely-constrained stations is not resolved by reweighting the tie strength — the field a
   station ties to is itself built from other stations' independently-ambiguous fits. See

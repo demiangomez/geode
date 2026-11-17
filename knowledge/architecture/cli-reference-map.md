@@ -6,7 +6,7 @@ lookup, not a usage guide.
 
 | Script | Primary subsystem(s) | Notes |
 |---|---|---|
-| `ArchiveService.py` | `pyArchiveStruct`, `pyOptions` | Archive ingestion (locks, visit files) |
+| `ArchiveService.py` | `pyArchiveStruct`, `pyOptions`, `geode/rinex_qc/` (local import, see [rinex-qc.md](rinex-qc.md)) | Archive ingestion (locks, visit files); runs a RinexQC pass by default at the end (`--no_rinex_qc` to skip) |
 | `DownloadSources.py`, `DownloadSourcesFill.py` | `proto_download`, `pyOptions` | Raw data retrieval |
 | `ScanArchive.py` | `pyArchiveStruct`, `pyPPP`, `pyOTL` | RINEX+PPP+OTL ingestion; precursor to `ParallelGamit.py` |
 | `RinexQC.py` | `geode/rinex_qc/`, `pyRinex`, `pyProducts` | Per-signal/per-bin RINEX QC (multipath/SNR/cycle-slips) via `gnssmultipath`; standalone JSON/CSV output in this phase, see [known-issues.md](../known-issues.md) for what's still ahead |
