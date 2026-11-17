@@ -14,6 +14,7 @@ gap unrelated to what these tests check.
 """
 import os
 import shutil
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -224,3 +225,115 @@ def test_prn_obs_blank_field_fixed_for_real_mixed_system_file(tmp_path):
         ['G03', '1109', '1109', '1105', '0', '1105', '1109', '1105']
     assert prn_obs_lines[1][:60].split() == \
         ['R01', '1036', '1036', '1033', '1036', '1033', '1036', '1033']
+
+
+# Second real station sample (usa.gisa, file gisa0860.26d.Z) found after the
+# fix above: this file declares 11 observation types, so 'PRN / # OF OBS'
+# wraps onto a blank-PRN continuation line per satellite -- and GLONASS R01
+# has zero observations on *every* code covered by that continuation line
+# (S2, S5), making the whole physical line blank. Built programmatically
+# (rather than hand-typed) to get RINEX's fixed-width columns exactly right;
+# see test_pyrinex_prn_obs.py for the same scenario at the unit level.
+def _fmt_types_of_observ(codes):
+    lines = []
+    n = len(codes)
+    for i, start in enumerate(range(0, n, 9)):
+        chunk = codes[start:start + 9]
+        head = f'{n:6d}' if i == 0 else ' ' * 6
+        body = ''.join(f'{c:>6s}' for c in chunk).ljust(54)
+        lines.append((head + body).ljust(60) + '# / TYPES OF OBSERV\n')
+    return lines
+
+
+def _fmt_prn_obs(prn, counts):
+    lines = []
+    n = len(counts)
+    for i, start in enumerate(range(0, n, 9)):
+        chunk = counts[start:start + 9]
+        head = ('   ' + prn) if i == 0 else ' ' * 6
+        body = ''.join((f'{c:6d}' if c is not None else ' ' * 6) for c in chunk).ljust(54)
+        lines.append((head + body).ljust(60) + 'PRN / # OF OBS\n')
+    return lines
+
+
+def _fmt_epoch(yy, mm, dd, hh, mi, ss, sats):
+    date = f' {yy:02d} {mm:02d} {dd:02d} {hh:02d} {mi:02d} {ss:010.7f}'
+    return date + '  0' + f'{len(sats):3d}' + ''.join(f'{s:>3s}' for s in sats) + '\n'
+
+
+def _fmt_obs_values(values):
+    lines = []
+    for start in range(0, len(values), 5):
+        chunk = values[start:start + 5]
+        parts = [(' ' * 16) if v is None else f'{v:14.3f}  ' for v in chunk]
+        lines.append(''.join(parts).rstrip() + '\n')
+    return lines
+
+
+_MULTILINE_OBS_CODES = ['C1', 'C2', 'C5', 'L1', 'L2', 'L5', 'P1', 'P2', 'S1', 'S2', 'S5']
+
+
+def _build_multiline_prn_obs_fixture():
+    header = []
+    header.append('     2.11           OBSERVATION DATA    M (MIXED)           RINEX VERSION / TYPE\n')
+    header.append('teqc  2026Mar27     CORS/NGS/NOAA       20260327 06:22:28UTCPGM / RUN BY / DATE\n')
+    header.append('GISA                                                        MARKER NAME\n')
+    header.append('GISA                                                        MARKER NUMBER\n')
+    header.append('5035K69869          TRIMBLE NETR9       5.44                REC # / TYPE / VERS\n')
+    header.append('TRM55971.00         TRM55971.00     NONE                    ANT # / TYPE\n')
+    header.append(' -2419202.3416 -4703569.1027  3553012.4295                  APPROX POSITION XYZ\n')
+    header.append('        0.0000        0.0000        0.0000                  ANTENNA: DELTA H/E/N\n')
+    header.append('     1     1                                                WAVELENGTH FACT L1/2\n')
+    header += _fmt_types_of_observ(_MULTILINE_OBS_CODES)
+    header.append('    30.0000                                                 INTERVAL\n')
+    header.append('    18                                                      LEAP SECONDS\n')
+    header.append('     3                                                      # OF SATELLITES\n')
+    # E02/E03: Galileo, all codes observed except C2/L2/S2 (not tracked on this band).
+    header += _fmt_prn_obs('E02', [120, None, 120, 120, None, 120, None, None, 120, None, 120])
+    header += _fmt_prn_obs('E03', [480, None, 480, 480, None, 480, None, None, 480, None, 480])
+    # R01: GLONASS, zero observations on every code of the continuation line
+    # (S2, S5) -- the wholly-blank-line case that crashed gnssmultipath.
+    header += _fmt_prn_obs('R01', [373, None, None, 371, None, 373, None, None, None, None, None])
+    header.append('  2026     3    27     0     0    0.0000000     GPS         TIME OF FIRST OBS\n')
+    header.append('                                                            END OF HEADER\n')
+
+    data = []
+    t0 = datetime(2026, 3, 27, 0, 0, 0)
+    for i in range(240):  # 2 hours at 30s cadence, so Gfzrnx reports the interval correctly
+        t = t0 + timedelta(seconds=30 * i)
+        data.append(_fmt_epoch(26, 3, 27, t.hour, t.minute, float(t.second), ['E02', 'E03', 'R01']))
+        data += _fmt_obs_values([None, None, 120.0, None, 120.0, None, None, None, 120.0, None, 120.0])
+        data += _fmt_obs_values([None, None, 480.0, None, 480.0, None, None, None, 480.0, None, 480.0])
+        data += _fmt_obs_values([373.0, None, None, 371.0, None, 373.0, None, None, None, None, None])
+
+    return ''.join(header) + ''.join(data)
+
+
+def test_prn_obs_blank_continuation_line_fixed_for_real_multiline_system_file(tmp_path):
+    content = _build_multiline_prn_obs_fixture()
+    fixture = tmp_path / 'gisa0860.26o'
+    fixture.write_text(content)
+
+    # confirm the fixture reproduces the real crash before any fix is applied
+    # -- gnssmultipath's header reader tokenizes 'PRN / # OF OBS' by
+    # line.split(' '), and a wholly-blank continuation line gives it nothing
+    # to pop().
+    gnss_readers = pytest.importorskip('gnssmultipath.readers.readRinexObs')
+    with pytest.raises(IndexError):
+        gnss_readers.rinexReadObsFileHeader211(str(fixture), 1, 1, [], [], [])
+
+    with pyRinex.ReadRinex('usa', 'gisa', str(fixture), min_time_seconds=1) as r:
+        assert r.system == 'M'
+        assert r.header_fixed is True
+        with open(r.rinex_path, encoding='latin-1') as f:
+            prn_obs_lines = [line for line in f if 'PRN / # OF OBS' in line]
+
+        # R01's continuation line (S2, S5) was entirely blank -- now zero-filled.
+        assert prn_obs_lines[4][:60].split() == \
+            ['R01', '373', '0', '0', '371', '0', '373', '0', '0', '0']
+        assert prn_obs_lines[5][:60].split() == ['0', '0']
+
+        # conclusive check: gnssmultipath's own header reader, which crashed
+        # on the raw file above, now succeeds on the fixed one.
+        success = gnss_readers.rinexReadObsFileHeader211(r.rinex_path, 1, 1, [], [], [])[0]
+        assert success == 1

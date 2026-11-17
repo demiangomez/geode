@@ -46,9 +46,25 @@ Exit code 0 iff every file finished `ok`/`partial`.
     but `gnssmultipath`'s whitespace-tokenizing parser drops the blank field as a missing token
     instead of reading it as zero, eventually raising `IndexError: pop from empty list` elsewhere
     in its header parser. Found on a real mixed GPS/GLONASS CORS station (`usa.gisa`) during a
-    `--backfill` run; fixed by `pyRinex._fix_prn_obs_blanks()` (only *interior* blanks, between two
-    populated fields, get zero-filled — trailing blanks past the last populated field are normal
-    padding when a file declares fewer than 9 observation types, and are left alone).
+    `--backfill` run. Fixed by `pyRinex._PrnObsFixer`, a *stateful* fixer (not a line-local pure
+    function — an earlier version was, and it wasn't enough, see below). It tracks the declared
+    total obs-type count from `# / TYPES OF OBSERV` (itself handling that record's own
+    continuation lines) and a running per-satellite "slots consumed" counter, so it knows which of
+    the 9 slots on *any* physical `PRN / # OF OBS` line — first or continuation — are "real" (zero
+    observations, should be filled with `0`) versus genuine unused padding (file declares fewer
+    than 9/11/... obs types), without needing any slot on that line to already have a value. That
+    last part matters: a file declaring >9 obs types wraps this record onto a blank-PRN
+    continuation line per satellite, and a satellite can have zero observations on *every* code
+    that continuation line covers (e.g. a GLONASS satellite with no L5-equivalent signal) — making
+    the whole physical line blank, with nothing to anchor a simpler "zero-fill between two
+    populated fields" fix. `gnssmultipath` tokenizes a `PRN / # OF OBS` line by `line.split(' ')`;
+    a wholly-blank line produces an empty token list, and `.pop(0)` on it is the literal
+    `IndexError: pop from empty list` crash (confirmed by reading `gnssmultipath`'s installed
+    `readers/readRinexObs.py` directly, not just inferred from the traceback). Found on a second
+    real `usa.gisa` file (`gisa0860.26d.Z`, 11 declared obs types) after the first, line-local fix
+    had already shipped — see `knowledge/checkpoints/2026-11-17-prn-obs-multiline-fix.md`.
+    `RinexRecord.header_fixed` is set whenever this fixer actually changes a line, same as the
+    `TIME SYSTEM` fix above, for `rinex_qc_run.header_fixed` provenance.
 - **No CSV round-trip.** The design doc assumed `runner.py` would parse
   `Result_files_CSV/<SYSTEM>_results.csv` for per-epoch MP/SNR/azimuth/elevation. It doesn't need
   to: everything is already in the `analysisResults` dict `GNSS_MultipathAnalysis()` returns
