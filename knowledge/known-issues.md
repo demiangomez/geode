@@ -98,6 +98,32 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
 - `pyproject.toml` and `environment.yml` both declare dependencies independently; nothing keeps
   them in sync automatically. When adding/removing a dependency, update both or expect drift.
 
+## Third-party dependency bugs
+
+- **gnssmultipath==2.2.0: satellites from an excluded system crash/misalign the per-epoch obs
+  loop.** `readers/readRinexObs.py:2422-2433` (inside `readRinexObs211`) iterates every satellite
+  in the epoch's raw `SVlist` (built unfiltered by `desiredGNSSsystems`) and does
+  `gi = sys_to_idx[curr_sys]` — this raises `KeyError` for any satellite whose system was excluded
+  via `desiredGNSSsystems` (which GeoDE's own `rinex_qc/pipeline.py` does whenever orbit coverage
+  is partial: `systems_to_process = sorted(desired_systems - set(orbit_res.systems_without_orbits))`).
+  `rinexReadObsBlock211` (the function that fills `Obs`/`LLI`/`SS`) already skips these satellites
+  and compacts its row indices accordingly (`Obs[sat - removed_sat, ...]`), but the caller at
+  line 2422 indexes `Obs[sat, ...]` with the *uncompacted* `sat`, so even a bare `continue`-skip
+  fix would misalign rows for every satellite after the first excluded one. Root-caused against
+  real `usa.gisa` DOY 296/2026 (missing Galileo orbits, `systems=['G','R']` call) — see
+  [decisions/0004-patch-gnssmultipath-multisystem-bugs.md](decisions/0004-patch-gnssmultipath-multisystem-bugs.md).
+  A row-compaction fix was drafted and confirmed to clear the `KeyError`, but immediately exposed a
+  **second**, not-yet-root-caused `ValueError: invalid literal for int() with base 10: ' '` in
+  `rinexReadObsBlockHead211`'s event-flag handling (flags 2/5), reachable only once the first bug
+  stops masking it — also only in the subset-filtering path (the same file processes cleanly with
+  all 4 systems included). Deliberately left unpatched: Demian chose to ship the three confirmed,
+  fully-verified fixes (ADR-0004) rather than keep chasing this narrower chain in the same session.
+  **Effect today:** a file whose orbit coverage is partial (some systems missing a nav/sp3 source)
+  fails outright instead of producing a `status='partial'` row for the systems that do have
+  coverage — i.e. it's strictly worse than the already-working "fully covered" and "fully missing"
+  cases, not a correctness risk (nothing silently wrong gets written, since it crashes rather than
+  running on misaligned data).
+
 ## Database
 
 - `run_db_migrations()` (`geode/dbConnection.py`) is the only schema-change mechanism and has no

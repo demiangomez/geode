@@ -71,6 +71,12 @@ Exit code 0 iff every file finished `ok`/`partial`.
   in-process (`res[sys_name][band][code]['multipath_range1']` etc., `res['Sat_position'][sys_code]['azimuth']`
   — azimuth **is** populated for broadcast-nav runs too, not just SP3). `write_results_to_csv=False`.
   See [ADR-0003](../decisions/0003-gnssmultipath-dependency.md).
+- **The installed `gnssmultipath` package itself needs a post-install patch.** Three real bugs in
+  `gnssmultipath==2.2.0` (not GeoDE's own code) crash on ordinary multi-GNSS, >9-obs-type, or
+  gapped RINEX files — run `python scripts/patch_gnssmultipath.py` after any `conda env update`
+  (documented in `INSTALL.md`). See [ADR-0004](../decisions/0004-patch-gnssmultipath-multisystem-bugs.md)
+  and `knowledge/known-issues.md` for a fourth, narrower bug (partial orbit coverage) left
+  deliberately unfixed.
 - **Slip counts by elevation band are already computed by the tool.** `gnssmultipath`'s
   `SignalStats` dataclass type-hints claim `range1_slip_distribution: int`, but at runtime it (and
   `cycle_slip_distribution`/`LLI_slip_distribution`/`slip_distribution_LLI_fusion`, plus their

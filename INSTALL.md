@@ -59,6 +59,21 @@ the environment, edit the environment.yml file and then run:
 conda env update --file environment.yml --name geode
 ```
 
+After creating or updating the environment, run the `gnssmultipath` patch script once (it's
+idempotent, so re-running it is harmless):
+
+```
+python scripts/patch_gnssmultipath.py
+```
+
+This fixes three real bugs in the installed `gnssmultipath==2.2.0` package that otherwise crash
+RINEX QC (`com/RinexQC.py`) on ordinary multi-GNSS files — see
+[knowledge/decisions/0004-patch-gnssmultipath-multisystem-bugs.md](knowledge/decisions/0004-patch-gnssmultipath-multisystem-bugs.md).
+It must be re-run any time the `geode` environment's pip packages are reinstalled (a fresh
+`conda create`, a CI image rebuild, etc.) — a plain `conda env update` on an existing environment
+that already has the patch applied is a no-op and does not need it re-run, but run it anyway if
+unsure, since it's a no-op on an already-patched install.
+
 Other external dependencies that require a licence
 --------------------------------------------------
 
