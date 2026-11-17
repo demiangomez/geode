@@ -4,7 +4,7 @@ Orbit resolution and the same-day guard.
 Resolves broadcast or SP3 orbits for the GPS day a RINEX file covers, via
 the existing geode.pyProducts orbit-lookup classes -- no new download or
 path-resolution logic needed here, that's all already built for PPP.
-Guards against ever handing gnssmultipath an orbit product whose own
+Guards against ever handing the QC tool (RINGO) an orbit product whose own
 filename encodes a different day than the observation file's (a known
 pitfall -- some tools accept a wrong-day file silently, producing unknown
 elevations and bogus completeness).

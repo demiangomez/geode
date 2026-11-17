@@ -1,8 +1,15 @@
 # ADR-0004: Patch three gnssmultipath==2.2.0 bugs post-install, tracked in-repo
 
-- **Status:** accepted
+- **Status:** superseded by [ADR-0005](0005-switch-to-ringo.md)
 - **Date:** 2026-11-17
 - **Branch (if not master):** —
+
+> **2026-11-17: superseded, same day.** The fourth bug this ADR left deliberately unfixed (see its
+> "Known issues / limitations") turned out to be one of several in the same family rather than an
+> isolated edge case; Demian decided to replace `gnssmultipath` with RINGO rather than keep
+> patching it indefinitely. See [ADR-0005](0005-switch-to-ringo.md). `scripts/patch_gnssmultipath.py`
+> has been deleted and the `gnssmultipath` pin removed from `pyproject.toml`/`environment.yml` --
+> this ADR's content below is historical only.
 
 ## Context
 

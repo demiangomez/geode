@@ -712,16 +712,17 @@ def process_rinex_qc(JobServer):
     RinexQC hook: after the main archiving pass, process any rinex row
     that doesn't yet have a QC run under RinexQC's current default
     config. Deliberately decoupled from the per-file archiving job
-    (process_crinex_file) -- a QC failure, or gnssmultipath's own
-    runtime, never affects whether a file gets archived. See
+    (process_crinex_file) -- a QC failure, or RINGO's own runtime, never
+    affects whether a file gets archived. See
     knowledge/architecture/rinex-qc.md. Reuses the JobServer this run
     already built (create_cluster() can be called again on the same
     JobServer after the main pass' close_cluster(), same as
     process_visits()'s two clusters above).
     """
-    # local import: keeps gnssmultipath (and everything rinex_qc pulls in)
-    # out of ArchiveService's import graph for anyone running with
-    # --no_rinex_qc, or on an install that hasn't added gnssmultipath yet.
+    # local import: keeps everything rinex_qc pulls in out of
+    # ArchiveService's import graph for anyone running with
+    # --no_rinex_qc, or on an install that hasn't installed the ringo
+    # binary yet (scripts/install_ringo.sh).
     from geode.rinex_qc import batch
     from geode.rinex_qc.config import RinexQCConfig
 

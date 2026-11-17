@@ -22,6 +22,7 @@ DEFAULT_SNR_MEDIAN_THRESHOLD = 70.0
 DEFAULT_ELEV_CUTOFF_DEG = 10.0
 DEFAULT_ORBIT_SOURCE    = 'brdc'
 DEFAULT_GRID_ID         = 1
+DEFAULT_RINGO_BIN       = 'ringo'  # assumed on PATH, see scripts/install_ringo.sh
 
 
 class RinexQCConfigError(Exception):
@@ -62,6 +63,7 @@ class RinexQCConfig:
     sp3_paths:         tuple = ()          # explicit --sp3 override(s)
     keep_tool_outputs: bool  = False
     work_dir:          str   = None        # None = system tempdir
+    ringo_bin:         str   = DEFAULT_RINGO_BIN  # path to the ringo binary, or a bare name on PATH
 
     @property
     def config_hash(self):

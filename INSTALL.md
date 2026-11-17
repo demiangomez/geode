@@ -59,20 +59,17 @@ the environment, edit the environment.yml file and then run:
 conda env update --file environment.yml --name geode
 ```
 
-After creating or updating the environment, run the `gnssmultipath` patch script once (it's
-idempotent, so re-running it is harmless):
+RINEX QC (`com/RinexQC.py`) needs the `ringo` binary — not a pip/conda package, a standalone
+executable from GSI (Japan). Install it with:
 
 ```
-python scripts/patch_gnssmultipath.py
+scripts/install_ringo.sh
 ```
 
-This fixes three real bugs in the installed `gnssmultipath==2.2.0` package that otherwise crash
-RINEX QC (`com/RinexQC.py`) on ordinary multi-GNSS files — see
-[knowledge/decisions/0004-patch-gnssmultipath-multisystem-bugs.md](knowledge/decisions/0004-patch-gnssmultipath-multisystem-bugs.md).
-It must be re-run any time the `geode` environment's pip packages are reinstalled (a fresh
-`conda create`, a CI image rebuild, etc.) — a plain `conda env update` on an existing environment
-that already has the patch applied is a no-op and does not need it re-run, but run it anyway if
-unsure, since it's a no-op on an already-patched install.
+This downloads the right platform build fresh from GSI and places it in `$HOME/.local/bin` (add
+that to your `PATH` if the script tells you to). See
+[knowledge/decisions/0005-switch-to-ringo.md](knowledge/decisions/0005-switch-to-ringo.md) for why
+RINGO and not gnssmultipath (ADR-0003/0004, now superseded).
 
 Other external dependencies that require a licence
 --------------------------------------------------

@@ -1,8 +1,15 @@
 # ADR-0003: Adopt `gnssmultipath` as the RINEX QC computation engine
 
-- **Status:** accepted
+- **Status:** superseded by [ADR-0005](0005-switch-to-ringo.md)
 - **Date:** 2026-11-16
 - **Branch (if not master):** —
+
+> **2026-11-17: superseded.** `gnssmultipath` turned up a string of real, confirmed bugs on
+> ordinary multi-GNSS CORS files (three patched in [ADR-0004](0004-patch-gnssmultipath-multisystem-bugs.md),
+> a fourth found and left unfixed) — enough that Demian replaced it with RINGO rather than keep
+> patching it. See [ADR-0005](0005-switch-to-ringo.md). This ADR's content below is historical:
+> accurate for how/why `gnssmultipath` was adopted at the time, not a description of the current
+> engine.
 
 ## Context
 

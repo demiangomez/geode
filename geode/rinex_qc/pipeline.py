@@ -1,8 +1,15 @@
 """
-Orchestrates one RINEX file through prepare -> orbits -> runner -> signals ->
-aggregate -> writer. A single entry point (process_one_file) used by both
+Orchestrates one RINEX file through prepare -> orbits -> runner -> aggregate
+-> writer. A single entry point (process_one_file) used by both
 com/RinexQC.py and the ArchiveService.py QC hook, so there is exactly one
 place that decides what a failed/partial file looks like.
+
+prepare.prepare() (pyRinex.ReadRinex) still runs for every file, but only
+for provenance metadata (header_fixed, rinex_version, receiver/antenna
+type, interval) -- RINGO itself reads the original archived file directly
+(see runner.py), not pyRinex's sanitized temp copy, since it handles raw
+.Z/.gz/Hatanaka files and the header issues pyRinex fixes without any
+pre-processing (knowledge/decisions/0005-switch-to-ringo.md).
 """
 import dataclasses
 import os
@@ -10,25 +17,28 @@ import time
 import traceback
 
 from geode import pyProducts
-from geode.rinex_qc import aggregate, orbits, prepare, runner, signals
+from geode.rinex_qc import aggregate, orbits, prepare, runner
 
 STATUS_OK      = 'ok'
 STATUS_PARTIAL = 'partial'
 STATUS_FAILED  = 'failed'
 
-TOOL_NAME = 'gnssmultipath'
-# Keep in lockstep with the pin in pyproject.toml/environment.yml (ADR-0003)
-# -- a version bump here without bumping those pins would silently make
-# runs claim a version that isn't actually what's installed.
-TOOL_VERSION = '2.2.0'
+TOOL_NAME = 'ringo'
+# Keep in lockstep with the version scripts/install_ringo.sh installs by
+# default (ADR-0005) -- a version bump here without bumping that default
+# would silently make runs claim a version that isn't actually installed.
+TOOL_VERSION = '0.9.6'
 
 
 class QCRunResult:
-    def __init__(self, status, message=None, run=None, signals=None):
-        self.status  = status
-        self.message = message
-        self.run     = run        # dict of run-level fields -- always set (see process_one_file)
-        self.signals = signals or []  # list of {summary, bins, grid_id} dicts
+    def __init__(self, status, message=None, run=None, signals=None, run_result=None):
+        self.status     = status
+        self.message    = message
+        self.run         = run        # dict of run-level fields -- always set (see process_one_file)
+        self.signals     = signals or []  # list of {summary, bins, grid_id} dicts
+        self.run_result  = run_result     # runner.RunnerResult, set on success when
+                                          # config.keep_tool_outputs -- com/RinexQC.py's standalone
+                                          # mode uses it to write RINGO's raw CSVs alongside *_qc.json
 
 
 def process_one_file(origin_file, config, Config, NetworkCode=None, StationCode=None,
@@ -122,77 +132,51 @@ def process_one_file(origin_file, config, Config, NetworkCode=None, StationCode=
 
                 try:
                     run_result = runner.run(
-                        rinexobj.rinex_path,
+                        origin_file,
                         nav_paths=orbit_res.nav_paths,
                         sp3_paths=orbit_res.sp3_paths,
-                        systems=systems_to_process,
                         elev_cutoff_deg=config.elev_cutoff_deg,
-                        work_dir=rinexobj.rootdir,
+                        ringo_bin=config.ringo_bin,
                         keep_tool_outputs=config.keep_tool_outputs)
                 except Exception:
-                    # the bare exception message alone (e.g. "pop from empty
-                    # list") is useless for diagnosing a failure inside
-                    # gnssmultipath's own parsing -- keep the full traceback
-                    # so rinex_qc_run.message is enough to debug from later,
-                    # without needing to reproduce it live.
-                    return failed('gnssmultipath failed:\n%s' % traceback.format_exc())
+                    # the bare exception message alone is useless for
+                    # diagnosing a failure inside RINGO's own parsing --
+                    # keep the full traceback so rinex_qc_run.message is
+                    # enough to debug from later, without needing to
+                    # reproduce it live.
+                    return failed('ringo failed:\n%s' % traceback.format_exc())
 
-                run['runtime_s'] = run_result.runtime_s
+                run['runtime_s']       = run_result.runtime_s
+                run['epochs_observed'] = run_result.nepochs
+                run['epochs_expected'] = round(86400 / rinexobj.interval) if rinexobj.interval else None
 
-                res = run_result.res
                 grid = aggregate.make_equal_area_grid()
 
                 signal_results = []
-                for sys_name in res['GNSSsystems']:
-                    sys_code = _sys_code(res, sys_name)
-                    sys_dict = res[sys_name]
-                    azimuth = res['Sat_position'][sys_code]['azimuth']
-                    snr_codes = sys_dict.get('SNR', {})
-
-                    for band_name in sys_dict['Bands']:
-                        for obs_code in sys_dict[band_name]['Codes']:
-                            stats = sys_dict[band_name].get(obs_code)
-                            if not isinstance(stats, dict):
-                                continue  # code had no usable combination (see runner.py)
-
-                            mapping = signals.normalize(sys_code, obs_code, rinexobj.rinex_version)
-                            snr_code, snr_band_only = signals.find_snr_code(
-                                snr_codes.keys(), mapping.band_attr, rinexobj.rinex_version)
-                            snr_array = snr_codes.get(snr_code) if snr_code else None
-
-                            summary, bins = aggregate.aggregate_signal(stats, azimuth, grid,
-                                                                       snr_array=snr_array)
-                            summary['gnss']          = mapping.gnss
-                            summary['band_attr']     = mapping.band_attr
-                            summary['obs_code_orig'] = mapping.obs_code_orig
-                            summary['snr_band_only'] = snr_band_only or mapping.snr_band_only
-                            summary['snr_unit'] = (
-                                'receiver'
-                                if summary['snr_mean'] is not None
-                                and config.snr_unit_policy.is_receiver_units(rinexobj.recType,
-                                                                             summary['snr_mean'])
-                                else 'dBHz')
-                            signal_results.append({'summary': summary, 'bins': bins,
-                                                   'grid_id': config.default_grid_id})
-
-                extra = res['ExtraOutputInfo']
-                run['epochs_expected'] = round(86400 / rinexobj.interval) if rinexobj.interval else None
-                run['epochs_observed'] = extra['nEpochs']
-                run['n_clock_jumps']   = extra['nClockJumps']
-                if extra['nClockJumps'] and extra['nClockJumps'] > extra['nEpochs'] * 0.01:
-                    run['flags'].append('clock_jumps')
+                for sys_code in systems_to_process:
+                    bands = run_result.systems.get(sys_code, {})
+                    for band, band_data in bands.items():
+                        summary, bins = aggregate.aggregate_signal(band_data, grid)
+                        summary['gnss']          = sys_code
+                        summary['band_attr']     = band + '?'  # exact attribute unknown, see runner.py
+                        summary['obs_code_orig'] = 'MP' + band
+                        summary['snr_band_only'] = True
+                        summary['snr_unit'] = (
+                            'receiver'
+                            if summary['snr_mean'] is not None
+                            and config.snr_unit_policy.is_receiver_units(rinexobj.recType,
+                                                                         summary['snr_mean'])
+                            else 'dBHz')
+                        signal_results.append({'summary': summary, 'bins': bins,
+                                               'grid_id': config.default_grid_id})
 
                 run['status']     = STATUS_PARTIAL if orbit_res.systems_without_orbits else STATUS_OK
                 run['runtime_s']  = time.time() - t0
-                return QCRunResult(run['status'], run=run, signals=signal_results)
+                return QCRunResult(run['status'], run=run, signals=signal_results,
+                                  run_result=run_result if config.keep_tool_outputs else None)
 
     except (pyProducts.pyProductsException, orbits.OrbitGuardError,
            orbits.OrbitResolutionError) as e:
         return failed('Orbit resolution failed: %s' % e)
     except Exception:
         return failed(traceback.format_exc())
-
-
-def _sys_code(res, sys_name):
-    _NAME2CODE = {'GPS': 'G', 'GLONASS': 'R', 'Galileo': 'E', 'BeiDou': 'C'}
-    return _NAME2CODE[sys_name]

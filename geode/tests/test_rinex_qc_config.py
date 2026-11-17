@@ -11,6 +11,7 @@ def test_defaults():
     assert config.elev_cutoff_deg == 10.0
     assert config.orbit_source == 'brdc'
     assert config.systems == ()
+    assert config.ringo_bin == 'ringo'
 
 
 def test_cli_overrides_win_over_json(tmp_path):
@@ -45,8 +46,9 @@ def test_invalid_orbit_source_rejected():
 
 def test_config_hash_same_for_science_equivalent_configs():
     a = RinexQCConfig.load(elev_cutoff_deg=10.0, work_dir='/tmp/a')
-    b = RinexQCConfig.load(elev_cutoff_deg=10.0, work_dir='/tmp/b', keep_tool_outputs=True)
-    assert a.config_hash == b.config_hash  # work_dir/keep_tool_outputs don't affect the hash
+    b = RinexQCConfig.load(elev_cutoff_deg=10.0, work_dir='/tmp/b', keep_tool_outputs=True,
+                           ringo_bin='/opt/ringo/bin/ringo')
+    assert a.config_hash == b.config_hash  # work_dir/keep_tool_outputs/ringo_bin don't affect the hash
 
 
 def test_config_hash_differs_for_different_science_settings():

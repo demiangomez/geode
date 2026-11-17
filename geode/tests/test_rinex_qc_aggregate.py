@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from geode.rinex_qc import aggregate
+from geode.rinex_qc.runner import BandData
 
 
 def test_grid_generator_is_deterministic():
@@ -95,3 +96,53 @@ def test_pool_weights_by_n_obs():
     assert pooled['mp_rms'][0] == pytest.approx(expected_rms)
     expected_mean = (10 * 40.0 + 30 * 50.0) / 40
     assert pooled['snr_mean'][0] == pytest.approx(expected_mean)
+
+
+def _make_band(mp, az, el, slip, snr=None):
+    arr = lambda x: np.asarray(x, dtype=np.float64)
+    return BandData(prns=['X01'], mp=arr(mp).reshape(-1, 1), az=arr(az).reshape(-1, 1),
+                    el=arr(el).reshape(-1, 1), slip=np.asarray(slip, dtype=bool).reshape(-1, 1),
+                    snr=arr(snr).reshape(-1, 1) if snr is not None else None, snr_code=None)
+
+
+def test_aggregate_signal_basic_stats():
+    band = _make_band(mp=[1.0, -1.0, 2.0, np.nan], az=[0, 90, 180, 270],
+                      el=[5, 15, 25, 35], slip=[False, False, False, False],
+                      snr=[40.0, 42.0, 44.0, 46.0])
+    grid = aggregate.make_equal_area_grid()
+    summary, bins = aggregate.aggregate_signal(band, grid)
+
+    assert summary['n_obs'] == 3  # the NaN mp epoch is excluded
+    assert summary['n_sats'] == 1
+    assert summary['mp_rms_m'] == pytest.approx(np.sqrt((1.0 + 1.0 + 4.0) / 3))
+    assert summary['snr_mean'] == pytest.approx(np.mean([40.0, 42.0, 44.0]))
+    assert summary['n_slips'] == 0
+
+
+def test_aggregate_signal_counts_slips_by_elevation_band():
+    band = _make_band(mp=[0.1, 0.1, 0.1], az=[0, 0, 0], el=[5.0, 25.0, 55.0],
+                      slip=[True, False, True])
+    grid = aggregate.make_equal_area_grid()
+    summary, _ = aggregate.aggregate_signal(band, grid)
+
+    assert summary['n_slips'] == 2
+    # bands are (0-10, 10-20, 20-30, 30-40, 40-50, >50)
+    assert summary['slips_by_elev'] == [1, 0, 0, 0, 0, 1]
+
+
+def test_aggregate_signal_slip_at_nan_elevation_not_assigned_to_any_band():
+    band = _make_band(mp=[0.1], az=[0], el=[np.nan], slip=[True])
+    grid = aggregate.make_equal_area_grid()
+    summary, _ = aggregate.aggregate_signal(band, grid)
+
+    assert summary['n_slips'] == 1       # still counted in the scalar total
+    assert sum(summary['slips_by_elev']) == 0  # but not attributable to a band
+
+
+def test_aggregate_signal_without_snr():
+    band = _make_band(mp=[0.5, -0.5], az=[0, 10], el=[20, 30], slip=[False, False], snr=None)
+    grid = aggregate.make_equal_area_grid()
+    summary, _ = aggregate.aggregate_signal(band, grid)
+
+    assert summary['snr_mean'] is None
+    assert summary['snr_std'] is None

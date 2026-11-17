@@ -36,7 +36,6 @@ dependencies = [
     "charset-normalizer==3.4.4",
     "earthscope-cli==0.8.2",
     "earthscope-sdk==0.2.0",
-    "gnssmultipath==2.2.0",
     "cryptography",
     "dirsync>=2.2.4",
     "geopy==2.4.1",

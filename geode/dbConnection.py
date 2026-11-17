@@ -1538,8 +1538,10 @@ def _run_db_migrations(cnn: 'Cnn'):
 
     ##################################################################
     # RinexQC: per-signal/per-bin RINEX quality-control statistics
-    # (multipath, SNR, cycle slips) computed by the gnssmultipath library.
-    # See knowledge/architecture/rinex-qc.md. Four tables and two views:
+    # (multipath, SNR, cycle slips) computed by RINGO (see
+    # knowledge/decisions/0005-switch-to-ringo.md; was gnssmultipath,
+    # ADR-0003/0004). See knowledge/architecture/rinex-qc.md. Four tables
+    # and two views:
     #   rinex_qc_grids        -- az-el grid definitions, write-once/versioned
     #   rinex_qc_run          -- one row per QC run (one rinex file x tool x config)
     #   rinex_qc_signal       -- one row per run x signal (gnss/band_attr)
@@ -1645,7 +1647,8 @@ def _run_db_migrations(cnn: 'Cnn'):
                 'FK to rinex.api_id (not rinex''s own composite primary key, which has no single '
                 'unique-id column suitable for a simple FK).';
             COMMENT ON COLUMN rinex_qc_run.tool IS
-                'QC engine, e.g. ''gnssmultipath'' (later: ''anubis'').';
+                'QC engine, e.g. ''ringo'' (was ''gnssmultipath'', see '
+                'knowledge/decisions/0005-switch-to-ringo.md).';
             COMMENT ON COLUMN rinex_qc_run.config_hash IS
                 'SHA-256 of the canonical JSON of the science-affecting config fields only -- see '
                 'geode.rinex_qc.config.RinexQCConfig.config_hash.';
@@ -1691,20 +1694,24 @@ def _run_db_migrations(cnn: 'Cnn'):
             COMMENT ON COLUMN rinex_qc_signal.gnss IS
                 'G | R | E | C.';
             COMMENT ON COLUMN rinex_qc_signal.band_attr IS
-                'RINEX 3 band+attribute, e.g. ''1C'', ''2W'' -- see geode.rinex_qc.signals.normalize().';
+                'RINEX band + attribute, e.g. ''1C'', ''2W''. RINGO (the current tool, see '
+                'knowledge/decisions/0005-switch-to-ringo.md) reports multipath per band only, not '
+                'per exact attribute, so its rows use ''<band>?'' (e.g. ''1?'') -- see '
+                'geode.rinex_qc.runner.';
             COMMENT ON COLUMN rinex_qc_signal.obs_code_orig IS
                 'Observation code as it appeared in the RINEX file (RINEX 2 codes kept as-is, '
                 'e.g. ''P2'', so decades of RINEX 2/3 data stay traceable to their original code).';
             COMMENT ON COLUMN rinex_qc_signal.mp_partner IS
-                'The second-frequency phase code combined with this signal to form multipath '
-                '(gnssmultipath''s range2_Code).';
+                'The second-frequency phase code combined with this signal to form multipath. '
+                'Always NULL for RINGO-sourced rows -- it reports multipath per band, not per '
+                'exact code pair, see geode.rinex_qc.runner.';
             COMMENT ON COLUMN rinex_qc_signal.snr_band_only IS
                 'True when the SNR value attaches to the whole band rather than this specific '
                 'tracking attribute (always true for RINEX 2 SNR; true for RINEX 3 only when no '
                 'exact-attribute SNR code was present) -- see geode.rinex_qc.signals.find_snr_code().';
             COMMENT ON COLUMN rinex_qc_signal.n_slips IS
-                'From gnssmultipath''s slip_distribution_LLI_fusion (the deduplicated fusion of '
-                'its algorithmic and RINEX-LLI-based slip detection), not the raw per-method counts.';
+                'Count of epochs RINGO flagged as a slip on this band''s multipath combination '
+                '(rnxcsv --qcmode''s per-epoch s1/s2/s5 flags) -- see geode.rinex_qc.runner.';
             COMMENT ON COLUMN rinex_qc_signal.slips_by_elev IS
                 'Slip counts by elevation band: [0-10, 10-20, 20-30, 30-40, 40-50, >50] degrees.';
 

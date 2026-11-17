@@ -32,7 +32,6 @@ dependencies:
     - dispy
     - hdf5storage
     - simplekml
-    - gnssmultipath==2.2.0
     - textual>=0.50.0
     - rich>=13.0.0
     - staticmap>=0.5.4

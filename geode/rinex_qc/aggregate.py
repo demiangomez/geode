@@ -1,13 +1,14 @@
 """
 Per-signal and per-bin statistics, the equal-area az-el grid, and pool().
 
-Works entirely on the res dict runner.py returns -- see
-knowledge/decisions/0003-gnssmultipath-dependency.md for what every field
-in it actually contains, including the correction that slip counts are
-already broken down by elevation band by the tool itself.
+Works on the BandData arrays runner.py returns (see
+knowledge/decisions/0005-switch-to-ringo.md) -- (nepochs, nsats) arrays of
+MP/azimuth/elevation/SNR plus a boolean slip-flag array. Unlike
+gnssmultipath, RINGO reports slips per-epoch rather than pre-binned by
+elevation, so _slips_by_elev() below does that binning here instead.
 
 All statistics come from per-epoch values, after the elevation cutoff
-gnssmultipath itself already applied (masked as NaN in its arrays) --
+already applied by runner.py's call to RINGO (masked as NaN in az/el) --
 nothing here re-applies or second-guesses that cutoff.
 """
 import math
@@ -17,10 +18,10 @@ import numpy as np
 DEFAULT_RING_WIDTH_DEG  = 5.0
 DEFAULT_HORIZON_SECTORS = 72
 
-# Order matches the design doc's band list (<10, 10-20, ..., >50); n_slips_NaN
-# and n_slips_Tot are dropped (Tot is redundant with the scalar n_slips).
-_ELEV_BAND_KEYS = ('n_slips_0_10', 'n_slips_10_20', 'n_slips_20_30',
-                   'n_slips_30_40', 'n_slips_40_50', 'n_slips_over50')
+# Same 6 elevation bands the design doc specified (<10, 10-20, ..., >50),
+# previously read straight out of gnssmultipath's own slip_distribution
+# dict (ADR-0003); computed directly from (slip_mask, elevation) now.
+_ELEV_BAND_EDGES = (0, 10, 20, 30, 40, 50, 90)
 
 
 def make_equal_area_grid(ring_width_deg=DEFAULT_RING_WIDTH_DEG,
@@ -49,7 +50,7 @@ def make_equal_area_grid(ring_width_deg=DEFAULT_RING_WIDTH_DEG,
 def bin_indices(elevation, azimuth, grid):
     """
     Vectorized flat bin index for elevation/azimuth arrays of the same
-    shape. NaN elevation (masked by gnssmultipath's own cutoff) maps to -1,
+    shape. NaN elevation (masked by RINGO's own --elmaskf cutoff) maps to -1,
     as does any other non-finite input.
     """
     elevation = np.asarray(elevation, dtype=np.float64)
@@ -71,22 +72,17 @@ def bin_indices(elevation, azimuth, grid):
     return np.where(valid, idx, -1)
 
 
-def aggregate_signal(stats, azimuth, grid, snr_array=None):
+def aggregate_signal(band_data, grid):
     """
-    Per-signal summary statistics and per-bin statistics for one gnssmultipath
-    signal-combination result.
+    Per-signal summary statistics and per-bin statistics for one RINGO
+    band result (geode.rinex_qc.runner.BandData).
 
-    :param stats: one res[sys_name][band][code] dict (a flattened SignalStats).
-    :param azimuth: the matching (nepochs, nsats) azimuth array from
-        res['Sat_position'][sys_code]['azimuth'] (elevation comes from
-        `stats` itself, already masked the same way MP is).
-    :param snr_array: the matching (nepochs, nsats) SNR array from
-        res[sys_name]['SNR'][snr_code] (see signals.find_snr_code), or None.
     :return: (signal_summary: dict, bins: dict) -- bins is in the same
         {'n_obs', 'mp_rms', 'snr_mean'} shape pool() operates on.
     """
-    mp   = np.asarray(stats['multipath_range1'], dtype=np.float64)
-    elev = np.asarray(stats['sat_elevation_angles'], dtype=np.float64)
+    mp   = band_data.mp
+    elev = band_data.el
+    azimuth = band_data.az
     valid = np.isfinite(mp) & np.isfinite(elev)
 
     n_obs = int(valid.sum())
@@ -94,28 +90,38 @@ def aggregate_signal(stats, azimuth, grid, snr_array=None):
     mp_rms_m = float(np.sqrt(np.mean(mp[valid] ** 2))) if n_obs else None
 
     snr_mean = snr_std = None
-    if snr_array is not None:
-        snr = np.asarray(snr_array, dtype=np.float64)
+    if band_data.snr is not None:
+        snr = band_data.snr
         snr_valid = valid & np.isfinite(snr) & (snr != 0)
         if snr_valid.any():
             snr_vals = snr[snr_valid]
             snr_mean = float(np.mean(snr_vals))
             snr_std  = float(np.std(snr_vals))
 
-    fusion = stats['slip_distribution_LLI_fusion']
     signal_summary = {
         'n_obs':         n_obs,
         'n_sats':        n_sats,
         'mp_rms_m':      mp_rms_m,
         'snr_mean':      snr_mean,
         'snr_std':       snr_std,
-        'n_slips':       int(fusion['n_slips_Tot']),
-        'slips_by_elev': [int(fusion[k]) for k in _ELEV_BAND_KEYS],
-        'mp_partner':    stats['range2_Code'],
+        'n_slips':       int(band_data.slip.sum()),
+        'slips_by_elev': _slips_by_elev(band_data.slip, elev),
+        'mp_partner':    None,  # RINGO doesn't expose the exact code pair it used, see runner.py
     }
 
-    bins = _aggregate_bins(mp, elev, azimuth, grid, snr_array)
+    bins = _aggregate_bins(mp, elev, azimuth, grid, band_data.snr)
     return signal_summary, bins
+
+
+def _slips_by_elev(slip_mask, elev):
+    """Count slip-flagged epochs per elevation band; a slip at a NaN-elevation
+    epoch is not assignable to any band and is excluded (matches gnssmultipath's
+    own n_slips_NaN, which the previous ADR-0003-era code also dropped)."""
+    counts = []
+    for lo, hi in zip(_ELEV_BAND_EDGES[:-1], _ELEV_BAND_EDGES[1:]):
+        in_band = np.isfinite(elev) & (elev >= lo) & (elev < hi)
+        counts.append(int(np.count_nonzero(slip_mask & in_band)))
+    return counts
 
 
 def _aggregate_bins(mp, elev, azimuth, grid, snr_array=None):

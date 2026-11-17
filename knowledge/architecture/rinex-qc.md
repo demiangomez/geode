@@ -1,29 +1,31 @@
 # RINEX QC (`geode/rinex_qc/`, `com/RinexQC.py`)
 
 Per-signal/per-bin RINEX quality-control statistics (code multipath, SNR, cycle slips), computed
-by the `gnssmultipath` library, with full provenance. Built from a design doc ("GeoDE RINEX QC
-Module Implementation Instructions"); several things changed from that doc's first draft once the
-actual codebase and `gnssmultipath`'s real behavior were checked — see the ADRs below rather than
-trusting the original doc's assumptions.
+by **RINGO** (GSI, Japan — a single static binary, see `scripts/install_ringo.sh`), with full
+provenance. Originally built around `gnssmultipath` (ADR-0003); switched to RINGO after
+`gnssmultipath` turned up a string of real crashes on ordinary multi-GNSS CORS files at the scale
+GeoDE needs to run at (ADR-0004) — see [ADR-0005](../decisions/0005-switch-to-ringo.md) for the
+switch itself, what changed, and why. gnssmultipath is fully removed: no pip pin, no patch script,
+no import anywhere in `geode/rinex_qc/`.
 
 **Status as of 2026-11-17: Phases 1, 2 and 3 are all done and validated** (standalone CLI, schema,
-DB writer, `--incremental`/`--backfill` CLI modes, and the `ArchiveService.py` hook). What's left
-is validating against the project's actual documented fixtures (see "What's not built yet" below)
-and dynamic visualization (planned next, no code yet). Check `git log`/`git branch` before
-assuming otherwise.
+DB writer, `--incremental`/`--backfill` CLI modes, and the `ArchiveService.py` hook), now on RINGO.
+What's left is validating against the project's actual documented fixtures (see "What's not built
+yet" below) and dynamic visualization (planned next, no code yet). Check `git log`/`git branch`
+before assuming otherwise.
 
 ## Package layout
 
 | Module | Responsibility |
 |---|---|
-| `config.py` | `RinexQCConfig` — JSON + CLI-switch config, frozen dataclass. `config_hash` covers only science-affecting fields (`elev_cutoff_deg`, `systems`, `orbit_source`, `default_grid_id`, `snr_unit_policy`) — run-specific fields (`nav_paths`/`sp3_paths`/`keep_tool_outputs`/`work_dir`) are excluded on purpose. |
-| `prepare.py` | Thin wrapper around `pyRinex.ReadRinex` — **no decompression/header logic lives here**, it's all reused from `pyRinex.py` (see ADR-0002's pyRinex fix). |
-| `orbits.py` | Resolves broadcast (`GetBrdmOrbits` → `GetBrdcOrbits`+`GetBrdgOrbits` fallback) or SP3 (`GetSp3Orbits`) orbits via the existing `pyProducts` classes; `guard_same_day()` rejects a nav/sp3 file whose own filename encodes a different day than the observation. |
-| `signals.py` | RINEX2→RINEX3 `(gnss, band_attr)` mapping table + `find_snr_code()` (RINEX2 SNR is band-only; RINEX3 tries an exact attribute match first, falls back to band-only). |
-| `runner.py` | The only module that imports `gnssmultipath`. In-process call to `GNSS_MultipathAnalysis`; `write_results_to_csv=False` — **the returned dict already has everything needed**, see below. |
-| `aggregate.py` | `make_equal_area_grid()` (deterministic, 5° elevation rings × cos-weighted azimuth sectors), `bin_indices()` (vectorized), `aggregate_signal()` (per-signal + per-bin stats from one gnssmultipath result), `pool()` (exact n-weighted combination of stored bins — the basis for weekly/yearly stacking). |
-| `writer.py` | `write_json_csv()` (Phase 1 standalone output) and `write_db()` (the real DB writer — run+signal+bin rows in one transaction, skip-or-`--force`-replace on a unique-key conflict). `_quantize_bins()` does the storage-time mm/0.1-unit quantization (NULL = empty cell, not zero). |
-| `pipeline.py` | `process_one_file()` — the one place that chains prepare→orbits→runner→signals→aggregate and decides `ok`/`partial`/`failed`. Its `run` dict is always populated, even on failure (seeded from the caller-known `NetworkCode`/`StationCode`/`ObservationYear`/`ObservationDOY`/`rinex_id` when given), so a failed run is always something `write_db()` can store, not a dropped record. |
+| `config.py` | `RinexQCConfig` — JSON + CLI-switch config, frozen dataclass. `config_hash` covers only science-affecting fields (`elev_cutoff_deg`, `systems`, `orbit_source`, `default_grid_id`, `snr_unit_policy`) — run-specific fields (`nav_paths`/`sp3_paths`/`keep_tool_outputs`/`work_dir`/`ringo_bin`) are excluded on purpose. |
+| `prepare.py` | Thin wrapper around `pyRinex.ReadRinex` — kept for *provenance only* now (`header_fixed`, `rinex_version`, receiver/antenna type, interval). RINGO itself reads the original archived file directly, not pyRinex's sanitized temp copy — it handles raw `.Z`/`.gz`/Hatanaka files and the header issues pyRinex fixes with no pre-processing at all (ADR-0005). |
+| `orbits.py` | Resolves broadcast (`GetBrdmOrbits` → `GetBrdcOrbits`+`GetBrdgOrbits` fallback) or SP3 (`GetSp3Orbits`) orbits via the existing `pyProducts` classes; `guard_same_day()` rejects a nav/sp3 file whose own filename encodes a different day than the observation. Engine-agnostic, untouched by the RINGO switch. |
+| `signals.py` | `find_snr_code()` only — picks the raw SNR column for a given band. The old RINEX2→RINEX3 `(gnss, obs_code) → band_attr` mapping table is gone: RINGO reports multipath per band, not per exact observation code, so there's no attribute to map to any more. |
+| `runner.py` | The only module that shells out to `ringo`. Two subprocess calls (`rnxcsv --qcmode` for per-epoch az/el/MP/slip-flags, plain `rnxcsv` for raw SNR), parsed with pandas into `BandData` arrays per system/band. Also owns `_detrend_by_arc()` — see below, this is the part that actually matters. |
+| `aggregate.py` | `make_equal_area_grid()` (deterministic, 5° elevation rings × cos-weighted azimuth sectors), `bin_indices()` (vectorized), `aggregate_signal()` (per-signal + per-bin stats from one `BandData`, including `_slips_by_elev()` — RINGO gives per-epoch flags, not a pre-binned distribution like gnssmultipath did), `pool()` (exact n-weighted combination of stored bins — the basis for weekly/yearly stacking). |
+| `writer.py` | `write_json_csv()` (Phase 1 standalone output) and `write_db()` (the real DB writer — run+signal+bin rows in one transaction, skip-or-`--force`-replace on a unique-key conflict). `_quantize_bins()` does the storage-time mm/0.1-unit quantization (NULL = empty cell, not zero). Untouched by the RINGO switch — same `summary`/`bins` shape either engine produces. |
+| `pipeline.py` | `process_one_file()` — the one place that chains prepare→orbits→runner→aggregate and decides `ok`/`partial`/`failed`. Its `run` dict is always populated, even on failure (seeded from the caller-known `NetworkCode`/`StationCode`/`ObservationYear`/`ObservationDOY`/`rinex_id` when given), so a failed run is always something `write_db()` can store, not a dropped record. `TOOL_NAME`/`TOOL_VERSION` are `'ringo'`/`'0.9.6'`. `n_clock_jumps` is always `None` for now — see "Non-obvious decisions". |
 | `batch.py` | `find_pending()` (the `rinex` LEFT JOIN `rinex_qc_run` WHERE NULL query, optionally station-restricted/forced/ordered) and `process_batch()` (dispatches `run_qc_job()` over candidates via a caller-owned `pyJobServer.JobServer`). The one shared implementation `com/RinexQC.py`'s `--backfill`/`--incremental` and `ArchiveService.py`'s hook both call — neither reimplements "which files need a QC run". |
 
 `com/RinexQC.py` has two modes on the same entry point:
@@ -34,59 +36,38 @@ Exit code 0 iff every file finished `ok`/`partial`.
 
 ## Non-obvious decisions (read before touching this code)
 
-- **Sanitization is `pyRinex.ReadRinex`, not a new sanitizer.** It already does temp-copy,
-  decompression, header normalization, RINEX 2/3 conversion, interval checking — the same pipeline
-  `ArchiveService.py`/`ScanArchive.py` run before PPP. Real gaps found against `gnssmultipath` get
-  fixed directly in `pyRinex.check_header()`/the module-level helpers it calls, not duplicated
-  here — two so far:
-  - A blank `TIME SYSTEM` field for single-GNSS RINEX 2 files (`gnssmultipath` crashes on it
-    regardless of system). See [ADR-0002](../decisions/0002-python-311-migration.md).
-  - A blank (rather than explicit `0`) per-satellite observation count in RINEX 2's `PRN / # OF
-    OBS` record — legal per spec (e.g. a GPS satellite under Anti-Spoofing that never decodes P1),
-    but `gnssmultipath`'s whitespace-tokenizing parser drops the blank field as a missing token
-    instead of reading it as zero, eventually raising `IndexError: pop from empty list` elsewhere
-    in its header parser. Found on a real mixed GPS/GLONASS CORS station (`usa.gisa`) during a
-    `--backfill` run. Fixed by `pyRinex._PrnObsFixer`, a *stateful* fixer (not a line-local pure
-    function — an earlier version was, and it wasn't enough, see below). It tracks the declared
-    total obs-type count from `# / TYPES OF OBSERV` (itself handling that record's own
-    continuation lines) and a running per-satellite "slots consumed" counter, so it knows which of
-    the 9 slots on *any* physical `PRN / # OF OBS` line — first or continuation — are "real" (zero
-    observations, should be filled with `0`) versus genuine unused padding (file declares fewer
-    than 9/11/... obs types), without needing any slot on that line to already have a value. That
-    last part matters: a file declaring >9 obs types wraps this record onto a blank-PRN
-    continuation line per satellite, and a satellite can have zero observations on *every* code
-    that continuation line covers (e.g. a GLONASS satellite with no L5-equivalent signal) — making
-    the whole physical line blank, with nothing to anchor a simpler "zero-fill between two
-    populated fields" fix. `gnssmultipath` tokenizes a `PRN / # OF OBS` line by `line.split(' ')`;
-    a wholly-blank line produces an empty token list, and `.pop(0)` on it is the literal
-    `IndexError: pop from empty list` crash (confirmed by reading `gnssmultipath`'s installed
-    `readers/readRinexObs.py` directly, not just inferred from the traceback). Found on a second
-    real `usa.gisa` file (`gisa0860.26d.Z`, 11 declared obs types) after the first, line-local fix
-    had already shipped — see `knowledge/checkpoints/2026-11-17-prn-obs-multiline-fix.md`.
-    `RinexRecord.header_fixed` is set whenever this fixer actually changes a line, same as the
-    `TIME SYSTEM` fix above, for `rinex_qc_run.header_fixed` provenance.
-- **No CSV round-trip.** The design doc assumed `runner.py` would parse
-  `Result_files_CSV/<SYSTEM>_results.csv` for per-epoch MP/SNR/azimuth/elevation. It doesn't need
-  to: everything is already in the `analysisResults` dict `GNSS_MultipathAnalysis()` returns
-  in-process (`res[sys_name][band][code]['multipath_range1']` etc., `res['Sat_position'][sys_code]['azimuth']`
-  — azimuth **is** populated for broadcast-nav runs too, not just SP3). `write_results_to_csv=False`.
-  See [ADR-0003](../decisions/0003-gnssmultipath-dependency.md).
-- **The installed `gnssmultipath` package itself needs a post-install patch.** Three real bugs in
-  `gnssmultipath==2.2.0` (not GeoDE's own code) crash on ordinary multi-GNSS, >9-obs-type, or
-  gapped RINEX files — run `python scripts/patch_gnssmultipath.py` after any `conda env update`
-  (documented in `INSTALL.md`). See [ADR-0004](../decisions/0004-patch-gnssmultipath-multisystem-bugs.md)
-  and `knowledge/known-issues.md` for a fourth, narrower bug (partial orbit coverage) left
-  deliberately unfixed.
-- **Slip counts by elevation band are already computed by the tool.** `gnssmultipath`'s
-  `SignalStats` dataclass type-hints claim `range1_slip_distribution: int`, but at runtime it (and
-  `cycle_slip_distribution`/`LLI_slip_distribution`/`slip_distribution_LLI_fusion`, plus their
-  `_per_sat` variants) is actually a `dict` with `n_slips_0_10`/`n_slips_10_20`/.../`n_slips_over50`/
-  `n_slips_NaN`/`n_slips_Tot` keys — verified against a real run, not from reading the source alone
-  (ADR-0003 originally said the opposite before that correction; **trust the ADR's correction, not
-  its first draft**). `aggregate.py` reads `slip_distribution_LLI_fusion` (the deduplicated fusion
-  of the algorithmic range1/cycle-slip methods and the RINEX LLI flag) as the primary `n_slips`/
-  `slips_by_elev` source — a judgment call among four slightly different slip-detection methods
-  `gnssmultipath` computes, not something the design doc specified.
+- **RINGO needs no sanitization, but `pyRinex.ReadRinex` still runs for provenance.** RINGO handles
+  raw `.Z`/`.gz`/Hatanaka-compressed archive files, both RINEX versions, and the exact header
+  quirks `pyRinex.check_header()` was built to fix (blank `TIME SYSTEM`, blank `PRN / # OF OBS`
+  fields) with zero pre-processing — confirmed by feeding it the real files that used to crash
+  gnssmultipath before any sanitization at all. `prepare.prepare()` still runs `pyRinex.ReadRinex`
+  for every file, but purely to harvest `header_fixed`/`rinex_version`/receiver+antenna
+  type/interval for `rinex_qc_run`'s provenance columns; `runner.run()` is handed the *original*
+  `origin_file` path, not `rinexobj.rinex_path`. The pyRinex fixes themselves
+  (`_PrnObsFixer` etc.) stay in `pyRinex.py` regardless — they're still load-bearing for PPP/other
+  consumers of `ArchiveService.py`/`ScanArchive.py`'s own sanitization pass, this module just no
+  longer depends on them for its own correctness.
+- **Multipath needs detrending RINGO doesn't expose per epoch — this is the one real piece of new
+  science GeoDE now owns.** RINGO's raw `MP1`/`MP2`/`MP5` (from `rnxcsv --qcmode`) carry a
+  slowly-varying residual ionospheric term on top of actual multipath — a textbook property of the
+  code-minus-phase combination, not a RINGO quirk. A plain RMS of the raw values came out 5-20x too
+  large on real files (confirmed against RINGO's own `qc` text-summary STD on the same satellite:
+  raw ~2.5m vs its reported ~0.55m). RINGO detrends internally for that summary but never exposes
+  the result per epoch anywhere readable (its `qc --qclog` running-mean output still includes the
+  raw jump at each slip before resetting, which is worse, not better, for binning). `runner.py`'s
+  `_detrend_by_arc()` fits and removes a **degree-5 polynomial per slip-bounded arc** (arcs shorter
+  than `DETREND_DEGREE + 2` epochs are dropped entirely — too short to fit reliably) before
+  anything downstream — including the per-bin az-el aggregation — ever sees an MP value. Chosen
+  over simpler alternatives (flat per-arc mean: ~1.0-2x off; linear per-arc detrend: ~25-30% off)
+  because it's standard practice for isolating the ionospheric term and landed within ~1-10% of
+  RINGO's own numbers on every satellite checked. This also means `obs_code_orig`/`band_attr` for
+  every RINGO-sourced signal is a *band*, not an exact RINEX code (`'MP1'`/`'1?'`, not e.g.
+  `'C1C'`/`'1C'`) — RINGO never says which exact range+phase attribute it combined for a band, so
+  `mp_partner` is always `NULL` and `snr_band_only` is always `True` for these rows.
+- **`n_clock_jumps` is always `NULL` for now.** gnssmultipath reported it as a QC statistic; RINGO
+  treats clock jumps as something to *fix* (a separate `clkcorr` command that rewrites the file),
+  not something `qc` reports a count of. Dropped deliberately rather than guessed at — Demian's
+  call when switching engines. Revisit if clock-jump counting turns out to matter in practice.
 - **Grid storage is az-el-only**, per Demian's explicit decision: no separate elevation-ring grid is
   seeded or stored; `rinex_qc_grids` holds only the equal-area az-el grid, write-once/versioned (a
   different grid needs a new `grid_id`, never an edit to an existing row — not yet implemented,
@@ -96,8 +77,14 @@ Exit code 0 iff every file finished `ok`/`partial`.
   in-memory accumulator shape — this is what weekly/yearly stacking will actually call with two
   already-persisted rows' bins.
 - **`com/UpdateEarthquakes.py`** was rewritten off `libcomcat` onto direct USGS ComCat REST calls as
-  part of unblocking this module's `gnssmultipath` dependency (numpy version conflict chain) — see
-  ADR-0002. Unrelated to RinexQC's own logic, but touched in the same effort.
+  part of unblocking this module's original `gnssmultipath` dependency (numpy version conflict
+  chain) — see ADR-0002. Unrelated to RinexQC's own logic (and gnssmultipath itself is gone now,
+  ADR-0005), but touched in the same earlier effort.
+- **History: gnssmultipath was the original engine (ADR-0003), patched three times for real bugs
+  on real multi-GNSS files (ADR-0004), then replaced (ADR-0005)** once it became clear the bug
+  count wasn't converging and the files GeoDE needs to process at scale (22M+) kept finding new
+  ones. All of ADR-0003/0004's content is now historical, not current architecture — read
+  ADR-0005 for what's true today.
 
 ## Schema (Phase 2, done)
 
@@ -147,8 +134,9 @@ has no existing test harness to extend (a pre-existing, separately tracked gap �
   exactly like `process_visits()`'s two sequential clusters already do. A QC failure never affects
   archiving: the hook is a separate pass over `rinex` rows, not inline in `process_crinex_file`.
   `--no_rinex_qc` opts out for one run. `geode.rinex_qc` is imported **locally inside the hook
-  function**, not at `ArchiveService.py`'s top level, so `--no_rinex_qc` (or an install that hasn't
-  added `gnssmultipath` yet) never pulls it into ArchiveService's import graph at all.
+  function**, not at `ArchiveService.py`'s top level, so `--no_rinex_qc` (or an install that
+  hasn't run `scripts/install_ringo.sh` yet) never pulls it into ArchiveService's import graph at
+  all.
 - `com/RinexQC.py`'s positional argument is dual-purpose: direct RINEX file paths in standalone
   mode, or a station-list (`geode.Utils.process_stnlist` syntax) in `--backfill`/`--incremental`
   mode. Argparse validates the mutual exclusivity and that standalone mode actually got files.
@@ -171,13 +159,21 @@ correctness) — relies on `dispy` itself already being validated (ADR-0002) and
 ## What's not built yet
 
 - Validation against the project's actual documented fixtures (LHCL 1996-251, SANT 2025-212, AGGO
-  2025-212) with their exact reference MP RMS/epoch-count/clock-jump values — everything validated
-  so far used real-but-different archive data (LHCL/AGGO day 005, 2026) for mechanical correctness,
-  not the documented numbers.
+  2025-212) with their exact reference MP RMS/epoch-count values — everything validated so far
+  used real-but-different archive data for mechanical correctness, not the documented numbers.
+  (Clock-jump values no longer apply either way — see "Non-obvious decisions".)
 - Dynamic visualization of the results (planned next — a backend module for the separate web
   frontend; no code yet).
-- `gnssmultipath` dependency acceptance is recorded in [ADR-0003](../decisions/0003-gnssmultipath-dependency.md);
-  the Python 3.11 migration it required is [ADR-0002](../decisions/0002-python-311-migration.md).
+- A fourth, narrower gnssmultipath-era bug (per-epoch satellite handling when orbit coverage is
+  partial) was found and left unfixed before the switch to RINGO — now moot, kept only as a
+  historical note in `knowledge/known-issues.md`.
+- Engine history: [ADR-0003](../decisions/0003-gnssmultipath-dependency.md) (adopted gnssmultipath),
+  [ADR-0004](../decisions/0004-patch-gnssmultipath-multisystem-bugs.md) (patched three of its real
+  bugs), [ADR-0005](../decisions/0005-switch-to-ringo.md) (replaced it with RINGO — current state).
+  The Python 3.11 migration ADR-0003 required is [ADR-0002](../decisions/0002-python-311-migration.md)
+  (still relevant — RINGO has no Python version dependency itself, but the rest of GeoDE does).
   Session logs: [2026-11-16-python-311-migration.md](../checkpoints/2026-11-16-python-311-migration.md),
   [2026-11-17-rinex-qc-schema.md](../checkpoints/2026-11-17-rinex-qc-schema.md),
-  [2026-11-17-rinex-qc-phase3.md](../checkpoints/2026-11-17-rinex-qc-phase3.md).
+  [2026-11-17-rinex-qc-phase3.md](../checkpoints/2026-11-17-rinex-qc-phase3.md),
+  [2026-11-17-gnssmultipath-multisystem-bugs.md](../checkpoints/2026-11-17-gnssmultipath-multisystem-bugs.md),
+  [2026-11-17-switch-to-ringo.md](../checkpoints/2026-11-17-switch-to-ringo.md).

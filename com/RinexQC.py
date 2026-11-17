@@ -7,8 +7,9 @@ Author: GeoDE RINEX QC module
 RinexQC
 ==============================================================================
 Computes per-signal/per-bin RINEX quality-control statistics (code
-multipath, SNR and cycle-slip metrics) via gnssmultipath, with full
-provenance (tool, version, config hash).
+multipath, SNR and cycle-slip metrics) via RINGO (see
+scripts/install_ringo.sh), with full provenance (tool, version, config
+hash).
 
 Standalone mode (default): runs on one or more RINEX files directly,
 writing one <file>_qc.json + <file>_qc_bins.csv per file. No database
@@ -43,7 +44,18 @@ def process_file(path, config, Config, out_dir):
     result = pipeline.process_one_file(path, config, Config)
     basename = os.path.splitext(os.path.basename(path))[0]
     writer.write_json_csv(out_dir, basename, result.run, result.signals)
+    if config.keep_tool_outputs and result.run_result is not None:
+        _write_tool_outputs(out_dir, basename, result.run_result)
     return result
+
+
+def _write_tool_outputs(out_dir, basename, run_result):
+    if run_result.qc_csv is not None:
+        with open(os.path.join(out_dir, '%s_ringo_qcmode.csv' % basename), 'w') as f:
+            f.write(run_result.qc_csv)
+    if run_result.obs_csv is not None:
+        with open(os.path.join(out_dir, '%s_ringo_obs.csv' % basename), 'w') as f:
+            f.write(run_result.obs_csv)
 
 
 def run_standalone(args, config):
@@ -93,7 +105,7 @@ def run_db_mode(args, config):
 def main():
     parser = argparse.ArgumentParser(
         description='GeoDE RINEX QC: per-signal/per-bin multipath, SNR and cycle-slip '
-                    'statistics via gnssmultipath.')
+                    'statistics via RINGO.')
 
     parser.add_argument('targets', nargs='*', metavar='rinex_file|station',
                         help='Standalone mode: one or more RINEX/CRINEX(Z) file paths. With '
@@ -111,11 +123,15 @@ def main():
     parser.add_argument('-sp3', '--sp3', nargs='+', metavar='{path}',
                         help='Explicit SP3 file(s) (up to 3), overriding archive lookup. '
                              'Standalone mode only.')
+    parser.add_argument('-ringo', '--ringo-bin', metavar='{path}',
+                        help="Path to the ringo binary (default: 'ringo', assumed on PATH -- "
+                             'see scripts/install_ringo.sh).')
     parser.add_argument('-out', '--out-dir', metavar='{path}', default='.',
                         help='Standalone mode: output directory for *_qc.json/*_qc_bins.csv '
                              '(default: current directory).')
     parser.add_argument('-keep', '--keep-tool-outputs', action='store_true',
-                        help="Don't delete gnssmultipath's own temporary output directory.")
+                        help='Standalone mode: also write *_ringo_qcmode.csv/*_ringo_obs.csv '
+                             "(RINGO's raw per-epoch output) alongside *_qc.json.")
     parser.add_argument('-dry', '--dry-run', action='store_true',
                         help='Resolve inputs and print the plan only; no processing.')
 
@@ -156,6 +172,7 @@ def main():
             nav_paths=tuple(args.nav) if args.nav else None,
             sp3_paths=tuple(args.sp3) if args.sp3 else None,
             keep_tool_outputs=True if args.keep_tool_outputs else None,
+            ringo_bin=args.ringo_bin,
         )
     except RinexQCConfigError as e:
         print(' >> Configuration error: %s' % e)
