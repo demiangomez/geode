@@ -6,11 +6,10 @@ Module Implementation Instructions"); several things changed from that doc's fir
 actual codebase and `gnssmultipath`'s real behavior were checked — see the ADRs below rather than
 trusting the original doc's assumptions.
 
-**Status as of 2026-11-16: Phase 1 complete and validated against real archive data (LHCL/AGGO
-day-005 2026, not the project's documented validation fixtures — those still need to be supplied
-and run for exact reference-value checks). Phase 2 (schema) and Phase 3 (DB writer, backfill/
-incremental CLI modes, `ArchiveService.py` hook) are not yet built.** Check `git log`/`git branch`
-before assuming otherwise.
+**Status as of 2026-11-17: Phase 1 (standalone CLI) and Phase 2 (schema) are done and validated.
+Phase 3 (DB writer, backfill/incremental CLI modes, `ArchiveService.py` hook) is not yet built —
+`writer.py` still only writes JSON/CSV; nothing in this package talks to the database yet.** Check
+`git log`/`git branch` before assuming otherwise.
 
 ## Package layout
 
@@ -62,13 +61,44 @@ before assuming otherwise.
   part of unblocking this module's `gnssmultipath` dependency (numpy version conflict chain) — see
   ADR-0002. Unrelated to RinexQC's own logic, but touched in the same effort.
 
+## Schema (Phase 2, done)
+
+`qc_grid`, `rinex_qc_run`, `rinex_qc_signal`, `rinex_qc_signal_bins` + views `rinex_qc_bins_long`/
+`rinex_qc_latest`, added to `geode/dbConnection.py`'s `_run_db_migrations()`, including the
+defensive `rinex.api_id` existence-check-and-add (needed because GeoDE Studio's Django app, not
+this repo, normally creates that column, and it may not exist on every install). A few departures
+from the design doc's literal DDL, worth knowing before writing the Phase 3 DB writer:
+
+- `rinex_qc_run.rinex_id integer REFERENCES rinex(api_id)` replaces the doc's placeholder
+  `"Filename" varchar` column — `rinex`'s real primary key is composite
+  (`NetworkCode, StationCode, ObservationYear, ObservationDOY, Interval, Completion`) and
+  `Filename` isn't unique, so it can't be an FK target. `rinex_qc_run` still keeps
+  `"NetworkCode"`/`"StationCode"`/`"ObservationYear"`/`"ObservationDOY"` as denormalized columns
+  (copied from the `rinex` row at insert time by the future writer) so station/date queries don't
+  need to join `rinex` every time.
+- The unique key is `(rinex_id, tool, tool_version, config_hash)` — simpler than the doc's 5-column
+  version now that `rinex_id` alone identifies the file.
+- `qc_grid` seeds exactly **one** row (`id=1`, the az-el equal-area grid), computed live from
+  `geode.rinex_qc.aggregate.make_equal_area_grid()` at migration time rather than a hardcoded
+  literal — so the seeded DB row can never drift from what the code actually generates. No
+  elevation-ring grid is seeded (Demian's call — see the checkpoint).
+- `rinex_qc_latest` is `DISTINCT ON (rinex_id, tool) ... ORDER BY run_at DESC` — it does **not**
+  filter on "the current default config_hash" the way the design doc describes, because "default"
+  is a `RinexQCConfig` (client-side) notion this schema has no way to query. It relies on
+  incremental/backfill runs always targeting the current default config, so in practice the
+  newest run per file+tool already is the default-config one.
+- `rinex_qc_bins_long` resolves each unnested cell's elevation/azimuth limits via a `qc_grid`-driven
+  CTE (cumulative sum of `az_bins` per ring via a window function) — validated against a real
+  Postgres instance, see the checkpoint for exact numbers.
+
+Validated against a real, throwaway Postgres 16 instance (not the project's actual database) —
+see `knowledge/checkpoints/2026-11-17-rinex-qc-schema.md` for what was checked. No automated
+pytest coverage was added for the migration itself; `geode/dbConnection.py`/the migration system
+has no existing test harness to extend (a pre-existing, separately tracked gap — see
+`architecture/overview.md`'s "Testing & CI" section).
+
 ## What's not built yet
 
-- Schema migration (`qc_grid`, `rinex_qc_run`, `rinex_qc_signal`, `rinex_qc_signal_bins`, views
-  `rinex_qc_bins_long`/`rinex_qc_latest`) in `geode/dbConnection.py`'s `_run_db_migrations()`,
-  including the defensive `rinex.api_id` existence-check-and-add (Demian wants this because
-  GeoDE Studio's Django app, not this repo, is what normally creates that column, and it may not
-  exist on every install).
 - `writer.py`'s DB writer (replacing the Phase 1 JSON/CSV `TODO(db)`).
 - `com/RinexQC.py --incremental`/`--backfill` modes, modeled on `com/ScanArchive.py`'s
   `process_ppp()` (`rinex` LEFT JOIN `rinex_qc_run` WHERE NULL, dispatched via `pyJobServer`).

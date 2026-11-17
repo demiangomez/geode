@@ -15,7 +15,8 @@ of this writing.
 `gamit_htc` + `gamit_projects`, `stacks`, `reference_frames` + `reference_frame_constraints`,
 `etms`, `etm_params`, `earthquakes`, `events`, `locks`, `executions`, `keys`, `aws_sync`,
 `data_source`, `s_score_cache`, `sources_metadata` + `sources_servers` + `sources_stations` +
-`sources_formats`.
+`sources_formats`, `qc_grid` + `rinex_qc_run` + `rinex_qc_signal` + `rinex_qc_signal_bins` (see
+[rinex-qc.md](rinex-qc.md)).
 
 **Owned by the sibling Django app** (migrated by Django, not by this repo — never add/alter these
 from `geode` code except through the documented read-only joins): `api_*` (campaigns, person,
