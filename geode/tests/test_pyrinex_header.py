@@ -166,3 +166,61 @@ def test_already_populated_time_system_is_left_untouched(tmp_path):
     with pyRinex.ReadRinex('arg', 'lhcl', str(fixture), min_time_seconds=1) as r:
         assert r.header_fixed is False
         assert _time_of_first_obs_line(r.rinex_path) == original_line
+
+
+# Minimal mixed GPS/GLONASS RINEX 2.11 fixture reproducing a real station
+# (usa.gisa) found during a --backfill run: GPS satellite G03 has zero P1
+# observations (Anti-Spoofing), written as a blank field in 'PRN / # OF
+# OBS' -- see test_pyrinex_prn_obs.py for why that crashes gnssmultipath.
+_MIXED_HEADER = """\
+     2.11           OBSERVATION DATA    M (MIXED)           RINEX VERSION / TYPE
+teqc  2010Oct21     CORS/NGS/NOAA       20111215 06:22:28UTCPGM / RUN BY / DATE
+GISA                                                        MARKER NAME
+GISA                                                        MARKER NUMBER
+5035K69869          TRIMBLE NETR9       4.22                REC # / TYPE / VERS
+TRM55971.00         TRM55971.00     NONE                    ANT # / TYPE
+ -2419202.3416 -4703569.1027  3553012.4295                  APPROX POSITION XYZ
+        0.0000        0.0000        0.0000                  ANTENNA: DELTA H/E/N
+     1     1                                                WAVELENGTH FACT L1/2
+     7    C1    L1    L2    P1    P2    S1    S2            # / TYPES OF OBSERV
+    30.0000                                                 INTERVAL
+    15                                                      LEAP SECONDS
+    24                                                      # OF SATELLITES
+   G03  1109  1109  1105        1105  1109  1105            PRN / # OF OBS
+   R01  1036  1036  1033  1036  1033  1036  1033            PRN / # OF OBS
+  2011    12     8     0     0    0.0000000     GPS         TIME OF FIRST OBS
+                                                            END OF HEADER
+"""
+
+_MIXED_DATA = """\
+ 11 12 08 00 00 00.0000000  0  2G03R01
+  21720628.938   114142803.398 8  88942483.33645                  21720635.234
+        48.900          35.500
+  21792882.758   114522436.685 8  89238358.04046                  21792889.426
+        49.800          37.800
+ 11 12 08 00 00 30.0000000  0  2G03R01
+  21720277.750   114140966.260 8  88941213.79946                  21720282.340
+        48.800          35.600
+  21792882.758   114522436.685 8  89238358.04046                  21792889.426
+        49.800          37.800
+ 11 12 08 00 01 00.0000000  0  2G03R01
+  21720277.750   114140966.260 8  88941213.79946                  21720282.340
+        48.800          35.600
+  21792882.758   114522436.685 8  89238358.04046                  21792889.426
+        49.800          37.800
+"""
+
+
+def test_prn_obs_blank_field_fixed_for_real_mixed_system_file(tmp_path):
+    fixture = tmp_path / 'gisa0010.26o'
+    fixture.write_text(_MIXED_HEADER + _MIXED_DATA)
+
+    with pyRinex.ReadRinex('usa', 'gisa', str(fixture), min_time_seconds=1) as r:
+        assert r.system == 'M'
+        with open(r.rinex_path, encoding='latin-1') as f:
+            prn_obs_lines = [line for line in f if 'PRN / # OF OBS' in line]
+
+    assert prn_obs_lines[0][:60].split() == \
+        ['G03', '1109', '1109', '1105', '0', '1105', '1109', '1105']
+    assert prn_obs_lines[1][:60].split() == \
+        ['R01', '1036', '1036', '1033', '1036', '1033', '1036', '1033']

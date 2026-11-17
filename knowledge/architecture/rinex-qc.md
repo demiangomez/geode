@@ -36,9 +36,19 @@ Exit code 0 iff every file finished `ok`/`partial`.
 
 - **Sanitization is `pyRinex.ReadRinex`, not a new sanitizer.** It already does temp-copy,
   decompression, header normalization, RINEX 2/3 conversion, interval checking — the same pipeline
-  `ArchiveService.py`/`ScanArchive.py` run before PPP. The one real gap (`gnssmultipath` crashing on
-  a blank `TIME SYSTEM` field for single-GNSS RINEX 2 files) was fixed directly in
-  `pyRinex.check_header()`, not duplicated here. See [ADR-0002](../decisions/0002-python-311-migration.md).
+  `ArchiveService.py`/`ScanArchive.py` run before PPP. Real gaps found against `gnssmultipath` get
+  fixed directly in `pyRinex.check_header()`/the module-level helpers it calls, not duplicated
+  here — two so far:
+  - A blank `TIME SYSTEM` field for single-GNSS RINEX 2 files (`gnssmultipath` crashes on it
+    regardless of system). See [ADR-0002](../decisions/0002-python-311-migration.md).
+  - A blank (rather than explicit `0`) per-satellite observation count in RINEX 2's `PRN / # OF
+    OBS` record — legal per spec (e.g. a GPS satellite under Anti-Spoofing that never decodes P1),
+    but `gnssmultipath`'s whitespace-tokenizing parser drops the blank field as a missing token
+    instead of reading it as zero, eventually raising `IndexError: pop from empty list` elsewhere
+    in its header parser. Found on a real mixed GPS/GLONASS CORS station (`usa.gisa`) during a
+    `--backfill` run; fixed by `pyRinex._fix_prn_obs_blanks()` (only *interior* blanks, between two
+    populated fields, get zero-filled — trailing blanks past the last populated field are normal
+    padding when a file declares fewer than 9 observation types, and are left alone).
 - **No CSV round-trip.** The design doc assumed `runner.py` would parse
   `Result_files_CSV/<SYSTEM>_results.csv` for per-epoch MP/SNR/azimuth/elevation. It doesn't need
   to: everything is already in the `analysisResults` dict `GNSS_MultipathAnalysis()` returns

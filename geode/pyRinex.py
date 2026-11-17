@@ -48,6 +48,30 @@ class pyRinexExceptionSingleEpoch (pyRinexException): pass
 class pyRinexExceptionNoAutoCoord (pyRinexException): pass
 
 
+def _fix_prn_obs_blanks(line):
+    """
+    Fix a RINEX 2 'PRN / # OF OBS' header line: a satellite's observable
+    that legitimately has zero observations (e.g. GPS P1 on a satellite
+    affected by Anti-Spoofing, where the receiver tracks C1 but never
+    decodes P1) is written as a blank 6-character field rather than '0'.
+    RINEX 2 writes an explicit 0 for "not tracked" everywhere else in
+    this same record (trailing, unused obscode slots are the only
+    legitimate blanks) -- but some tools (gnssmultipath 2.2.0) tokenize
+    this line by splitting on whitespace, so a blank field in the middle
+    of populated ones silently shifts or drops a token instead of
+    reading as zero, eventually raising on an empty list elsewhere in
+    their parser. Only interior blanks (followed by at least one more
+    populated field) are filled in; trailing blanks past the last
+    populated field are left alone -- those are normal unused padding
+    when a file declares fewer than 9 observation types.
+    """
+    head, rest, label = line[:6], line[6:60], line[60:]
+    slots = [rest[i:i + 6] for i in range(0, len(rest), 6)]
+    last_populated = max((i for i, s in enumerate(slots) if s.strip()), default=-1)
+    slots = [s if s.strip() or i > last_populated else '     0' for i, s in enumerate(slots)]
+    return head + ''.join(slots) + label
+
+
 class RinexRecord(object):
 
     def __init__(self, NetworkCode=None, StationCode=None):
@@ -470,6 +494,8 @@ class ReadRinex(RinexRecord):
                         # reformat comments (some come in wrong positions!)
                         fields, _ = self.read_fields(line, 'COMMENT', self.required_records['COMMENT']['format_tuple'])
                         new_header += [self.format_record(self.required_records, 'COMMENT', fields) + '\n']
+                    elif line_strip.endswith('PRN / # OF OBS'):
+                        new_header += [_fix_prn_obs_blanks(line)]
                     else:
                         # leave END OF HEADER until the end to add possible missing records
                         new_header += [line]
