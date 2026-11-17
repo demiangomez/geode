@@ -32,6 +32,9 @@ TYPE_RINEX  = 1
 TYPE_RINEZ  = 2
 TYPE_CRINEX = 3
 TYPE_CRINEZ_2 = 4
+TYPE_RINEZ_2  = 5
+TYPE_RINEZ_3  = 6
+TYPE_CRINEZ_3 = 7
 
 
 class pyRinexException(Exception):
@@ -542,7 +545,7 @@ class ReadRinex(RinexRecord):
                 prg1 = 'zcat "%s" ' % self.local_copy
 
         # determine the program to pipe into
-        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_CRINEZ_2):
+        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_CRINEZ_2, TYPE_CRINEZ_3):
             prg2 = ' | crx2rnx > "%s"' % self.rinex_path
         else:
             prg2 = ' > "%s"' % self.rinex_path
@@ -675,7 +678,8 @@ class ReadRinex(RinexRecord):
 
         copy(origin_file, self.rootdir)
 
-        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_RINEZ, TYPE_CRINEZ_2):
+        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_RINEZ, TYPE_CRINEZ_2,
+                                TYPE_RINEZ_2, TYPE_RINEZ_3, TYPE_CRINEZ_3):
             self.uncompress()
 
         # check basic infor in the rinex header to avoid problems with RinSum
