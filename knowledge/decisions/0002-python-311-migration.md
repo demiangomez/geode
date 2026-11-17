@@ -73,6 +73,14 @@ environments cloned/created for this purpose only, before ever touching the real
 - `cartopy` downloads Natural Earth coastline/lake shapefiles over the network on first use
   (cached after); `basemap` bundled its own low-resolution coastline data. Only relevant for a
   fully air-gapped deployment, none known to exist.
+- **Gap found after the fact (2026-11-17):** this ADR's own `dispy` smoke test didn't pass a
+  `cluster_status` callback to `dispy.JobCluster()`, so it missed that `dispy`/`pycos` both still
+  call the Python-3.11-removed `inspect.getargspec()` in that exact code path -- which
+  `pyJobServer.py` always exercises (`cluster_status=self.check_cluster`). This broke **every**
+  parallel `JobServer` repo-wide (`ArchiveService.py`, `ScanArchive.py`, `ParallelGamit.py`, ...),
+  not just RinexQC, and only surfaced on a real deployment run. Fixed with a monkeypatch shim in
+  `pyJobServer.py`; see
+  [checkpoints/2026-11-17-dispy-getargspec-fix.md](../checkpoints/2026-11-17-dispy-getargspec-fix.md).
 - Every other pinned/unpinned dependency was re-verified empirically (full install + `pip check` +
   test suite) rather than individually re-checked by metadata lookups — see the checkpoint for the
   full list.

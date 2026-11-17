@@ -57,6 +57,20 @@ knowledge of GAMIT sessions — it's the data-preparation step `ParallelGamit.py
 - Results arrive via dispy's `callback` mechanism (`job.result`/`job.exception` per finished job),
   not polling.
 
+**Python 3.11 compatibility shim (read before touching this file's imports):** `dispy` 4.15.2 (the
+latest release on PyPI; the package appears unmaintained) and `pycos` 4.12.2 both still call
+`inspect.getargspec()`, removed outright in Python 3.11 (deprecated since Python 3.0). Every
+`dispy.JobCluster(..., cluster_status=...)` call — i.e. every `JobServer(..., run_parallel=True)`,
+the default — hits this and raises `AttributeError` during `dispy`'s own argument validation,
+surfacing as a confusing `Exception: Invalid "cluster_status" function; it must take excatly 3
+arguments`. `pyJobServer.py` shims `inspect.getargspec` back onto the `inspect` module (matching
+its original `(args, varargs, keywords, defaults)` return shape) **before** `import dispy`, at
+module level — this is a global monkeypatch on the stdlib `inspect` module, which is also why it
+fixes the same bug inside `pycos` itself for free (3 more call sites, for its optional
+`transform`/`categorize` channel features) without needing a second patch site. If `dispy`/`pycos`
+are ever upgraded to a release that fixes this upstream, the `hasattr(inspect, 'getargspec')` guard
+means the shim becomes a no-op automatically — nothing to remove by hand.
+
 **Retry logic** is mostly in `pyRunWithRetry.RunCommand.run_shell()`: wraps `subprocess.run` with up
 to 2 retries on `TimeoutExpired` and `OSError` errno 35 (resource temporarily unavailable).
 

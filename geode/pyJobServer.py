@@ -7,12 +7,32 @@ This module handles the cluster nodes and checks all the necessary dependencies
 before sending jobs to each node
 """
 
+import collections
+import inspect
 import time
 import _thread
 import queue
 import traceback
 import os
 import threading
+
+# dispy 4.15.2 (the latest release on PyPI as of this writing) still calls the
+# long-removed inspect.getargspec() to validate the job_status/cluster_status
+# callbacks passed to dispy.JobCluster() -- removed outright in Python 3.11
+# (deprecated since Python 3.0), so every dispy.JobCluster(..., cluster_status=...)
+# call (i.e. every JobServer(..., run_parallel=True), the default) raises
+# AttributeError on import and then a confusing "Invalid cluster_status function"
+# Exception. dispy itself has not been updated for this; shim the removed
+# function back in -- same (args, varargs, keywords, defaults) shape
+# getargspec always returned, which is all dispy's own assertions read.
+if not hasattr(inspect, 'getargspec'):
+    _ArgSpec = collections.namedtuple('ArgSpec', ['args', 'varargs', 'keywords', 'defaults'])
+
+    def _getargspec_shim(func):
+        spec = inspect.getfullargspec(func)
+        return _ArgSpec(spec.args, spec.varargs, spec.varkw, spec.defaults)
+
+    inspect.getargspec = _getargspec_shim
 
 # deps
 from tqdm import tqdm
