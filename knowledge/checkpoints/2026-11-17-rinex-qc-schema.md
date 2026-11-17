@@ -53,6 +53,21 @@ alternate port + Unix socket, no sudo/system-service involvement, destroyed afte
 - Confirmed `lz4` column compression is actually applied (`pg_attribute.attcompression = 'l'` for
   `n_obs`/`mp_rms_mm`/`snr_ddbhz`).
 
+## Post-commit fix (same day)
+
+The disposable Postgres 16 instance used for validation happened to be built with lz4 support;
+Demian's actual deployment is not. `ALTER TABLE rinex_qc_signal_bins ... SET COMPRESSION lz4` was
+inline in the same transaction as the table creation, so on a server without lz4 support the whole
+transaction aborted -- nothing committed, and because `run_db_migrations()` runs on every `Cnn()`
+connection, this broke **every** `com/*.py` script immediately (the aborted transaction state also
+broke the `pg_advisory_unlock()` call right after it, in `run_db_migrations()` itself). Fixed by
+moving the compression attempt into its own transaction after table creation, wrapped in
+try/except with an explicit `rollback_transac()` on failure -- see commit `2bb37b9`. Re-verified
+against two disposable instances: one where lz4 succeeds, and a direct simulation of the failure
+class (`SET COMPRESSION not_a_real_method`) confirming the connection stays healthy afterward.
+Lesson: `lz4` column compression needs PG14+ **and** `--with-lz4` at build time -- version alone
+doesn't guarantee it, and this wasn't caught by testing against only one (capable) Postgres build.
+
 ## Known issues / limitations
 
 - Not tested: the `rinex.api_id` column actually being *absent* and getting added fresh (the dump
