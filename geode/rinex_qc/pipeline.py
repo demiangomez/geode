@@ -7,6 +7,7 @@ place that decides what a failed/partial file looks like.
 import dataclasses
 import os
 import time
+import traceback
 
 from geode import pyProducts
 from geode.rinex_qc import aggregate, orbits, prepare, runner, signals
@@ -128,8 +129,13 @@ def process_one_file(origin_file, config, Config, NetworkCode=None, StationCode=
                         elev_cutoff_deg=config.elev_cutoff_deg,
                         work_dir=rinexobj.rootdir,
                         keep_tool_outputs=config.keep_tool_outputs)
-                except Exception as e:
-                    return failed('gnssmultipath failed: %s' % e)
+                except Exception:
+                    # the bare exception message alone (e.g. "pop from empty
+                    # list") is useless for diagnosing a failure inside
+                    # gnssmultipath's own parsing -- keep the full traceback
+                    # so rinex_qc_run.message is enough to debug from later,
+                    # without needing to reproduce it live.
+                    return failed('gnssmultipath failed:\n%s' % traceback.format_exc())
 
                 run['runtime_s'] = run_result.runtime_s
 
@@ -183,8 +189,8 @@ def process_one_file(origin_file, config, Config, NetworkCode=None, StationCode=
     except (pyProducts.pyProductsException, orbits.OrbitGuardError,
            orbits.OrbitResolutionError) as e:
         return failed('Orbit resolution failed: %s' % e)
-    except Exception as e:
-        return failed(str(e))
+    except Exception:
+        return failed(traceback.format_exc())
 
 
 def _sys_code(res, sys_name):

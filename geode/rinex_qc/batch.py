@@ -16,7 +16,7 @@ from geode.rinex_qc import pipeline, writer
 ERRORS_LOG = 'errors_RinexQC.log'
 
 
-def find_pending(cnn, config, station_list=None, force=False, newest_first=True):
+def find_pending(cnn, config, station_list=None, force=False, newest_first=True, limit=None):
     """
     Rinex rows that need a QC run under config's config_hash.
 
@@ -29,6 +29,8 @@ def find_pending(cnn, config, station_list=None, force=False, newest_first=True)
     :param newest_first: backfill wants newest-first (recent data
         available early); an ArchiveService incremental pass doesn't
         care, since it's always a small, recently-inserted set.
+    :param limit: cap the number of rows returned (e.g. to try a handful
+        of files before committing to a multi-thousand-file batch).
     :return: list of dicts (NetworkCode, StationCode, ObservationYear,
         ObservationDOY, Filename, rinex_id), ordered as requested.
     """
@@ -47,6 +49,10 @@ def find_pending(cnn, config, station_list=None, force=False, newest_first=True)
     where_sql = (' AND ' + ' AND '.join(filters)) if filters else ''
     order_sql = ('ORDER BY rinex."ObservationSTime" DESC' if newest_first else
                 'ORDER BY rinex."NetworkCode", rinex."StationCode", rinex."ObservationSTime"')
+    limit_sql = ''
+    if limit is not None:
+        limit_sql = '\n        LIMIT %s'
+        params.append(limit)
 
     return cnn.query("""
         SELECT rinex."NetworkCode", rinex."StationCode", rinex."ObservationYear",
@@ -56,7 +62,7 @@ def find_pending(cnn, config, station_list=None, force=False, newest_first=True)
             ON rinex_qc_run.rinex_id = rinex.api_id
            AND rinex_qc_run.tool = %s AND rinex_qc_run.tool_version = %s
            AND rinex_qc_run.config_hash = %s
-        WHERE TRUE""" + where_sql + "\n        " + order_sql, params).dictresult()
+        WHERE TRUE""" + where_sql + "\n        " + order_sql + limit_sql, params).dictresult()
 
 
 def run_qc_job(record, config, force):

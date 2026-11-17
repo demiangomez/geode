@@ -71,7 +71,8 @@ def run_db_mode(args, config):
     station_list = Utils.process_stnlist(cnn, args.targets) if args.targets else None
 
     candidates = batch.find_pending(cnn, config, station_list=station_list,
-                                    force=args.force, newest_first=args.backfill)
+                                    force=args.force, newest_first=args.backfill,
+                                    limit=args.limit)
     tqdm.write(' >> Found %d file(s) pending QC' % len(candidates))
 
     if not candidates:
@@ -128,6 +129,9 @@ def main():
     parser.add_argument('-force', '--force', action='store_true',
                         help='With --backfill/--incremental: reprocess files even if a run '
                              'already exists under the current config, replacing it.')
+    parser.add_argument('-limit', '--limit', type=int, metavar='{n}',
+                        help='With --backfill/--incremental: process at most n pending files '
+                             '(e.g. to try a handful before committing to a large batch).')
     parser.add_argument('-np', '--noparallel', action='store_true',
                         help='Execute without parallelization.')
 
