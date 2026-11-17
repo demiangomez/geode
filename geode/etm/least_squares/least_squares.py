@@ -632,6 +632,11 @@ class LeastSquaresCollocation(AdjustmentStrategy):
             omega += vp.T @ p[i] @ vp
             s = e
 
+        # LeastSquaresCollocation has a single correlated kernel (css/csz above) plus a purely
+        # diagonal (white) crr -- there is no further colored band below it to call "noise" without
+        # it being white noise, which is deliberately excluded (see NoiseCovarianceGLS.adjust())
+        results.stochastic_noise = np.zeros_like(time_vector_cont_mjd, dtype=float)
+
         # wrms of the database
         self.so = np.sqrt(np.sum(omega) / self.dof)
         # results.wrms = np.sqrt((results.residuals.T @ results.residuals) / self.dof) * self.so
@@ -648,7 +653,8 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
     with projected kernels, plus automatically detected periodic terms. RobustLeastSquares flags the
     outliers first; outliers are excluded from the noise model and the GLS (treated as missing days).
     The stochastic signal is the collocation prediction of the detected periodic terms plus the power laws with
-    alpha >= 1 (flicker and steeper); flatter power laws and the white noise stay in the residuals.
+    alpha >= lsq.noise_signal_alpha_min (default 1.0: flicker and steeper); flatter power laws and the white
+    noise stay in the residuals.
     """
     # GeoDE works in meters, the noise model in mm (the units of the method's spec)
     scale = 1000.
@@ -662,7 +668,8 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         # the noise model works in mm: the minimum white variance is the floor squared [mm^2]
         self.settings = NoiseCovarianceSettings(variance_factors=lsq.noise_variance_factors,
                                                 white_min=lsq.noise_white_floor_mm ** 2,
-                                                detection=lsq.noise_detection)
+                                                detection=lsq.noise_detection,
+                                                signal_alpha_min=lsq.noise_signal_alpha_min)
         if lsq.noise_snr_min is not None:
             if lsq.noise_snr_min <= 0:
                 raise ValueError(f'NoiseCovarianceGLS: the SNR threshold must be positive ({lsq.noise_snr_min})')
@@ -695,6 +702,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             logger.warning('NoiseCovarianceGLS: not enough inliers to estimate the noise model, '
                            'keeping the robust fit')
             rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
+            rls.stochastic_noise = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         mjd = np.rint(time_vector_mjd).astype(int)
@@ -703,6 +711,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             logger.warning('NoiseCovarianceGLS: epochs are not unique days in increasing order, '
                            'keeping the robust fit')
             rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
+            rls.stochastic_noise = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         has_constraints = bool(np.any(n_neq_left))
@@ -718,6 +727,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             logger.warning(f'NoiseCovarianceGLS: could not estimate the noise model ({e}), '
                            f'keeping the robust fit')
             rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
+            rls.stochastic_noise = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         gls = nm.gls
@@ -736,6 +746,11 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         results.stochastic_signal = self._signal_at(nm.signal, np.rint(time_vector_cont_mjd).astype(int) - mjd0) / s
         signal_obs = self._signal_at(nm.signal, mjd - mjd0) / s
         results.residuals = observations - a @ results.parameters - signal_obs
+        # noise: collocation prediction of the power laws below signal_alpha_min only (no periodic
+        # terms, no white noise/nugget -- see noise_covariance.estimate_noise_model). Dense like the
+        # signal, not the raw residuals: this deliberately excludes the white/near-white measurement
+        # noise, which has no meaningful predictor away from the data it was observed at
+        results.stochastic_noise = self._signal_at(nm.noise, np.rint(time_vector_cont_mjd).astype(int) - mjd0) / s
 
         results.wrms = rls.wrms * self.so
         results.outlier_flags = inliers
@@ -895,14 +910,30 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             if kind != 'final_snr':
                 logger.info(f'{tag}: flag: {flag}')
 
-        def alpha(ea) -> str:
-            # band as periods [d], longest first (ea.f_low, ea.f_high in cycles/yr)
-            if ea.band_empty:
-                # the steep part never dominates the floor: alpha is the local slope at 1/N
-                return f'{ea.alpha:.2f} (local at {365.25 / ea.f_low:.0f} d)'
-            return f'{ea.alpha:.2f} ({365.25 / ea.f_low:.0f}-{365.25 / ea.f_high:.0f} d)'
+        # weight (variance) of each power-law-noise (PLN) basis function, reference (no periodic terms)
+        # vs. final (with periodic terms): what the effective alpha right below is computed from. White
+        # noise is not part of this basis (it's the separate "white" value in the colored/white line above)
+        logger.info(f'{tag}: {"PLN basis weight [mm^2]":<44} {"reference":>14} {"final":>14}')
+        for alpha_i, w_ref, w_fin in zip(nm.settings.alphas, ref.w, fin.w):
+            logger.info(f'{tag}:   {f"alpha = {alpha_i:.2f}":<42} {w_ref:14.3f} {w_fin:14.3f}')
 
-        logger.info(f'{tag}: effective alpha {alpha(a_ref)} -> {alpha(a_fin)} with periodic terms')
+        def alpha(ea) -> str:
+            # the period band the slope was fit over, longest period first (ea.f_low, ea.f_high are in
+            # cycles/yr, so period = 365.25 / f); see noise_covariance.effective_alpha
+            if ea.band_empty:
+                # the steep (colored) part of the spectrum never rises above the floor (white noise +
+                # the flattest PLN component) anywhere in the data span, so there's no band where it
+                # dominates: alpha falls back to the local slope at the longest period (1/N, the span)
+                return f'{ea.alpha:.2f} (local slope at {365.25 / ea.f_low:.0f} d, steep part never dominates)'
+            return f'{ea.alpha:.2f} (period band {365.25 / ea.f_low:.0f}-{365.25 / ea.f_high:.0f} d)'
+
+        # mean log-slope of the power spectrum (see noise_covariance.effective_alpha, Section 10), before
+        # vs. after the detected periodic terms are subtracted -- not the PLN alphas above, which are a
+        # fixed basis (0.5..1.5); this is a single number summarizing their weighted mix over the band
+        # where the colored noise actually dominates white noise (the band itself can also shift slightly
+        # once periodic power is no longer being absorbed into the power-law fit)
+        logger.info(f'{tag}: effective spectral index {alpha(a_ref)} before periodic terms -> '
+                    f'{alpha(a_fin)} after')
         if np.isfinite(gls.factors[0]):
             # variance factors per part of the noise model, if requested (the white factor is undefined
             # without white noise)
@@ -1030,10 +1061,11 @@ class EtmFit:
     def load_results_to_functions(self):
         """load the results to the design matrix functions"""
 
-        # insert stochastic signal if it was estimates
+        # insert stochastic signal/noise if it was estimated
         for f in self.design_matrix.functions:
             if f.p.object == 'stochastic':
-                f.p.params = [rs.stochastic_signal for rs in self.results]
+                f.set_params([rs.stochastic_signal for rs in self.results],
+                            [rs.stochastic_noise for rs in self.results])
 
         # populate results onto etm_function
         for func in self.design_matrix.functions:

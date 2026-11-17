@@ -21,8 +21,9 @@ Architectural work here has previously existed only on feature branches and been
   (`EtmParams`, get/set/validate API).
 - **`etm_functions/`** — design-matrix building blocks, each an `EtmFunction` (ABC):
   `polynomial.py` (velocity+), `jumps.py` (mechanical + co-/post-seismic log-decay relaxation,
-  the richest of these), `periodic.py` (annual/semiannual), `stochastic_signal.py` (GLS/collocation
-  colored-noise signal, diagnostic-only), `auto_jumps.py` (automatic discontinuity detection).
+  the richest of these), `periodic.py` (annual/semiannual), `stochastic.py` (`Stochastic`:
+  GLS/collocation colored-noise signal *and* noise, both saved to/restored from the `etms` table
+  as a `(2, n)` array per component), `auto_jumps.py` (automatic discontinuity detection).
 - **`least_squares/`** — the adjustment engine, see below.
 - **`stacker/`** — multi-station spatial stacking, see below.
 - **`visualization/`** — `EtmPlotter` + template classes, plus `field_plot/` (interactive Cartopy
@@ -35,7 +36,7 @@ Architectural work here has previously existed only on feature branches and been
 `EtmEngine` loads `SolutionData`, builds a `JumpManager` (mechanical + auto-detected + earthquake
 jumps, the latter scored via `s_score.ScoreTable` using the Gómez et al. 2024 empirical relation,
 cached in the `s_score_cache` table), assembles a `DesignMatrix` from
-`[PolynomialFunction, PeriodicFunction] + jump_functions` (+ `StochasticSignal` under
+`[PolynomialFunction, PeriodicFunction] + jump_functions` (+ `Stochastic` under
 collocation/GLS), and wraps the fit in `EtmFit`. `run_adjustment()` tries cached DB/JSON parameters
 first, else calls `fit.run_fit()`.
 

@@ -98,7 +98,8 @@ class PlotOutputConfig(BaseDataClass):
     plot_remove_jumps: bool = False
     plot_remove_polynomial: bool = False
     plot_remove_periodic: bool = False
-    plot_remove_stochastic: bool = False
+    plot_remove_stochastic_signal: bool = False
+    plot_remove_stochastic_noise: bool = False
     plot_no_model: bool = False
 
     # Missing data

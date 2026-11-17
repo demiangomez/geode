@@ -151,16 +151,25 @@ class PlotDataPreparer:
     @staticmethod
     def _add_model_and_residuals(data: ComponentData, component_idx: int,
                                  solution_data: SolutionData, etm_results: EtmFit) -> None:
-        """Add model values and residuals to component data"""
+        """
+        Add model values and residuals to component data. model_values is always the pure
+        deterministic model (polynomial + periodic + jumps) -- it never includes the
+        collocation-predicted stochastic signal, so with no -rm flag at all, nothing is added to
+        or removed from either the model or the data (see _handle_stochastic_signal). residuals is
+        computed directly as observations minus this model, so it is exact by construction (for
+        LSQ_COLLOCATION/NOISE_COVARIANCE_GLS, this is the full stochastic realization: noise +
+        signal together) and stays consistent under any combination of removals applied afterward.
+        """
         result = etm_results.results[component_idx]
         design = etm_results.design_matrix
 
-        model_values = (design.alternate_time_vector(solution_data.time_vector_cont)
-                        @ result.parameters) + result.stochastic_signal
+        model_values = design.alternate_time_vector(solution_data.time_vector_cont) @ result.parameters
 
         data.model_time_vector = solution_data.time_vector_cont
         data.model_values = model_values * M_TO_MM
-        data.residuals = result.residuals * M_TO_MM
+
+        model_fit = design.alternate_time_vector(solution_data.time_vector[data.mask]) @ result.parameters
+        data.residuals = data.observations_fit - model_fit * M_TO_MM
 
         if np.any(~data.mask):
             # create a residual vector for the data not fit
@@ -183,8 +192,7 @@ class PlotDataPreparer:
 
             # Handle stochastic signal specially
             if obj_type == 'stochastic':
-                self._handle_stochastic_signal(data, component_idx, funct,
-                                               solution_data, etm_results)
+                self._handle_stochastic_signal(data, component_idx, funct, solution_data)
 
     @staticmethod
     def _should_remove_signal(obj_type: str, cfg: PlotOutputConfig) -> bool:
@@ -204,22 +212,31 @@ class PlotDataPreparer:
         data.model_values -= funct.eval(component_idx, time_vector_cont) * M_TO_MM
 
     def _handle_stochastic_signal(self, data: ComponentData, component_idx: int,
-                                  funct, solution_data: SolutionData,
-                                  etm_results: EtmFit) -> None:
-        """Handle stochastic signal removal or restoration in residuals"""
+                                  funct, solution_data: SolutionData) -> None:
+        """Independently remove the stochastic signal and/or noise from the observations and
+        residuals. Neither is ever part of model_values (always the pure deterministic model, see
+        _add_model_and_residuals) -- with both flags false (the default), this is a no-op: nothing
+        is added to or removed from the data or the model. data.residuals already equals noise +
+        signal by direct construction, so subtracting either term here keeps
+        observations - model_values == residuals exactly, for any combination of the two flags."""
+        cfg = self.output_config
         time_mjd = solution_data.time_vector_mjd
 
-        if self.output_config.plot_remove_stochastic:
-            # Remove stochastic signal from observations and model
+        if cfg.plot_remove_stochastic_signal:
+            signal_fit = funct.eval(component_idx, time_mjd[data.mask]) * M_TO_MM
             data.observations -= funct.eval(component_idx, time_mjd) * M_TO_MM
-            data.observations_fit -= funct.eval(component_idx, time_mjd[data.mask]) * M_TO_MM
+            data.observations_fit -= signal_fit
             if np.any(~data.mask):
                 data.observations_not_fit -= funct.eval(component_idx, time_mjd[~data.mask]) * M_TO_MM
-            data.model_values -= etm_results.results[component_idx].stochastic_signal * M_TO_MM
-            # Note: residuals don't include stochastic signal, so no removal needed
-        else:
-            # Residuals have stochastic removed by default; add it back if user wants to see it
-            data.residuals += funct.eval(component_idx, time_mjd[data.mask]) * M_TO_MM
+            data.residuals -= signal_fit
+
+        if cfg.plot_remove_stochastic_noise:
+            noise_fit = funct.eval_noise(component_idx, time_mjd[data.mask]) * M_TO_MM
+            data.observations -= funct.eval_noise(component_idx, time_mjd) * M_TO_MM
+            data.observations_fit -= noise_fit
+            if np.any(~data.mask):
+                data.observations_not_fit -= funct.eval_noise(component_idx, time_mjd[~data.mask]) * M_TO_MM
+            data.residuals -= noise_fit
 
     def _add_confidence_bounds(self, data: ComponentData, component_idx: int,
                                etm_results: EtmFit) -> None:

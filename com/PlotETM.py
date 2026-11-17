@@ -194,7 +194,9 @@ def process_etm_station(stn, args_dict, from_kmz):
             config.plotting_config.plot_remove_polynomial  = 'poly'  in remove
             config.plotting_config.plot_remove_jumps       = 'jumps' in remove
             config.plotting_config.plot_remove_periodic    = 'per'   in remove
-            config.plotting_config.plot_remove_stochastic  = 'stoch' in remove
+            # stoch = both the signal and the noise; stoch_s/stoch_n remove each independently
+            config.plotting_config.plot_remove_stochastic_signal = 'stoch' in remove or 'stoch_s' in remove
+            config.plotting_config.plot_remove_stochastic_noise  = 'stoch' in remove or 'stoch_n' in remove
 
         if args_dict.get('interactive'):
             config.plotting_config.interactive = True
@@ -243,6 +245,7 @@ def process_etm_station(stn, args_dict, from_kmz):
         config.modeling.least_squares_strategy.noise_variance_factors = args_dict['variance_factors']
         config.modeling.least_squares_strategy.noise_detection        = args_dict['periodic_detection']
         config.modeling.least_squares_strategy.noise_snr_min          = args_dict['snr_min']
+        config.modeling.least_squares_strategy.noise_signal_alpha_min = args_dict['signal_alpha_min']
         config.modeling.least_squares_strategy.sigma_filter_limit  = args_dict['sigma_limit']
         config.modeling.least_squares_strategy.covariance_function = \
             COVARIANCE_MAP[args_dict['covariance'][0]]
@@ -906,6 +909,14 @@ def main():
                              "joint harmonic fit (where it is also the misfit-ratio threshold of the final check) "
                              "and 7 for the stepwise grid search")
 
+    parser.add_argument('-alpha_min', '--signal_alpha_min', type=float, default=1.0, metavar='alpha',
+                        help="With -lsq gls, minimum spectral index (alpha, from the 0.5-1.5 power-law basis) kept "
+                             "as stochastic signal: the collocation prediction of periodic terms plus power laws "
+                             "with alpha >= this value (removable with -rm stoch_s). Power laws with alpha below "
+                             "it are stochastic noise instead (white noise is always noise, removable with "
+                             "-rm stoch_n). Default is 1.0 (flicker and steeper are signal; white noise and "
+                             "flatter power laws are noise)")
+
     parser.add_argument('-vfac', '--variance_factors', action='store_true', default=False,
                         help="With -lsq gls, also compute the variance factors of the colored and white parts of "
                              "the noise model (costs one n x n triangular inverse per component)")
@@ -958,10 +969,15 @@ def main():
                         help="Interactive mode: allows to zoom and view the plot interactively")
 
     parser.add_argument('-rm', '--remove', nargs='+',
-                        choices=['poly', 'per', 'jumps', 'stoch'], default=None,
+                        choices=['poly', 'per', 'jumps', 'stoch', 'stoch_s', 'stoch_n'], default=None,
                         help="Remove components from model and time series before plotting. Options are: "
                              "poly -> polynomial; per -> periodic; jumps -> mechanical and geophysical jumps; "
-                             "stoch -> stochastic signal if adjustment strategy is lsc or gls. "
+                             "stoch -> full stochastic component (signal + noise), leaving only the "
+                             "deterministic model, if adjustment strategy is lsc or gls; "
+                             "stoch_s -> stochastic signal only (the collocation-predicted periodic/correlated "
+                             "part; leaves the noise scatter in); "
+                             "stoch_n -> stochastic noise only (whatever is left in the residuals after the "
+                             "signal; leaves the signal in). "
                              "If no arguments are given, then all components are removed (same output as "
                              "residuals mode)")
 

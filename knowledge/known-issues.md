@@ -84,6 +84,14 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
   applies pending INSERT findings uniformly regardless of source
   (`com/StationInfoEdit.py --apply-pending`). See
   [architecture/metadata-llm-pipeline.md](architecture/metadata-llm-pipeline.md).
+- `AdjustmentResults.spectral_index_stochastic_noise` (`geode/etm/core/data_classes.py`) is
+  mislabeled: it's set from `compute_plomb(results.stochastic_signal, ...)`
+  (`geode/etm/least_squares/least_squares.py`, `NoiseCovarianceGLS.adjust()`), i.e. it's the
+  spectral index of the collocation-predicted **signal**, not the noise. This predates (and is
+  distinct from) the `stochastic_noise`/`stochastic_signal` split added 2026-11-16 (see
+  [checkpoints/2026-11-16-stochastic-signal-noise-split.md](checkpoints/2026-11-16-stochastic-signal-noise-split.md));
+  not renamed here to avoid an unrelated behavior change to existing JSON/report consumers of that
+  field name.
 
 ## Dependency bookkeeping
 

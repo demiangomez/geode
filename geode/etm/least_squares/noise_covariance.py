@@ -1135,11 +1135,15 @@ class NoiseModelResult:
     c_lag_final: np.ndarray
     colored_lag_final: np.ndarray   # power-law + periodic part (no white noise)
     signal_lag: np.ndarray          # covariance function of the predicted signal (periodic + steep power laws)
+    noise_lag: np.ndarray           # covariance function of the predicted noise (flat power laws only, no
+                                    # periodic terms, no white noise/nugget)
     # GLS of the ETM with the final covariance
     gls: GlsResult
     alpha_reference: EffectiveAlpha
     alpha_final: EffectiveAlpha
     signal: np.ndarray              # signal prediction on the daily grid 0..N-1
+    noise: np.ndarray               # noise prediction on the daily grid 0..N-1 (excludes white noise: see
+                                    # noise_lag). Zero when every alpha is >= signal_alpha_min
     timings: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -1448,13 +1452,21 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     in_signal = np.asarray(settings.alphas) >= settings.signal_alpha_min
     signal_lag = gb[:, in_signal] @ fin.w[in_signal] + (colored - gb @ fin.w)
     fft_len = proj.fft_len
-    signal = np.fft.irfft(np.fft.rfft(circular_embed(signal_lag, fft_len)) *
-                          np.fft.rfft(to_grid(t, gls.c_inv_v, n_days), fft_len), fft_len)[:n_days]
+    grid_v_fft = np.fft.rfft(to_grid(t, gls.c_inv_v, n_days), fft_len)
+    signal = np.fft.irfft(np.fft.rfft(circular_embed(signal_lag, fft_len)) * grid_v_fft, fft_len)[:n_days]
+
+    # complementary collocation prediction of the noise: power laws with alpha < signal_alpha_min only, no
+    # periodic terms and no white noise/nugget. White noise has no meaningful predictor away from the data
+    # it was observed at, so it is deliberately left out of this array entirely -- callers that want it can
+    # still get it from the full residual (e.g. AdjustmentResults.residuals), not from this noise band
+    noise_lag = gb[:, ~in_signal] @ fin.w[~in_signal]
+    noise = np.fft.irfft(np.fft.rfft(circular_embed(noise_lag, fft_len)) * grid_v_fft, fft_len)[:n_days]
 
     return NoiseModelResult(settings=settings, t=t, n_days=n_days, tmax=tmax, x0=x0, v0=v0,
                             n_tau=proj.n_tau[:t1], gamma=gamma, gb=gb,
                             gtf=gtf, htf=htf, lags=lags, fit0=fit0, sigma_ct=ct, sigma=sigma,
                             reference=reference, sigma_jitter=fitter.jitter, detection=detection,
-                            c_lag_final=c_fin, colored_lag_final=colored, signal_lag=signal_lag, gls=gls,
+                            c_lag_final=c_fin, colored_lag_final=colored, signal_lag=signal_lag,
+                            noise_lag=noise_lag, gls=gls,
                             alpha_reference=alpha_reference, alpha_final=alpha_final, signal=signal,
-                            timings=timings)
+                            noise=noise, timings=timings)

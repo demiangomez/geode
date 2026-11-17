@@ -93,10 +93,12 @@ class TimeSeriesTemplate(PlotTemplate):
                 flags.append(self.config.get_label('seasonal'))
             if output_config.plot_remove_jumps:
                 flags.append(self.config.get_label('jumps'))
-            if (output_config.plot_remove_stochastic
-                    and self.config.modeling.least_squares_strategy.adjustment_model
-                    in (AdjustmentModels.LSQ_COLLOCATION, AdjustmentModels.NOISE_COVARIANCE_GLS)):
-                flags.append(self.config.get_label('stochastic'))
+            is_stochastic = (self.config.modeling.least_squares_strategy.adjustment_model
+                             in (AdjustmentModels.LSQ_COLLOCATION, AdjustmentModels.NOISE_COVARIANCE_GLS))
+            if output_config.plot_remove_stochastic_signal and is_stochastic:
+                flags.append(self.config.get_label('stochastic_signal'))
+            if output_config.plot_remove_stochastic_noise and is_stochastic:
+                flags.append(self.config.get_label('stochastic_noise'))
 
             for prefit in self.config.modeling.prefit_models:
                 flags.append(self.config.get_label('prefit') + ' ' + prefit.short_name())

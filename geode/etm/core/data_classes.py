@@ -41,6 +41,13 @@ class AdjustmentResults(BaseDataClass):
     empirical_covariance: np.ndarray = field(default_factory=lambda: np.array([]))
     covariance_function_params: np.ndarray = field(default_factory=lambda: np.array([]))
     stochastic_signal: np.ndarray = 0
+    # complement of stochastic_signal (NOISE_COVARIANCE_GLS only): collocation-predicted power
+    # laws with alpha < noise_signal_alpha_min, no periodic terms, and deliberately excluding white
+    # noise (it has no meaningful predictor away from the data). Always 0 for LSQ_COLLOCATION,
+    # which has no colored band below its single kernel. Saved to/restored from the DB alongside
+    # stochastic_signal (see etm_functions/stochastic.py's Stochastic.p.params, a (2, n)
+    # array per component: row 0 signal, row 1 noise).
+    stochastic_noise: np.ndarray = 0
     spectral_index_random_noise: float = 0
     spectral_index_stochastic_noise: float = 0
     periodogram_frequencies: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -60,8 +67,8 @@ class AdjustmentResults(BaseDataClass):
 
         # Convert lists to numpy arrays if needed
         array_fields = ['parameters', 'parameter_sigmas', 'residuals', 'empirical_covariance',
-                        'covariance_function_params', 'stochastic_signal', 'obs_sigmas', 'covariance_matrix',
-                        'outlier_flags', 'periodogram_frequencies', 'periodogram_power']
+                        'covariance_function_params', 'stochastic_signal', 'stochastic_noise', 'obs_sigmas',
+                        'covariance_matrix', 'outlier_flags', 'periodogram_frequencies', 'periodogram_power']
         for field_name in array_fields:
             value = getattr(self, field_name)
             if isinstance(value, list):
@@ -207,6 +214,13 @@ class LeastSquares(BaseDataClass):
     # (8 for the joint harmonic fit, where it is also the misfit-ratio threshold of the final check; 7 for the
     # stepwise grid search)
     noise_snr_min: Optional[float] = None
+    # NOISE_COVARIANCE_GLS: the stochastic_signal (the part of the noise model collocation-predicted and
+    # removed from the residuals) is the detected periodic terms plus the power-law components with spectral
+    # index alpha >= this threshold; flatter power laws and the white noise stay in the residuals as noise.
+    # Default 1.0 keeps flicker (alpha=1.0) and steeper (random walk, alpha up to 1.5) as signal, and white /
+    # near-white noise (alpha=0.5, 0.75) as noise. Raise it (e.g. just above 1.0) to also treat flicker as
+    # noise and keep only random-walk-like components as signal
+    noise_signal_alpha_min: float = 1.0
     # constraints to apply to the fit
     constraints: List = field(default_factory=lambda: [])
 

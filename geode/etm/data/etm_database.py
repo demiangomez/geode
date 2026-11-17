@@ -97,7 +97,16 @@ def load_parameters_db(config: EtmConfig,
                         np.concatenate((etm_results.results[i].parameter_sigmas, funct.p.sigmas[i])))
 
                 if funct.p.object == 'stochastic':
-                    etm_results.results[i].stochastic_signal = np.array(obj['params'][i]).astype(float)
+                    arr = funct.p.params[i]
+                    if arr.ndim == 2 and arr.shape[0] == 2:
+                        # current format: row 0 signal, row 1 noise (Stochastic.set_params())
+                        signal_i, noise_i = arr[0], arr[1]
+                    else:
+                        # legacy row, saved before the signal/noise split existed: signal only
+                        signal_i, noise_i = arr, np.zeros_like(arr)
+                        funct.p.params[i] = np.vstack([signal_i, noise_i])
+                    etm_results.results[i].stochastic_signal = signal_i
+                    etm_results.results[i].stochastic_noise = noise_i
                     stochastic_signal = funct
 
     # load the parameters vector
@@ -128,6 +137,8 @@ def load_parameters_db(config: EtmConfig,
             v -= stochastic_signal.eval(i, time_vector_mjd)
 
         etm_results.results[i].residuals = v
+        # stochastic_noise was already loaded straight from the DB row above (object='stochastic'),
+        # alongside stochastic_signal -- nothing to recompute here
         s = np.abs(np.divide(v, etm_results.results[i].wrms))
         etm_results.results[i].outlier_flags = s <= limit
         # compute the observation sigmas

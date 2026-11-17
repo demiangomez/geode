@@ -37,7 +37,7 @@ from ..least_squares.least_squares import EtmFit, AdjustmentModels
 from ..etm_functions.polynomial import PolynomialFunction
 from ..etm_functions.jumps import JumpFunction
 from ..etm_functions.periodic import PeriodicFunction
-from ..etm_functions.stochastic_signal import StochasticSignal
+from ..etm_functions.stochastic import Stochastic
 from ..core.jump_manager import JumpManager
 from ..core.logging_config import setup_etm_logging
 from ..visualization.data_prep import PlotDataPreparer
@@ -234,7 +234,7 @@ class EtmEngine:
         if self.config.modeling.least_squares_strategy.adjustment_model in (AdjustmentModels.LSQ_COLLOCATION,
                                                                             AdjustmentModels.NOISE_COVARIANCE_GLS):
             self.design_matrix.functions.append(
-                StochasticSignal(self.config, self.solution_data.time_vector_cont_mjd))
+                Stochastic(self.config, self.solution_data.time_vector_cont_mjd))
 
         self.fit = EtmFit(self.config, self.design_matrix, self.solution_data.hash)
 
