@@ -1875,11 +1875,17 @@ class Cnn(object):
             'DEC2FLOAT',
             lambda value, curs: float(value) if value is not None else None)
 
-        # Define the custom type for an array of decimals
-        DECIMAL_ARRAY_TYPE = psycopg2.extensions.new_type(
-            (psycopg2.extensions.DECIMAL.values,),  # This matches the type codes for DECIMAL
-            'DECIMAL_ARRAY',  # Name of the type
-            lambda value, curs: [float(d) for d in value] if value is not None else None
+        # Define the custom type for an array of decimals (any nesting depth -- psycopg2
+        # applies the base caster recursively). The previous version used new_type() with
+        # DECIMAL.values wrapped in a tuple, which targets a bogus pseudo-oid instead of
+        # numeric[]'s real array oid (1231) and never actually matched any column -- so
+        # NUMERIC[]/DECIMAL[] columns (etms.params/sigmas/frequencies, gamit_subnets.centroid,
+        # etc.) kept coming back as Decimal, silently relying on the separate Python-side
+        # cast_array_to_float() pass in query_obj/query_float to fix them up after the fetch.
+        DECIMAL_ARRAY_TYPE = psycopg2.extensions.new_array_type(
+            (1231,),  # pg_type oid for _numeric (numeric[])
+            'DECIMAL_ARRAY',
+            DEC2FLOAT
         )
 
         psycopg2.extensions.register_type(DEC2FLOAT)
