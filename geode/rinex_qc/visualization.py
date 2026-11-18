@@ -25,9 +25,11 @@ only ever one geometry to reconcile bin arrays against.
 import base64
 import dataclasses
 import datetime
+import logging
 import os
 import warnings
 from io import BytesIO
+from pathlib import Path
 from typing import Optional
 
 warnings.filterwarnings('ignore', message='Starting a Matplotlib GUI outside')
@@ -35,10 +37,20 @@ warnings.filterwarnings('ignore', message='Starting a Matplotlib GUI outside')
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import numpy as np
 
 from geode.pyDate import Date
 from .aggregate import make_equal_area_grid
+
+logger = logging.getLogger(__name__)
+
+# Reuses geode.etm.visualization's own pre-shrunk logo rather than keeping a
+# second copy -- same reasoning as that module's comment on it: plot_station()
+# can render many plots in one run, and resampling the full 2373x1156 source
+# down to the ~200px display size with lanczos interpolation on every
+# savefig() is real cost (~1s) worth avoiding at that scale.
+LOGO_PATH = Path(__file__).parent.parent / 'etm' / 'visualization' / 'geode_logo_small.png'
 
 GNSS_NAMES = {'G': 'GPS', 'R': 'GLONASS', 'E': 'Galileo', 'C': 'BeiDou'}
 
@@ -573,8 +585,29 @@ def _event_legend_handles():
     ]
 
 
+def _add_logo(fig, width: float = 0.12):
+    """GeoDE logo, bottom right corner -- same placement/approach as
+    geode.etm.visualization.etm_plotting.EtmPlotter._add_logo()."""
+    if not LOGO_PATH.exists():
+        logger.warning(f'Logo file not found: {LOGO_PATH}')
+        return
+    try:
+        logo_img = mpimg.imread(LOGO_PATH)
+        aspect_ratio = logo_img.shape[1] / logo_img.shape[0]  # width / height
+        height = width / aspect_ratio
+        left = 1.0 - width - 0.01   # 1% margin from right edge
+        bottom = 0.01               # 1% margin from bottom
+        logo_ax = fig.add_axes((left, bottom, width, height))
+        logo_ax.imshow(logo_img, interpolation='lanczos', resample=True)
+        logo_ax.axis('off')
+    except Exception as e:
+        logger.warning(f'Failed to add logo: {e}')
+
+
 def _handle_output(fig, output: Optional[QcPlotOutput]):
     """Same output contract as geode.etm's EtmPlotter._handle_plot_output()."""
+    _add_logo(fig)
+
     if output is None:
         plt.show()
         plt.close(fig)
@@ -667,8 +700,12 @@ def plot_daily_summary(cnn, network, station, gnss, date_start: Optional[Date] =
         ax.set_xlim(xlim)
 
     fig.legend(handles=_event_legend_handles(), loc='lower center', fontsize=8, ncol=4,
-              bbox_to_anchor=(0.5, 0.0), frameon=False)
-    fig.tight_layout(rect=(0, 0.035, 1, 0.95))
+              bbox_to_anchor=(0.5, 0.02), frameon=False)
+    # bottom margin wide enough for the x-axis date labels, the event legend,
+    # and the logo (bottom-right, added in _handle_output) to each get their
+    # own band without colliding -- 0.035 was only enough for the tick labels
+    # and put the logo right on top of them.
+    fig.tight_layout(rect=(0, 0.09, 1, 0.95))
     return _handle_output(fig, output)
 
 
