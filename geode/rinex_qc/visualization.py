@@ -187,6 +187,18 @@ def get_date_span(cnn, network, station):
     return _to_pydate(row['d0']), _to_pydate(row['d1'])
 
 
+def _resolve_date_range(cnn, network, station, date_start, date_end):
+    """Fill in only whichever of date_start/date_end is missing, from
+    get_date_span() -- NOT `if either is None: use the default span for
+    both`, which would silently discard a caller-supplied date_start (or
+    date_end) just because the other side was left at its default."""
+    if date_start is None or date_end is None:
+        default_start, default_end = get_date_span(cnn, network, station)
+        date_start = default_start if date_start is None else date_start
+        date_end = default_end if date_end is None else date_end
+    return date_start, date_end
+
+
 def get_daily_completeness(cnn, network, station, date_start: Date, date_end: Date):
     """
     Per-day completeness %, continuous over [date_start, date_end] with no
@@ -591,8 +603,7 @@ def _handle_output(fig, output: Optional[QcPlotOutput]):
 def plot_daily_summary(cnn, network, station, gnss, date_start: Optional[Date] = None,
                        date_end: Optional[Date] = None, output: Optional[QcPlotOutput] = None):
     meta = get_station_meta(cnn, network, station)
-    if date_start is None or date_end is None:
-        date_start, date_end = get_date_span(cnn, network, station)
+    date_start, date_end = _resolve_date_range(cnn, network, station, date_start, date_end)
 
     days, completeness = get_daily_completeness(cnn, network, station, date_start, date_end)
     # plain numeric axis of Date.fyear, same as geode.etm's time series plots
@@ -731,8 +742,7 @@ def plot_elevation_time(cnn, network, station, gnss, az_range=None, date_start: 
     band) aren't fetched from the database twice when both heatmaps are
     generated together (the default) -- see get_daily_bin_grids()."""
     meta = get_station_meta(cnn, network, station)
-    if date_start is None or date_end is None:
-        date_start, date_end = get_date_span(cnn, network, station)
+    date_start, date_end = _resolve_date_range(cnn, network, station, date_start, date_end)
     bands = get_bands_present(cnn, network, station, gnss)
     changes = get_equipment_changes(cnn, network, station)
     visits = get_visits(cnn, network, station)
@@ -767,8 +777,7 @@ def plot_azimuth_time(cnn, network, station, gnss, elev_range=None, date_start: 
                       _bins_cache=None):
     """_bins_cache: see plot_elevation_time()'s docstring."""
     meta = get_station_meta(cnn, network, station)
-    if date_start is None or date_end is None:
-        date_start, date_end = get_date_span(cnn, network, station)
+    date_start, date_end = _resolve_date_range(cnn, network, station, date_start, date_end)
     bands = get_bands_present(cnn, network, station, gnss)
     changes = get_equipment_changes(cnn, network, station)
     visits = get_visits(cnn, network, station)
