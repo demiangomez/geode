@@ -36,14 +36,32 @@ def test_pivot_keeps_rows_where_every_column_is_blank():
         'time': ['t0', 't1', 't0', 't1'],
         's1':   ['', '', '', ''],  # nobody slipped at either epoch
     })
-    out = runner._pivot(df, 's1', ['G01', 'G02'], is_flag=True)
+    out = runner._pivot(df, 's1', ['G01', 'G02'], pd.Index(['t0', 't1']), is_flag=True)
     assert out.shape == (2, 2)
     assert not out.any()
 
 
+def test_pivot_reindexes_to_the_given_time_index_not_just_its_own():
+    # --qcmode and the plain rnxcsv call are two separate ringo
+    # invocations -- confirmed on a real file that they don't always
+    # agree on the exact epoch set for the same system. _build_systems()
+    # computes one shared time_index up front and passes it to every
+    # _pivot() call so every BandData array ends up the same shape by
+    # construction, not by assumption that the two calls happened to
+    # agree this time.
+    df = pd.DataFrame({'PRN': ['G01', 'G01'], 'time': ['t0', 't1'], 'az': [10.0, 20.0]})
+    shared_index = pd.Index(['t0', 't1', 't2'])  # t2 is missing from this df entirely
+
+    out = runner._pivot(df, 'az', ['G01'], shared_index)
+    assert out.shape == (3, 1)
+    assert out[0, 0] == 10.0
+    assert out[1, 0] == 20.0
+    assert np.isnan(out[2, 0])
+
+
 def test_pivot_numeric_column_reindexes_missing_prn_as_nan():
     df = pd.DataFrame({'PRN': ['G01'], 'time': ['t0'], 'az': [45.0]})
-    out = runner._pivot(df, 'az', ['G01', 'G02'])
+    out = runner._pivot(df, 'az', ['G01', 'G02'], pd.Index(['t0']))
     assert out.shape == (1, 2)
     assert out[0, 0] == 45.0
     assert np.isnan(out[0, 1])

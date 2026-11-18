@@ -81,6 +81,15 @@ Exit code 0 iff every file finished `ok`/`partial`.
   every RINGO-sourced signal is a *band*, not an exact RINEX code (`'MP1'`/`'1?'`, not e.g.
   `'C1C'`/`'1C'`) — RINGO never says which exact range+phase attribute it combined for a band, so
   `mp_partner` is always `NULL` and `snr_band_only` is always `True` for these rows.
+- **The two `ringo rnxcsv` calls (`--qcmode` and plain) can disagree on the exact epoch set for the
+  same system.** `runner.py` pivots az/el/MP/slip from one call and SNR from the other — confirmed
+  on real files from a large `--backfill` run that these two separately-pivoted arrays don't always
+  come out the same number of rows (`ValueError: operands could not be broadcast together`,
+  `aggregate_signal()`'s `snr != 0` mask against a differently-shaped `snr` array). Fixed by
+  computing one shared `time_index` (the union of both calls' times) per system in
+  `_build_systems()` and reindexing every array in `_pivot()` against it, so every `BandData`
+  array for a system is the same shape by construction, not by the assumption that the two calls
+  happened to agree.
 - **`n_clock_jumps` is always `NULL` for now.** gnssmultipath reported it as a QC statistic; RINGO
   treats clock jumps as something to *fix* (a separate `clkcorr` command that rewrites the file),
   not something `qc` reports a count of. Dropped deliberately rather than guessed at — Demian's

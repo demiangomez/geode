@@ -178,23 +178,33 @@ def _build_systems(qc_df, obs_df):
         obs_sub = obs_df[obs_df['sys'] == sys_code]
         available_snr = [c for c in snr_columns if (obs_sub[c].notna().any() if c in obs_sub else False)]
 
-        az = _pivot(sub, 'az', prns)
-        el = _pivot(sub, 'el', prns)
+        # `sub` and `obs_sub` come from two separate `ringo rnxcsv`
+        # invocations (--qcmode and plain) -- confirmed on a real file
+        # that they don't always agree on the exact set of epochs
+        # written out for the same system, which would otherwise
+        # silently misalign az/el/mp against snr by a row or two.
+        # Pivoting every array against one shared, explicit time index
+        # (the union of both calls' times) makes every BandData array
+        # the same shape by construction, not by assumption.
+        time_index = pd.Index(sorted(set(sub['time']) | set(obs_sub['time'])), name='time')
+
+        az = _pivot(sub, 'az', prns, time_index)
+        el = _pivot(sub, 'el', prns, time_index)
 
         bands = {}
         for band in BAND_CODES:
             mp_col = 'MP' + band
             if mp_col not in sub.columns:
                 continue
-            raw_mp = _pivot(sub, mp_col, prns)
+            raw_mp = _pivot(sub, mp_col, prns, time_index)
             if not np.isfinite(raw_mp).any():
                 continue  # this system never tracked this band at all
 
-            slip = _pivot(sub, 's' + band, prns, is_flag=True)
+            slip = _pivot(sub, 's' + band, prns, time_index, is_flag=True)
             mp = _detrend_by_arc(raw_mp, slip)
 
             snr_code = signals.find_snr_code(available_snr, band)
-            snr = _pivot(obs_sub, snr_code, prns) if snr_code else None
+            snr = _pivot(obs_sub, snr_code, prns, time_index) if snr_code else None
 
             bands[band] = BandData(prns=prns, mp=mp, az=az, el=el, slip=slip,
                                    snr=snr, snr_code=snr_code)
@@ -205,15 +215,17 @@ def _build_systems(qc_df, obs_df):
     return systems
 
 
-def _pivot(df, value_col, prns, is_flag=False):
+def _pivot(df, value_col, prns, time_index, is_flag=False):
     # dropna=False: pivot_table's default drops an index (time) row, or a
     # columns (PRN) value, whenever every entry for it is NaN -- true for
     # plenty of real epochs/satellites on the slip-flag columns in
     # particular (most epochs have no slip on any satellite at all),
     # which would otherwise silently misalign this array's shape against
-    # the az/el/mp arrays built from the same `df`.
+    # the az/el/mp arrays built from the same `df`. reindex(index=...) to
+    # the caller's shared time_index on top of that -- see _build_systems().
     table = df.pivot_table(index='time', columns='PRN', values=value_col,
-                           aggfunc='first', dropna=False).reindex(columns=prns)
+                           aggfunc='first', dropna=False) \
+             .reindex(index=time_index, columns=prns)
     if is_flag:
         return (table == '*').to_numpy()
     return table.to_numpy(dtype=np.float64)
