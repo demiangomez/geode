@@ -9,9 +9,14 @@ belongs in [checkpoints/](checkpoints/)).
 - **RINEX QC module** (`geode/rinex_qc/`, `com/RinexQC.py` — gnssmultipath-based MP/SNR/cycle-slip
   stats). **Phases 1-3 all done**: standalone CLI, schema, DB writer, `--incremental`/`--backfill`,
   and the `ArchiveService.py` hook — see [architecture/rinex-qc.md](architecture/rinex-qc.md).
+  **Visualization backend module now built too** (`geode/rinex_qc/visualization.py`,
+  `com/PlotRinexQC.py` — daily-summary time series + elevation/azimuth-vs-time heatmaps, one
+  figure per constellation; see
+  [checkpoints/2026-11-18-rinex-qc-visualization.md](checkpoints/2026-11-18-rinex-qc-visualization.md)).
   Still open: validation against the project's actual documented fixtures (everything so far used
   different real archive data for mechanical correctness, not the documented reference numbers),
-  and the planned-next dynamic-visualization backend module (no code yet). Needed bumping GeoDE to
+  and time-axis downsampling for the heatmaps on multi-year spans (real moiré at render width
+  past a few hundred daily columns). Needed bumping GeoDE to
   **Python ≥3.11** first (`numpy` now `2.4.6`, `basemap`/`usgs-libcomcat` removed — see
   [decisions/0002-python-311-migration.md](decisions/0002-python-311-migration.md)). Check
   `git branch`/env before assuming any of this is current if this note is stale.

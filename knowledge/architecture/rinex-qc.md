@@ -8,11 +8,10 @@ GeoDE needs to run at (ADR-0004) — see [ADR-0005](../decisions/0005-switch-to-
 switch itself, what changed, and why. gnssmultipath is fully removed: no pip pin, no patch script,
 no import anywhere in `geode/rinex_qc/`.
 
-**Status as of 2026-11-17: Phases 1, 2 and 3 are all done and validated** (standalone CLI, schema,
-DB writer, `--incremental`/`--backfill` CLI modes, and the `ArchiveService.py` hook), now on RINGO.
-What's left is validating against the project's actual documented fixtures (see "What's not built
-yet" below) and dynamic visualization (planned next, no code yet). Check `git log`/`git branch`
-before assuming otherwise.
+**Status as of 2026-11-18: Phases 1-4 are all done** (standalone CLI, schema, DB writer,
+`--incremental`/`--backfill` CLI modes, the `ArchiveService.py` hook, and visualization), now on
+RINGO. What's left is validating against the project's actual documented fixtures (see "What's not
+built yet" below). Check `git log`/`git branch` before assuming otherwise.
 
 ## Package layout
 
@@ -182,14 +181,32 @@ dispatch for this module specifically (this sandbox lacks the GAMIT/PPP/ATX file
 correctness) — relies on `dispy` itself already being validated (ADR-0002) and `batch.py` mirroring
 `ScanArchive.py`'s own working `process_ppp()` dispatch pattern exactly.
 
+## Phase 4 (visualization, done)
+
+`geode/rinex_qc/visualization.py` + CLI entry point `com/PlotRinexQC.py` — three plot types, one
+figure per GNSS constellation (not one figure faceted by system): a daily-summary time series
+(completeness, MP RMS, SNR mean, slip rate), and two heatmaps built by collapsing
+`rinex_qc_signal_bins`' az-el grid along one spatial axis (`collapse_to_elev_rings` /
+`collapse_to_azimuth`) — MP/SNR vs. elevation-over-time and vs. azimuth-over-time, each with an
+optional range filter on the *other* spatial axis (`az_range` on the elevation plot, `elev_range`
+on the azimuth plot). Equipment changes (receiver/antenna/radome/firmware, from `stationinfo` —
+extends `geode/etm/core/jump_manager.py`'s antenna/radome-only convention to also flag receiver
+and firmware changes, since those affect SNR/tracking without moving the antenna) and site visits
+(`api_visits`, joined via `stations.api_id`) are overlaid as vertical lines on every plot. Same
+output contract as `geode.etm`'s plotter (`QcPlotOutput.filename` → file, `.file_io` → base64
+string). See
+[checkpoints/2026-11-18-rinex-qc-visualization.md](../checkpoints/2026-11-18-rinex-qc-visualization.md)
+for the full design rationale (color palette choice, the completeness zero-fill correctness fork,
+fixed color-scale bounds derived from real data) and known limitations (no time-axis downsampling
+yet — long spans render with real moiré; `snr_unit == 'receiver'` stations unhandled).
+
 ## What's not built yet
 
 - Validation against the project's actual documented fixtures (LHCL 1996-251, SANT 2025-212, AGGO
   2025-212) with their exact reference MP RMS/epoch-count values — everything validated so far
   used real-but-different archive data for mechanical correctness, not the documented numbers.
   (Clock-jump values no longer apply either way — see "Non-obvious decisions".)
-- Dynamic visualization of the results (planned next — a backend module for the separate web
-  frontend; no code yet).
+- Time-axis downsampling for the Phase 4 heatmaps on multi-year spans (see above).
 - A fourth, narrower gnssmultipath-era bug (per-epoch satellite handling when orbit coverage is
   partial) was found and left unfixed before the switch to RINGO — now moot, kept only as a
   historical note in `knowledge/known-issues.md`.
@@ -202,4 +219,5 @@ correctness) — relies on `dispy` itself already being validated (ADR-0002) and
   [2026-11-17-rinex-qc-schema.md](../checkpoints/2026-11-17-rinex-qc-schema.md),
   [2026-11-17-rinex-qc-phase3.md](../checkpoints/2026-11-17-rinex-qc-phase3.md),
   [2026-11-17-gnssmultipath-multisystem-bugs.md](../checkpoints/2026-11-17-gnssmultipath-multisystem-bugs.md),
-  [2026-11-17-switch-to-ringo.md](../checkpoints/2026-11-17-switch-to-ringo.md).
+  [2026-11-17-switch-to-ringo.md](../checkpoints/2026-11-17-switch-to-ringo.md),
+  [2026-11-18-rinex-qc-visualization.md](../checkpoints/2026-11-18-rinex-qc-visualization.md).

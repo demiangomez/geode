@@ -64,11 +64,18 @@ def cast_array_to_float(recordset):
 
 # class to match the pygreSQl structure using psycopg2
 class query_obj(object):
-    def __init__(self, cursor):
+    def __init__(self, cursor, cast_decimals=True):
         self.rows = []
         # to maintain backwards compatibility
         try:
-            self.rows = cast_array_to_float(cursor.fetchall())
+            fetched = cursor.fetchall()
+            # cast_array_to_float recursively isinstance-checks every element of
+            # every array-typed column, which is wasted work (and can dominate
+            # query time) for a result with no NUMERIC/DECIMAL columns at all --
+            # e.g. a few-hundred-element integer[]/smallint[] column fetched over
+            # thousands of rows. cast_decimals=False skips it; default stays True
+            # so every existing caller's behavior is unchanged.
+            self.rows = cast_array_to_float(fetched) if cast_decimals else fetched
         except psycopg2.ProgrammingError as e:
             if 'no results to fetch' in str(e):
                 pass
@@ -1901,14 +1908,14 @@ class Cnn(object):
         else:
             raise dbErrConnect(err)
 
-    def query(self, command, params=None):
+    def query(self, command, params=None, cast_decimals=True):
         try:
             self.cursor.execute(command, params)
 
             debug(" QUERY: command=%r" % command)
 
             # passing a query object to match response from pygresql
-            return query_obj(self.cursor)
+            return query_obj(self.cursor, cast_decimals=cast_decimals)
         except Exception as e:
             raise DatabaseError(e)
 
