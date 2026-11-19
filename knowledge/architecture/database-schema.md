@@ -16,7 +16,11 @@ of this writing.
 `etms`, `etm_params`, `earthquakes`, `events`, `locks`, `executions`, `keys`, `aws_sync`,
 `data_source`, `s_score_cache`, `sources_metadata` + `sources_servers` + `sources_stations` +
 `sources_formats`, `rinex_qc_grids` + `rinex_qc_run` + `rinex_qc_signal` + `rinex_qc_signal_bins` (see
-[rinex-qc.md](rinex-qc.md)).
+[rinex-qc.md](rinex-qc.md)), `agency_roles` + `agencies` + `agency_stations` (contributing-org
+metadata and which agency has which role on which station; `agencies.api_id` is that table's own
+primary key, but `agency_stations.station_id` FKs to `stations.api_id`, not stations' own
+`(NetworkCode, StationCode)` composite primary key, same pattern as `rinex_qc_run.rinex_id` ->
+`rinex.api_id`).
 
 **Owned by the sibling Django app** (migrated by Django, not by this repo — never add/alter these
 from `geode` code except through the documented read-only joins): `api_*` (campaigns, person,
