@@ -17,10 +17,15 @@ of this writing.
 `data_source`, `s_score_cache`, `sources_metadata` + `sources_servers` + `sources_stations` +
 `sources_formats`, `rinex_qc_grids` + `rinex_qc_run` + `rinex_qc_signal` + `rinex_qc_signal_bins` (see
 [rinex-qc.md](rinex-qc.md)), `agency_roles` + `agencies` + `agency_stations` (contributing-org
-metadata and which agency has which role on which station; `agencies.api_id` is that table's own
-primary key, but `agency_stations.station_id` FKs to `stations.api_id`, not stations' own
-`(NetworkCode, StationCode)` composite primary key, same pattern as `rinex_qc_run.rinex_id` ->
-`rinex.api_id`).
+metadata and which agency has which role on which station; `agency_roles.api_id` and
+`agencies.api_id` are each table's own primary key directly, no separate `id` column — see
+[ADR-0006](../decisions/0006-single-surrogate-pk-convention.md) — but `agency_stations.station_id`
+FKs to `stations.api_id`, not stations' own `(NetworkCode, StationCode)` composite primary key,
+same pattern as `rinex_qc_run.rinex_id` -> `rinex.api_id`).
+
+New tables needing an API-facing surrogate id follow a single convention — one `api_id SERIAL
+PRIMARY KEY` column, never a separate internal `id` alongside it — see
+[ADR-0006](../decisions/0006-single-surrogate-pk-convention.md).
 
 **Owned by the sibling Django app** (migrated by Django, not by this repo — never add/alter these
 from `geode` code except through the documented read-only joins): `api_*` (campaigns, person,
@@ -30,10 +35,19 @@ role, stationtype, stationmeta, stationstatus, visits, images, attached files, .
 ## Migration mechanism
 
 There is **no migration-version table and no framework** (no Alembic/Django-migrations
-equivalent). `run_db_migrations()` is a hand-written, idempotent "check column/table/index exists,
-then ALTER/CREATE if not" script, guarded by a Postgres advisory lock
-(`pg_advisory_lock(MIGRATIONS_LOCK_ID)`). It's meant to run on every connection — check the current
-call site in `dbConnection.py` before assuming it's wired up; it has been seen commented out.
+equivalent). Each migration is a hand-written, idempotent "check column/table/index exists, then
+ALTER/CREATE if not" script living in its own `geode/database_migrations/NNN_name.py` module (a
+numeric prefix for ordering, one `migrate(cnn)` function per file — some migrations depend on
+tables/columns created by earlier ones, e.g. `gamit_soln`'s FK to `gamit_projects`). `dbConnection.py`'s
+`run_db_migrations()` discovers and runs them in filename order on every connection, guarded by a
+Postgres advisory lock (`pg_advisory_lock(MIGRATIONS_LOCK_ID)`) so concurrent connections (e.g. a
+parallel job cluster) don't race on the same DDL. It's meant to run on every connection — check the
+current call site in `dbConnection.py` before assuming it's wired up; it has been seen commented out
+(see [knowledge/checkpoints/2026-11-13-migrations-disabled-regression.md](../checkpoints/2026-11-13-migrations-disabled-regression.md)).
+
+A new migration is a new `geode/database_migrations/NNN_name.py` file with the next unused numeric
+prefix — never edit an already-shipped migration file once it's been released, for the same reason
+you wouldn't rewrite a past Alembic/Django migration.
 
 `database/gnss_data_dump.sql` is a **`pg_dump` snapshot**, regenerated from a live DB — it must
 never be hand-edited to represent a schema change; it will pick up any change automatically next

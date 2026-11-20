@@ -93,6 +93,21 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
   not renamed here to avoid an unrelated behavior change to existing JSON/report consumers of that
   field name.
 
+## Stale references after dbConnection.py migration split (2026-11-20)
+
+- `database/migration_plan_engine_table_naming.md` (pending, not-yet-applied plan for the
+  `gamit_soln`→`soln_gamit`/`ppp_soln`→`soln_gpspace`/`stacks`→`stacks_gamit` rename) references
+  specific `geode/dbConnection.py` line numbers (e.g. "line 836", "lines 150-172", "lines 254-292",
+  "lines 294-330") and describes "replacing in place" specific blocks inside the old monolithic
+  `_run_db_migrations()`. That function was split into one file per migration under
+  `geode/database_migrations/NNN_name.py` (see
+  [architecture/database-schema.md](architecture/database-schema.md)); the line numbers are now
+  wrong and the "replace this block in place" instructions should instead mean "edit
+  `009_create_gamit_antenna_residuals.py`/`010_create_ppp_antenna_residuals.py`/
+  `005_ppp_soln_hash_to_bigint.py`". Not rewritten here — whoever picks up that plan should update
+  its file/line references against the current `geode/database_migrations/` layout before
+  following it literally.
+
 ## Dependency bookkeeping
 
 - `pyproject.toml` and `environment.yml` both declare dependencies independently; nothing keeps

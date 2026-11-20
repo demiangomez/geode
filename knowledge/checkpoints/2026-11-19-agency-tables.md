@@ -3,6 +3,14 @@
 - **Date:** 2026-11-19
 - **Branch:** master
 
+> **2026-11-20 correction:** the `agency_roles.id SERIAL PRIMARY KEY` + separate `api_id`
+> shape described below (and the matching rationale under "Architectural decisions") was reverted
+> the next day — `id` was dropped and `api_id` became the primary key directly, matching
+> `agencies`. See [ADR-0006](../decisions/0006-single-surrogate-pk-convention.md) and
+> [checkpoints/2026-11-20-migration-split.md](2026-11-20-migration-split.md). The rest of this
+> checkpoint (agencies' own PK history, the `agency_stations` FK/cascade design, the dropped
+> intake-only fields) is still accurate.
+
 ## Summary
 
 Added three tables to `run_db_migrations()` to track which organizations contribute, own, or host
