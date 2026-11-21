@@ -108,6 +108,36 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
   its file/line references against the current `geode/database_migrations/` layout before
   following it literally.
 
+## Modern ETM module: no VERSION-based cache invalidation outside JumpFunction (2026-11-21)
+
+`geode/etm/data/etm_database.py`'s `load_parameters_db()` decides whether to reuse a station's
+stored `etms` parameters purely by comparing a hash sum against what's currently computed
+(`geode/etm/data/etm_database.py:57-68`). As of
+[ADR-0007](decisions/0007-postseismic-decay-natural-log.md), `JumpFunction.rehash()`
+(`geode/etm/etm_functions/jumps.py:303-307`) folds in `VERSION` (tied to the installed package
+version via `setuptools_scm`, so it changes on every commit), matching the pattern the legacy
+`pyETM.py` has always used. `PeriodicFunction.rehash()` (`etm_functions/periodic.py:145-148`),
+`PolynomialFunction.rehash()` (`etm_functions/polynomial.py:95-98`), `StochasticFunction.rehash()`
+(`etm_functions/stochastic.py:70-`), and `SolutionData.compute_hash()`
+(`geode/etm/data/solution_data.py:291-304`) still do not — their hashes depend only on
+config/data characteristics, never on code version. A logic change to any of those function types
+(e.g. a periodic-model formula change) will not auto-invalidate stored parameters; they'll be
+silently reloaded as if nothing changed. Scoped out of ADR-0007 deliberately (that change only
+needed jump/decay parameters invalidated); revisit if another logic change to one of those four
+needs the same treatment.
+
+## Postseismic grid files predate the natural-log decay switch (2026-11-21)
+
+`com/TrajectoryFit.py` and `com/PlotMapView.py` read previously-computed postseismic
+amplitude grids from disk (`np.loadtxt(g)`, see `com/TrajectoryFit.py` around line 293) and feed
+them into a fresh ETM as a fixed external model (`postseismic=[...]` kwarg, consumed by
+`pyETM.ETM.apply_postseismic_model`, `geode/pyETM.py:2090-2110`). Grid files produced before
+[ADR-0007](decisions/0007-postseismic-decay-natural-log.md) encode amplitudes in the old log10
+basis; nothing detects or converts this — a grid generated pre-change, fed into the post-change
+code, is silently off by ~ln(10) ≈ 2.303 for that term. No DB hash covers this path since it's a
+file, not an `etms` row. Anyone rerunning those scripts with an older grid needs to regenerate it
+first.
+
 ## Dependency bookkeeping
 
 - `pyproject.toml` and `environment.yml` both declare dependencies independently; nothing keeps

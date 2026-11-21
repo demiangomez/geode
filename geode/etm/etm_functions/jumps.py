@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 from ...Utils import crc32
 from ...pyDate import Date
 from ..etm_functions.etm_function import EtmFunction
-from ..core.etm_config import EtmConfig
+from ..core.etm_config import EtmConfig, VERSION
 from ..core.type_declarations import JumpType
 from ..core.data_classes import Earthquake
 
@@ -163,7 +163,7 @@ class JumpFunction(EtmFunction):
         for i, relaxation_time in enumerate(self.p.relaxation):
             mask = time_vector > self.date.fyear
             if np.any(mask):
-                decay_matrix[mask, i] = np.log10(
+                decay_matrix[mask, i] = np.log(
                     1.0 + (time_vector[mask] - self.date.fyear) / relaxation_time
                 )
 
@@ -303,7 +303,7 @@ class JumpFunction(EtmFunction):
     def rehash(self) -> None:
         """Recompute hash for change detection"""
         hash_input = (f"{self.date}_{self.fit}_{self.param_count}_"
-                      f"{self.p.jump_type}_{','.join(map(str, self.p.relaxation))}")
+                      f"{self.p.jump_type}_{','.join(map(str, self.p.relaxation))}_{VERSION}")
         self.p.hash = crc32(hash_input)
 
     def configure_behavior(self, behavior_config: Dict[str, Any]) -> None:
