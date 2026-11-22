@@ -9,7 +9,8 @@ station in a given solution (GAMIT stack or ppp), computed directly from the ETM
 engine (no intermediate JSON files needed). Equivalent to looping over the JSON
 files produced by PlotETM.py -json and extracting the polynomial velocity, except
 the ETM is built and fit in-process and every station of the solution is included
-(no station list needed).
+by default (no station list needed), optionally narrowed down with -stn using the
+standard GeoDE station selector syntax.
 
 Type python PrintVelocities.py -h for usage help
 """
@@ -35,7 +36,8 @@ from tqdm import tqdm
 from geode import dbConnection
 from geode.etm.core.logging_config import setup_etm_logging
 from geode.etm.core.data_classes import ModelingParameters, ValidationRules
-from geode.Utils import add_version_argument, get_stack_stations, file_write, SmartHelpFormatter
+from geode.Utils import (add_version_argument, get_stack_stations, file_write, SmartHelpFormatter,
+                         process_stnlist, station_list_help, stationID)
 
 
 VERBOSITY_MAP = {
@@ -69,7 +71,7 @@ def get_solution_stations(cnn, solution):
 
 def callback_print_velocity(job):
     if job.result is not None:
-        error_msg, line, station_id = job.result
+        error_msg, line, station_id, map_row = job.result
         if error_msg:
             tqdm.write(' -- Error processing %s:\n%s' % (station_id, error_msg))
         else:
@@ -81,8 +83,10 @@ def callback_print_velocity(job):
 def process_etm_velocity(stn, args_dict):
     """
     Dispy worker: fully self-contained per-station ETM processing. Returns a
-    (error_msg, output_line, station_id) tuple; output_line is None when the
-    station could not be fit.
+    (error_msg, output_line, station_id, map_row) tuple; output_line and map_row are
+    None when the station could not be fit. map_row is a small dict of the numeric
+    values (lat, lon, velocity, sigmas, N-E covariance) needed to plot this station on
+    the velocity map (-map); it is always returned (cheap), whether or not -map was given.
     """
     import traceback, logging
     import numpy as np
@@ -110,6 +114,11 @@ def process_etm_velocity(stn, args_dict):
     COVARIANCE_MAP = {
         'arma': CovarianceFunction.ARMA,
         'gaussian': CovarianceFunction.GAUSSIAN,
+    }
+    VERBOSITY_MAP = {
+        'quiet': logging.CRITICAL,
+        'info':  logging.INFO,
+        'debug': logging.DEBUG
     }
 
     setup_etm_logging(level=VERBOSITY_MAP[args_dict['verbosity']])
@@ -175,6 +184,7 @@ def process_etm_velocity(stn, args_dict):
         config.modeling.fit_auto_detected_jumps_method = args_dict['fit_auto_jumps'][0]
         config.modeling.least_squares_strategy.iterations             = args_dict['max_iterations']
         config.modeling.least_squares_strategy.noise_variance_factors  = args_dict['variance_factors']
+        config.modeling.least_squares_strategy.noise_cross_covariance  = args_dict['cross_covariance']
         config.modeling.least_squares_strategy.noise_detection         = args_dict['periodic_detection']
         config.modeling.least_squares_strategy.noise_snr_min           = args_dict['snr_min']
         config.modeling.least_squares_strategy.sigma_filter_limit      = args_dict['sigma_limit']
@@ -252,41 +262,46 @@ def process_etm_velocity(stn, args_dict):
                                relaxation=relax, date=date, action='+'))
 
         etm = EtmEngine(config, cnn=cnn)
+        # force_computation=True: a DB-cached fit never repopulates .covar/.cross_covar (the noise
+        # model and cross-covariance diagnostics aren't stored in the database -- see PlotETM.py's own
+        # 'ellipses'/'covariance' force_recompute), and this script always reports Cov_ne/Cov_nu/Cov_eu,
+        # so it must always recompute rather than silently printing NaN for any already-cached station.
         etm.run_adjustment(cnn=cnn,
                            try_save_to_db=not args_dict['no_save_database'],
-                           try_loading_db=not args_dict['no_save_database'])
+                           try_loading_db=not args_dict['no_save_database'],
+                           force_computation=True)
 
         if etm.config.modeling.status != FitStatus.POSTFIT:
-            return ' -- unable to fit a model (insufficient or degenerate data)', None, station_id
+            return ' -- unable to fit a model (insufficient or degenerate data)', None, station_id, None
 
-        ve = vn = vu = se = sn = su = None
-        for x in etm.design_matrix.functions:
-            if x.p.object == 'polynomial':
-                vn, ve, vu = (p[1] * 1000 for p in x.p.params)
-                sn, se, su = (p[1] * 1000 for p in x.p.sigmas)
+        poly = etm.design_matrix.get_polynomial()
+        if poly is None:
+            return ' -- no polynomial (velocity) function found in design matrix', None, station_id, None
 
-        if ve is None:
-            return ' -- no polynomial (velocity) function found in design matrix', None, station_id
+        vn, ve, vu = (p[1] * 1000 for p in poly.p.params)
+        sn, se, su = (p[1] * 1000 for p in poly.p.sigmas)
 
         vh = np.sqrt(ve ** 2 + vn ** 2)
 
-        # Velocity N-E, N-U, E-U covariances, simplistic/separable-case approximation
-        # (cross_component_covariance.pdf, Section 3.4): Cov(x_i, x_j) = r_ij * sigma_i * sigma_j,
-        # where r_ij is the correlation of the whole (N, E, U) residual time series already computed
-        # by EtmFit.process_covariance (etm/least_squares/least_squares.py) and stored in etm.fit.covar
-        # (indices 0=N, 1=E, 2=U, matching the polynomial params/sigmas row order used above). This
-        # assumes the N/E/U noise shares the same temporal shape (only scaled per component), so the
-        # single overall residual correlation can be reused for any parameter pair, including the
-        # velocities; it is the same approximation GeoDE's residual-ellipse scaling already relies on.
-        covar = etm.fit.covar
+        # Velocity N-E, N-U, E-U covariances: the polynomial function's own cross-component
+        # covariance block (EtmFit.process_cross_covariance, geode/etm/least_squares/
+        # cross_covariance.py), populated for every fitted parameter by
+        # EtmFunction.set_cross_covariance() after every adjustment -- the power-law cross-
+        # spectrum model when available (-xcov with -lsq gls), otherwise the borrowed-residual-
+        # correlation fallback. Same source and guard as the error-ellipse plot
+        # (prepare_ellipse_data(), geode/etm/visualization/data_prep.py). Polynomial columns are
+        # always [offset, velocity, acceleration], so index 1 is the velocity term.
         cov_ne = cov_nu = cov_eu = np.nan
-        if covar.size and covar[0, 0] > 0 and covar[1, 1] > 0 and covar[2, 2] > 0:
-            r_ne = covar[0, 1] / np.sqrt(covar[0, 0] * covar[1, 1])
-            r_nu = covar[0, 2] / np.sqrt(covar[0, 0] * covar[2, 2])
-            r_eu = covar[1, 2] / np.sqrt(covar[1, 1] * covar[2, 2])
-            cov_ne = r_ne * sn * se
-            cov_nu = r_nu * sn * su
-            cov_eu = r_eu * se * su
+        if poly.param_count > 1 and all(c.size for c in poly.p.covar):
+            ne = poly.p.cross_covar.get('NE')
+            nu = poly.p.cross_covar.get('NU')
+            eu = poly.p.cross_covar.get('EU')
+            if ne is not None:
+                cov_ne = ne['matrix'][1][1] * 1000 ** 2
+            if nu is not None:
+                cov_nu = nu['matrix'][1][1] * 1000 ** 2
+            if eu is not None:
+                cov_eu = eu['matrix'][1][1] * 1000 ** 2
 
         tvec    = etm.solution_data.time_vector
         t_first = tvec[0]
@@ -303,12 +318,15 @@ def process_etm_velocity(stn, args_dict):
               % (stnm_out, lat, lon, t_first, t_last, tspan, nobs, ve, vn, vu, vh, se, sn, su,
                  cov_ne, cov_nu, cov_eu)
 
-        return None, line, station_id
+        map_row = {'stnm': stnm_out, 'lat': lat, 'lon': lon,
+                  've': ve, 'vn': vn, 'se': se, 'sn': sn, 'cov_ne': cov_ne}
+
+        return None, line, station_id, map_row
 
     except SolutionDataException as e:
-        return str(e), None, station_id
+        return str(e), None, station_id, None
     except Exception:
-        return traceback.format_exc(), None, station_id
+        return traceback.format_exc(), None, station_id, None
 
 
 def process_fit_dates(args):
@@ -327,6 +345,155 @@ def process_fit_dates(args):
     return None if not dates else dates
 
 
+def plot_velocity_map(stations, output_file):
+    """
+    Plot a map of the horizontal station velocities (quiver arrows) and their 1-sigma N-E error
+    ellipses, using the same per-station values already printed in the output table (ve, vn, se, sn,
+    cov_ne -- the canonical N-E velocity cross-covariance, see process_etm_velocity()) and the same
+    ellipse convention as EllipseTemplate (geode/etm/visualization/ellipse_template.py): eigh of the
+    2x2 covariance matrix, 1-sigma full-axis lengths. Mercator projection centered on the data,
+    unless the stations' mean latitude is beyond +-60 degrees, in which case a polar stereographic
+    projection (north or south, matching the hemisphere) is used instead -- the usual choice for
+    circumpolar GNSS networks, where Mercator's distortion near the poles makes the map unusable.
+
+    Vectors and ellipses are each scaled independently to a legible on-screen size (velocity sigmas
+    are routinely 1-2 orders of magnitude smaller than the velocities themselves, so a single,
+    true-to-scale factor would make the ellipses invisible); the applied ellipse exaggeration factor
+    is reported on stderr so the plot isn't mistaken for true-to-scale.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+    import cartopy.crs as ccrs
+    from matplotlib.patches import Ellipse
+
+    from geode.etm.visualization.field_plot.map_renderer import CartopyRenderer
+    from geode.etm.visualization.ellipse_template import _ellipse_from_covariance
+
+    # 0.1 m/yr = 100 mm/yr: excludes ice/fast-moving stations (e.g. on ice sheets or across major
+    # plate boundaries) whose vectors would otherwise dwarf the rest of the map and force every other
+    # station's arrow down to an illegible size.
+    max_vh_mm = 100.
+    stations = [s for s in stations if np.isfinite(s['ve']) and np.isfinite(s['vn'])]
+    if not stations:
+        tqdm.write(' -- No stations with a valid velocity to plot on the map')
+        return
+
+    n_before = len(stations)
+    stations = [s for s in stations if np.hypot(s['ve'], s['vn']) <= max_vh_mm]
+    if len(stations) < n_before:
+        tqdm.write(' -- Excluded %d station(s) with horizontal velocity > %g mm/yr from the map'
+                  % (n_before - len(stations), max_vh_mm))
+    if not stations:
+        tqdm.write(' -- No stations left to plot on the map after excluding fast-moving stations')
+        return
+
+    lon = np.array([s['lon'] for s in stations])
+    lat = np.array([s['lat'] for s in stations])
+    ve  = np.array([s['ve'] for s in stations])
+    vn  = np.array([s['vn'] for s in stations])
+
+    central_lon = (lon.min() + lon.max()) / 2
+    mean_lat    = lat.mean()
+
+    if abs(mean_lat) > 60:
+        projection = (ccrs.NorthPolarStereo if mean_lat > 0 else ccrs.SouthPolarStereo)(
+            central_longitude=central_lon)
+    else:
+        projection = ccrs.Mercator(central_longitude=central_lon)
+
+    fig = plt.figure(figsize=(12, 10))
+    ax  = fig.add_subplot(1, 1, 1, projection=projection)
+
+    lon_pad = max((lon.max() - lon.min()) * 0.15, 1.0)
+    lat_pad = max((lat.max() - lat.min()) * 0.15, 1.0)
+    ax.set_extent([lon.min() - lon_pad, lon.max() + lon_pad,
+                  max(lat.min() - lat_pad, -90.), min(lat.max() + lat_pad, 90.)], crs=ccrs.PlateCarree())
+
+    # Match the figure's aspect ratio to the plotted extent's: cartopy enforces equal aspect on the
+    # map itself, so a mismatched figure (e.g. a wide lon/lat box in a square figure) would otherwise
+    # pad the difference with blank space above/below (or left/right) the map.
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+    data_aspect = (ylim[1] - ylim[0]) / (xlim[1] - xlim[0])
+    if data_aspect <= 1.:
+        fig_w, fig_h = 12., np.clip(12. * data_aspect, 4., 12.)
+    else:
+        fig_w, fig_h = np.clip(12. / data_aspect, 4., 12.), 12.
+    fig.set_size_inches(fig_w, fig_h)
+
+    CartopyRenderer(resolution='50m').add_features(ax)
+
+    xy   = projection.transform_points(ccrs.PlateCarree(), lon, lat)
+    x, y = xy[:, 0], xy[:, 1]
+
+    ref_dim = min(xlim[1] - xlim[0], ylim[1] - ylim[0])
+
+    # vectors: longest arrow spans ~8% of the shorter map dimension
+    vh      = np.sqrt(ve ** 2 + vn ** 2)
+    vh_max  = np.nanmax(vh) if np.any(np.isfinite(vh)) else 0.
+    scale   = vh_max / (0.08 * ref_dim) if vh_max > 0 else 1.
+
+    q = ax.quiver(x, y, ve, vn, scale=scale, scale_units='xy', color='red',
+                 width=0.004, edgecolor='black', linewidth=0.4, zorder=6)
+
+    ref = round(vh_max / 2, 1) or 1.0
+    ax.quiverkey(q, 0.85, 0.05, ref, '%g mm/yr' % ref, labelpos='E', coordinates='axes',
+                fontproperties={'size': 8}, zorder=7)
+
+    # ellipses: centered on the arrow tip (the vector's endpoint), not the station itself -- the
+    # usual GNSS velocity-map convention (e.g. GMT's psvelo). Tip position uses the same quiver
+    # 'scale' (scale_units='xy'), so it lands exactly where the plotted arrowhead is.
+    # Own independent scale for the ellipse size itself, so the largest one spans ~5% of the
+    # shorter map dimension.
+    ellipses = []
+    for s, xi, yi, dve, dvn in zip(stations, x, y, ve, vn):
+        cov_ne, se, sn = s['cov_ne'], s['se'], s['sn']
+        if not (np.isfinite(cov_ne) and np.isfinite(se) and np.isfinite(sn)):
+            continue
+        width, height, angle = _ellipse_from_covariance(np.array([[se ** 2, cov_ne], [cov_ne, sn ** 2]]))
+        tip_x, tip_y = xi + dve / scale, yi + dvn / scale
+        ellipses.append((tip_x, tip_y, width, height, angle))
+
+    if ellipses:
+        major_max    = max(max(w, h) for _, _, w, h, _ in ellipses)
+        ellipse_scale = major_max / (0.05 * ref_dim) if major_max > 0 else 1.
+        for tip_x, tip_y, width, height, angle in ellipses:
+            ax.add_patch(Ellipse((tip_x, tip_y), width / ellipse_scale, height / ellipse_scale, angle=angle,
+                                 facecolor='none', edgecolor='black', linewidth=0.8, zorder=5))
+        tqdm.write(' -- Error ellipses shown at %.0fx their true 1-sigma size (for visibility)'
+                  % (1. / ellipse_scale))
+    else:
+        tqdm.write(' -- No station has a valid N-E velocity covariance; skipping error ellipses')
+
+    ax.set_title('Station velocities and 1-sigma N-E error ellipses', fontsize=12, fontweight='bold')
+
+    # GeoDE logo, bottom right -- same placement/approach as
+    # geode.etm.visualization.etm_plotting.EtmPlotter._add_logo(). Reuse that module's own LOGO_PATH
+    # (relative to the installed geode package, not to this script) rather than deriving a path from
+    # this file's own location: PrintVelocities.py is installed as a standalone console script (see
+    # setup.py), so it can end up anywhere (e.g. a conda env's bin/), with no fixed relationship to
+    # where the geode package itself was installed.
+    from geode.etm.visualization.etm_plotting import LOGO_PATH as logo_path
+    if logo_path.exists():
+        try:
+            logo_img      = mpimg.imread(logo_path)
+            width_frac    = 0.12
+            aspect_ratio  = logo_img.shape[1] / logo_img.shape[0]
+            height_frac   = width_frac / aspect_ratio
+            logo_ax = fig.add_axes((1.0 - width_frac - 0.01, 0.01, width_frac, height_frac))
+            logo_ax.imshow(logo_img, interpolation='lanczos', resample=True)
+            logo_ax.axis('off')
+        except Exception as e:
+            tqdm.write(' -- Failed to add logo to velocity map: %s' % str(e))
+    else:
+        tqdm.write(' -- Logo file not found: %s' % logo_path)
+
+    fig.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    tqdm.write(' >> Saved velocity map (%d station(s)) to %s' % (len(stations), output_file))
+
+
 def main():
     # open (and immediately discard) a database connection before anything else, so that any
     # pending schema migrations run here, in the main process, before --parallel forks workers.
@@ -339,10 +506,24 @@ def main():
 
     parser.add_argument('-sol', '--solution', type=str, metavar='{stack|ppp}', default='ppp',
                         help="Required: specify the GAMIT stack name or ppp to use GPSPACE solutions. "
-                             "All stations found in this solution are processed (no station list needed).")
+                             "By default, every station found in this solution is processed (no station "
+                             "list needed); narrow this down with -stn.")
+
+    parser.add_argument('-stn', '--stations', nargs='+', type=str, metavar='{station list}', default=[],
+                        help="Optional: restrict processing to a subset of the stations found in the "
+                             "solution (-sol), using the standard GeoDE station selector syntax below. "
+                             "If not specified, every station in the solution is processed." +
+                             SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-o', '--output', type=str, default=None, metavar='file',
                         help="File to save the output table. If not specified, output goes to stdout")
+
+    parser.add_argument('-map', '--plot_map', type=str, default=None, metavar='file',
+                        help="Also plot a map of the station horizontal velocities (quiver arrows) and their "
+                             "1-sigma N-E error ellipses (Cov_ne, Se, Sn -- same values as the output table), "
+                             "saved to {file} (PNG). Mercator projection, unless the stations' mean latitude is "
+                             "beyond +-60 degrees, in which case a polar stereographic projection (north or south, "
+                             "matching the hemisphere) is used instead. Not plotted by default")
 
     parser.add_argument('-lsq', '--least_squares_strategy',
                         choices=['lsc', 'rls', 'gls'], default='rls',
@@ -408,6 +589,13 @@ def main():
                         help="With -lsq gls, also compute the variance factors of the colored and white parts of "
                              "the noise model (costs one n x n triangular inverse per component)")
 
+    parser.add_argument('-xcov', '--cross_covariance', action='store_true', default=False,
+                        help="With -lsq gls, fit the power-law cross-spectrum model to the N-E/N-U/E-U velocity "
+                             "cross-covariance (Cov_ne, Cov_nu, Cov_eu columns), fitted to the empirical cross-"
+                             "covariance of the step-1 residuals at the epochs common to all three components. "
+                             "Default: a cheaper borrowed-residual-correlation approximation "
+                             "(Cov = r * sigma_i * sigma_j) is reported instead")
+
     parser.add_argument('-sigma', '--sigma_limit', type=float, default=2.5,
                         help="Number of sigmas for the limit of outlier detection. Default is 2.5 sigma")
 
@@ -457,6 +645,13 @@ def main():
 
     stnlist = get_solution_stations(cnn, args.solution)
 
+    if args.stations:
+        selected = process_stnlist(cnn, args.stations,
+                                   summary_title='Station selector matched (before intersecting with '
+                                                 'the solution):')
+        selected_ids = {stationID(s) for s in selected}
+        stnlist = [s for s in stnlist if stationID(s) in selected_ids]
+
     if not stnlist:
         print(' >> ERROR: no stations found for solution "%s"' % args.solution, file=sys.stderr)
         sys.exit(1)
@@ -479,14 +674,17 @@ def main():
     pbar = tqdm(desc='%-30s' % ' >> Processing ETM',
                total=len(stnlist), ncols=160, disable=None)
 
-    results = []
+    results  = []
+    map_rows = []
 
     def collect_and_report(job):
         callback_print_velocity(job)
         if job.result is not None:
-            error_msg, line, station_id = job.result
+            error_msg, line, station_id, map_row = job.result
             if line is not None:
                 results.append(line)
+            if map_row is not None:
+                map_rows.append(map_row)
 
     JobServer.create_cluster(process_etm_velocity, (), collect_and_report, pbar,
                              modules=('geode.dbConnection',
@@ -520,6 +718,9 @@ def main():
         print(' >> Wrote %d station(s) to %s' % (len(results), args.output), file=sys.stderr)
     else:
         print(output)
+
+    if args.plot_map:
+        plot_velocity_map(map_rows, args.plot_map)
 
 
 if __name__ == '__main__':
