@@ -21,14 +21,14 @@ DAYS_PER_YEAR = 365.25
 
 # outcome of a candidate periodic term -> marker style and legend label (stepwise grid search, joint harmonic fit)
 CANDIDATE_STYLES = {
-    'accepted':             ({'marker': 'o', 'markersize': 6}, 'accepted'),
-    'snr':                  ({'marker': 'v', 'markersize': 6, 'mfc': 'none'}, 'rejected: SNR'),
-    'joint':                ({'marker': 's', 'markersize': 6, 'mfc': 'none'}, 'rejected: joint fit'),
-    'zero':                 ({'marker': 'x', 'markersize': 6}, 'rejected: zero variance'),
-    'unresolved':           ({'marker': 'D', 'markersize': 5, 'mfc': 'none'}, 'unresolved'),
-    'below threshold':      ({'marker': 'v', 'markersize': 6, 'mfc': 'none'}, 'rejected: SNR in the harmonic fit'),
-    'zero after refit':     ({'marker': 's', 'markersize': 6, 'mfc': 'none'}, 'rejected: zero after refit'),
-    'zero in harmonic fit': ({'marker': 'x', 'markersize': 6}, 'rejected: zero in the harmonic fit'),
+    'accepted':             ({'marker': 'o', 'markersize': 6}, 'Accepted'),
+    'snr':                  ({'marker': 'v', 'markersize': 6, 'mfc': 'none'}, 'Rejected: SNR'),
+    'joint':                ({'marker': 's', 'markersize': 6, 'mfc': 'none'}, 'Rejected: joint fit'),
+    'zero':                 ({'marker': 'x', 'markersize': 6}, 'Rejected: zero variance'),
+    'unresolved':           ({'marker': 'D', 'markersize': 5, 'mfc': 'none'}, 'Unresolved'),
+    'below threshold':      ({'marker': 'v', 'markersize': 6, 'mfc': 'none'}, 'Rejected: SNR in harmonic fit'),
+    'zero after refit':     ({'marker': 's', 'markersize': 6, 'mfc': 'none'}, 'Rejected: zero after refit'),
+    'zero in harmonic fit': ({'marker': 'x', 'markersize': 6}, 'Rejected: zero in harmonic fit'),
 }
 
 
@@ -58,9 +58,12 @@ class NoiseModelTemplate(PlotTemplate):
         return colors
 
     def create_figure_layout(self) -> Tuple[plt.Figure, np.ndarray]:
-        """3 rows (N, E, U) x 2 columns (covariance fit, scan)"""
+        """3 rows (N, E, U) x 2 columns (covariance fit, scan). left leaves room for the detected-periods
+        tables (add_periods_tables, mirroring TimeSeriesTemplate.add_jump_tables); bottom leaves room
+        between the last row's x-axis labels and the logo (added below the axes grid, at the figure's
+        own bottom edge, independently of this margin)"""
         fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(16, 15))
-        fig.subplots_adjust(left=0.06, right=0.98, top=0.89, bottom=0.07, hspace=0.42, wspace=0.16)
+        fig.subplots_adjust(left=0.12, right=0.98, top=0.89, bottom=0.15, hspace=0.55, wspace=0.16)
         return fig, axes
 
     def generate_title(self, plot_data: NoiseModelPlotData, output_config: PlotOutputConfig) -> str:
@@ -80,7 +83,7 @@ class NoiseModelTemplate(PlotTemplate):
             detection = (f"stepwise grid search: band {st['band_cpy'][0]:g}-{st['band_cpy'][1]:g} cy/yr; "
                          f"SNR >= {st['snr_min']:g}; dchi2 >= {st['dchi2_min']:g}")
         return (base_title + '\n' +
-                f"Noise model: PLN alpha = {min(st['alphas']):g}-{max(st['alphas']):g} + white "
+                f"Noise model: PLN $\\alpha$ = {min(st['alphas']):g}-{max(st['alphas']):g} + white "
                 f"(>= {st['white_min']:g} mm**2) + periodic terms; {nm['n_lags']} fitted lags up to "
                 f"{nm['tau_max']} d\nDetection: {detection}")
 
@@ -93,23 +96,23 @@ class NoiseModelTemplate(PlotTemplate):
         n_periods = len(nm['periodic'])
 
         ax.plot(tau, gamma, 'o', color=self.colors['empirical'], markersize=2, markeredgewidth=0,
-                label='empirical covariance of residuals')
+                label='Empirical covariance')
         ax.plot(tau[lags], gamma[lags], 'd', mfc='none', mec='k', markersize=3, markeredgewidth=0.6,
-                label='fitted lags')
+                label='Fitted lags')
         ax.plot(tau, _floats(diag['fit_reference']), '--', color=self.colors['fit_reference'], linewidth=1.5,
-                label='fit without cosines (reference)')
+                label='Fit without cosines (reference)')
         ax.plot(tau, _floats(diag['fit_final']), '-', color=self.colors['fit'], linewidth=1.5,
-                label=f'fit with {n_periods} detected cosine(s)')
+                label=f'Fit with {n_periods} detected cosine(s)')
         ax.axhline(0, color='k', linestyle=':', linewidth=0.6)
 
         ax.set_xlim(0, tau[-1])
-        ax.set_xlabel('lag [years]')
-        ax.set_ylabel('mm$^2$')
+        ax.set_xlabel('Lag [years]')
+        ax.set_ylabel('[mm$^2$]')
         ax.grid(True, alpha=0.4)
-        ax.legend(fontsize=8, loc='upper right')
+        ax.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=2)
 
         ref, fin = nm['effective_alpha']['reference'], nm['effective_alpha']['final']
-        ax.set_title(f"{label}: fit to the empirical covariance (as seen in the residuals)\n"
+        ax.set_title(f"{label}: empirical covariance fit\n"
                      f"effective $\\alpha$: reference {self._alpha(ref)}; with cosines {self._alpha(fin)}",
                      fontsize=10)
 
@@ -137,15 +140,15 @@ class NoiseModelTemplate(PlotTemplate):
         ax.set_xscale('log')
         ax.set_yscale('log')
         ax.plot(f, np.maximum(r_ref, floor), color=self.colors['scan_reference'], linewidth=1.2,
-                label='reference fit (no cosines)')
+                label='Reference fit (no cosines)')
         ax.plot(f, np.maximum(r_fin, floor), color=self.colors['scan_final'], linewidth=1.2,
-                label=f'final fit ({len(periodic)} period(s)): final check')
+                label=f'Final fit ({len(periodic)} period(s)): final check')
 
         # thresholds in the legend (labels on the axes collide with the candidates at the band edges)
         ax.axhline(st['cand_ratio'], color='gray', linestyle=':', linewidth=1,
-                   label=f"candidates: ratio $\\geq$ {st['cand_ratio']:g}")
+                   label=f"Candidates: ratio $\\geq$ {st['cand_ratio']:g}")
         ax.axhline(st['snr_min'], color='gray', linestyle='--', linewidth=0.8,
-                   label=f"final check: ratio $\\geq$ {st['snr_min']:g}")
+                   label=f"Final check: ratio $\\geq$ {st['snr_min']:g}")
 
         for p in periodic:
             ax.axvline(p['f_cpy'], color='k', linestyle=':', linewidth=0.8)
@@ -157,17 +160,16 @@ class NoiseModelTemplate(PlotTemplate):
         added = [dict(p, f_peak=p['f_cpy'], outcome='added') for p in periodic if p.get('final_check') == 'added']
         for p in added:
             ax.plot(p['f_peak'], np.interp(p['f_peak'], f, r_fin), linestyle='none', marker='*', markersize=10,
-                    color=self.colors['scan_final'], label='added by the final check')
+                    color=self.colors['scan_final'], label='Added by the final check')
             ax.annotate(f"{p['period_d']:.0f} d", (p['f_peak'], np.interp(p['f_peak'], f, r_fin)),
                         textcoords='offset points', xytext=(0, 7), ha='center', fontsize=7,
                         color=self.colors['scan_final'])
 
         self._frequency_axis(ax, f, floor, top)
-        ax.set_ylabel('misfit spectrum / noise per bin')
+        ax.set_ylabel('Misfit spectrum')
         self._legend_unique(ax)
 
-        ax.set_title(f"{label}: spectrum of the covariance misfit (joint harmonic fit)\n"
-                     f"periods: {self._periods(periodic)}", fontsize=10)
+        ax.set_title(f"{label}: spectrum of the covariance misfit", fontsize=10)
 
     def plot_scan(self, ax, nm: dict, label: str) -> None:
         """Drop in weighted misfit when a cosine is added, for the reference and the final fit"""
@@ -187,12 +189,12 @@ class NoiseModelTemplate(PlotTemplate):
         ax.set_xscale('log')
         ax.set_yscale('log')
         ax.plot(f, np.maximum(scan_ref, floor), color=self.colors['scan_reference'], linewidth=1.2,
-                label='reference fit (no cosines)')
+                label='Reference fit (no cosines)')
         ax.plot(f, np.maximum(scan_fin, floor), color=self.colors['scan_final'], linewidth=1.2,
-                label=f'with the {len(accepted)} accepted period(s)')
+                label=f'With the {len(accepted)} accepted period(s)')
 
         ax.axhline(st['dchi2_min'], color='gray', linestyle=':', linewidth=1,
-                   label=f"minimum $\\Delta\\chi^2$ = {st['dchi2_min']:g}")
+                   label=f"Minimum $\\Delta\\chi^2$ = {st['dchi2_min']:g}")
 
         for p in accepted:
             ax.axvline(p['f_cpy'], color='k', linestyle=':', linewidth=0.8)
@@ -205,8 +207,8 @@ class NoiseModelTemplate(PlotTemplate):
         self._legend_unique(ax)
 
         ax.set_title(f"{label}: drop in weighted misfit when a cosine at f is added (stepwise grid search)\n"
-                     f"accepted (SNR $\\geq$ {st['snr_min']:g}, $\\Delta\\chi^2 \\geq$ {st['dchi2_min']:g}): "
-                     f"{self._periods(accepted)}", fontsize=10)
+                     f"accepted: SNR $\\geq$ {st['snr_min']:g}, $\\Delta\\chi^2 \\geq$ {st['dchi2_min']:g}",
+                     fontsize=10)
 
     def _plot_candidates(self, ax, candidates: list, f: np.ndarray, curve: np.ndarray) -> None:
         """candidates at (f_peak, curve(f_peak)), marker by outcome, accepted ones labeled with their period"""
@@ -228,19 +230,43 @@ class NoiseModelTemplate(PlotTemplate):
                                                  if f[0] <= t <= f[-1]]))
         ax.xaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax.xaxis.set_minor_formatter(NullFormatter())
-        ax.set_xlabel('frequency [cycles/yr]')
+        ax.set_xlabel('Frequency [cycles/yr]')
         ax.grid(True, which='both', alpha=0.3)
 
     @staticmethod
     def _legend_unique(ax) -> None:
-        """legend with one entry per label"""
+        """legend with one entry per label, below the panel (can run long: candidate outcomes plus
+        reference/final fit and threshold lines)"""
         handles, labels = ax.get_legend_handles_labels()
         unique = dict(zip(labels, handles))
-        ax.legend(unique.values(), unique.keys(), fontsize=8, loc='upper right')
+        ax.legend(unique.values(), unique.keys(), fontsize=8, loc='upper center',
+                  bbox_to_anchor=(0.5, -0.17), ncol=3)
 
-    @staticmethod
-    def _periods(periodic: list) -> str:
-        return ', '.join(f"{p['period_d']:.0f} d" for p in periodic) or 'none'
+    def add_periods_tables(self, fig, axes, periodic_lists: Tuple[list, list, list]) -> None:
+        """Left-margin table of detected periods (period and variance, increasing period), replacing the
+        comma-separated list that used to sit in the right panel's title. Mirrors TimeSeriesTemplate.
+        add_jump_tables' fig.text mechanism: each row's table is anchored to that row's own axis
+        (axes[:, 1], the right/detection panel the periods were found in), stacked bottom-up at the
+        figure's left margin (create_figure_layout reserves room for it via left=0.12)"""
+        MAX_ITEMS = 20
+        for i, periodic in enumerate(periodic_lists):
+            initial_pos = axes[i, 1].get_position().y0
+            axes_bbox = axes[i, 1].get_window_extent()
+
+            ordered = sorted(periodic, key=lambda p: p['period_d'])
+            rows = [f"{p['period_d']:>5.0f}  {p['w_p']:>6.2f}" for p in ordered] or ['none']
+            for j, row in enumerate(reversed(rows)):
+                if j < MAX_ITEMS:
+                    text = fig.text(0.0025, initial_pos, row, color='black', fontsize=8, family='monospace')
+                else:
+                    text = fig.text(0.0025, initial_pos, self.config.get_label('table_too_long'), color='black',
+                                    fontsize=8, family='monospace')
+                ex = text.get_window_extent()
+                initial_pos += ex.height / axes_bbox.height / 3.75
+                if j >= MAX_ITEMS:
+                    break
+            fig.text(0.0025, initial_pos, 'T [d]    [mm$^2$]', color='black', fontsize=8,
+                     family='monospace')
 
     @staticmethod
     def plot_not_available(axes, label: str, message: str = 'noise model not available') -> None:

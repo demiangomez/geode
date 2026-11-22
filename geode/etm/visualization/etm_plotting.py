@@ -143,6 +143,10 @@ class EtmPlotter:
         title = template.generate_title(plot_data, output_config)
         fig.suptitle(title, fontsize=9, family='monospace')
 
+        periodic_lists = tuple(nm.get('periodic', []) if nm and 'diagnostics' in nm else []
+                               for nm in plot_data.noise_models)
+        template.add_periods_tables(fig, axes, periodic_lists)
+
         for i, component in enumerate(['north', 'east', 'up']):
             label = self.config.get_label(component)
             noise_model = plot_data.noise_models[i]
