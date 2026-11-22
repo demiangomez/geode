@@ -49,7 +49,7 @@ class NoiseCrossModelTemplate(PlotTemplate):
 
     def generate_title(self, plot_data: NoiseModelPlotData, output_config: PlotOutputConfig) -> str:
         base_title = super().generate_title(plot_data, output_config)
-        return base_title + '\nCross-covariance: power-law cross-spectrum model (spec Section 6.2/6.3)'
+        return base_title + '\nCross-covariance: PLN cross-spectrum model'
 
     def plot_covariance_fit(self, ax, cc: dict, pair: str) -> None:
         """Empirical cross-covariance of the two components' step-1 residuals and the fitted model"""
@@ -64,11 +64,11 @@ class NoiseCrossModelTemplate(PlotTemplate):
         fitted_idx = fitted - int(diag['lag_days'][0])
 
         ax.plot(tau, gamma, 'o', color=self.colors['empirical'], markersize=2, markeredgewidth=0,
-                label='empirical cross-covariance of residuals')
+                label='Empirical cross-covariance')
         ax.plot(fitted_tau, gamma[fitted_idx], 'd', mfc='none', mec='k', markersize=3,
-                markeredgewidth=0.6, label='fitted lags')
+                markeredgewidth=0.6, label='Fitted lags')
         ax.plot(tau, model, '-', color=self.colors['fit'], linewidth=1.5,
-                label=f"fit (alpha_x={_fmt(cc['alpha_x'])})")
+                label=f"PLN fit")
         ax.axhline(0, color='k', linestyle=':', linewidth=0.6)
         ax.axvline(0, color='k', linestyle=':', linewidth=0.6)
 
@@ -80,7 +80,7 @@ class NoiseCrossModelTemplate(PlotTemplate):
 
         periods = ', '.join(f"{p['period_d']:.0f} d" for p in cc['periodic']) or 'none'
         ax.set_title(f"{label}: fit to the empirical cross-covariance\n"
-                    f"theta_w={_fmt(cc['theta_w'])} w_x={_fmt(cc['w_x'])} mm$^2$; periods matched: "
+                    f"theta_w={_fmt(cc['theta_w'])} w_x={_fmt(cc['w_x'])} mm$^2$ | matched periods: "
                     f"{periods}", fontsize=10)
 
     def plot_alpha_grid_search(self, ax, cc: dict, pair: str) -> None:
@@ -106,7 +106,7 @@ class NoiseCrossModelTemplate(PlotTemplate):
         # cc['daily_residual_correlation'] is what the borrowed (Section 10.2) model would give for
         # every parameter pair alike, including the rate -- there is no separate "borrowed rate
         # correlation" to look up, since the two are always numerically identical
-        ax.set_title(f"{label}: grid search over alpha_x\n"
+        ax.set_title(f"{label}: search over alpha_x\n"
                     f"rate correlation {_fmt(cc.get('rate_correlation'))} "
                     f"(borrowed: {_fmt(cc.get('daily_residual_correlation'))})",
                     fontsize=10)

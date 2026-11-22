@@ -80,8 +80,8 @@ class NoiseModelTemplate(PlotTemplate):
             detection = (f"stepwise grid search: band {st['band_cpy'][0]:g}-{st['band_cpy'][1]:g} cy/yr; "
                          f"SNR >= {st['snr_min']:g}; dchi2 >= {st['dchi2_min']:g}")
         return (base_title + '\n' +
-                f"Noise model: power laws alpha = {min(st['alphas']):g}-{max(st['alphas']):g} + white "
-                f"(>= {st['white_min']:g} mm^2) + periodic terms; {nm['n_lags']} fitted lags up to "
+                f"Noise model: PLN alpha = {min(st['alphas']):g}-{max(st['alphas']):g} + white "
+                f"(>= {st['white_min']:g} mm**2) + periodic terms; {nm['n_lags']} fitted lags up to "
                 f"{nm['tau_max']} d\nDetection: {detection}")
 
     def plot_covariance_fit(self, ax, nm: dict, label: str) -> None:

@@ -330,7 +330,7 @@ def process_etm_station(stn, args_dict, from_kmz):
         # EtmFit.process_cross_covariance, but a DB-cached fit never repopulates it either way)
         plot_opts = args_dict['plot_options']
         force_recompute = ('no-plots' not in plot_opts and
-                           (('noise' in plot_opts and config.modeling.least_squares_strategy.adjustment_model ==
+                           (('covariance' in plot_opts and config.modeling.least_squares_strategy.adjustment_model ==
                              AdjustmentModels.NOISE_COVARIANCE_GLS) or
                             'ellipses' in plot_opts))
         etm.run_adjustment(cnn=cnn,
@@ -350,7 +350,7 @@ def process_etm_station(stn, args_dict, from_kmz):
             etm.plot()
             if 'hist' in args_dict['plot_options']:
                 etm.plot_hist()
-            if 'noise' in args_dict['plot_options']:
+            if 'covariance' in args_dict['plot_options']:
                 etm.plot_noise()
                 etm.plot_noise_cross()
             if 'ellipses' in args_dict['plot_options']:
@@ -956,17 +956,17 @@ def main():
                              "the existing configuration")
 
     parser.add_argument('-plot', '--plot_options', nargs='*',
-                        choices=['out', 'hist', 'noise', 'ellipses', 'missing', 'residuals', 'no-model',
+                        choices=['out', 'hist', 'covariance', 'ellipses', 'missing', 'residuals', 'no-model',
                                 'no-plots'],
                         default=[],
                         help="Plotting options: "
                              "out -> plot right panel with the outliers marked in cyan; "
                              "hist -> plot additional file with histograms of residuals; "
-                             "noise -> plot additional file with the noise model diagnostics (fit to the empirical "
-                             "covariance and detection of periodic terms; -lsq gls only, forces the computation "
-                             "of the ETM); also plots a second file with the N-E/N-U/E-U cross-covariance "
-                             "diagnostics (empirical cross-covariance fit and alpha_x grid search) wherever -xcov "
-                             "produced one; "
+                             "covariance -> plot additional file with the noise model diagnostics (fit to the "
+                             "empirical covariance and detection of periodic terms; -lsq gls only, forces the "
+                             "computation of the ETM); also plots a second file with the N-E/N-U/E-U "
+                             "cross-covariance diagnostics (empirical cross-covariance fit and alpha_x grid search) "
+                             "wherever -xcov produced one; "
                              "ellipses -> plot the velocity error ellipse of each component pair (N-E, N-U, E-U): "
                              "the borrowed-residual-correlation ellipse always, plus the power-law cross-spectrum "
                              "ellipse too wherever -xcov produced one (forces the computation of the ETM); "

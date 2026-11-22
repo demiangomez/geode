@@ -152,7 +152,7 @@ class EtmPlotter:
             else:
                 template.plot_not_available(axes[i], label)
 
-        return self._handle_plot_output(fig, output_config, suffix='_noise')
+        return self._handle_plot_output(fig, output_config, suffix='_covariance')
 
     def plot_noise_cross_model(self, plot_data: NoiseModelPlotData,
                                output_config: Optional[PlotOutputConfig] = None) -> Optional[str]:
@@ -182,7 +182,7 @@ class EtmPlotter:
             else:
                 template.plot_not_available(axes[i], label)
 
-        return self._handle_plot_output(fig, output_config, suffix='_noise_cross')
+        return self._handle_plot_output(fig, output_config, suffix='_cross_cov')
 
     def plot_ellipses(self, plot_data: EllipsePlotData,
                       output_config: Optional[PlotOutputConfig] = None) -> Optional[str]:

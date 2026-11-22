@@ -353,4 +353,4 @@ def test_noise_model_figure(case, tmp_path):
                                        completion=100., span_completion=100., latitude=0., longitude=0.,
                                        noise_models=[nm, {}, nm])
         EtmPlotter(config).plot_noise_model(plot_data)
-        assert (tmp_path / (config.build_filename() + '_noise.png')).is_file()
+        assert (tmp_path / (config.build_filename() + '_covariance.png')).is_file()

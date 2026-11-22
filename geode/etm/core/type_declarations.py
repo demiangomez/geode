@@ -124,7 +124,7 @@ class AdjustmentModels(IntEnum):
         descriptions = {
             AdjustmentModels.ROBUST_LEAST_SQUARES: 'Robust Least Squares',
             AdjustmentModels.LSQ_COLLOCATION: 'Least Squares Collocation',
-            AdjustmentModels.NOISE_COVARIANCE_GLS: 'GLS with power-law + periodic noise covariance'
+            AdjustmentModels.NOISE_COVARIANCE_GLS: 'Generalized Least Squares'
         }
         return descriptions.get(self, 'UNKNOWN')
 
