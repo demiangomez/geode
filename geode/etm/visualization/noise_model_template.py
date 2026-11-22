@@ -76,15 +76,15 @@ class NoiseModelTemplate(PlotTemplate):
 
         st = nm['settings']
         if nm.get('detection') == 'joint':
-            detection = (f"joint harmonic fit: SNR >= {st['snr_min']:g} in the harmonic fit; candidates at misfit "
-                         f"ratio >= {st['cand_ratio']:g}; periods {nm['span_days'] / st['min_cycles']:.0f} to "
+            detection = (f"joint harmonic fit: SNR >= {st['snr_min']:g} in the harmonic fit | candidates at misfit "
+                         f"ratio >= {st['cand_ratio']:g} | periods {nm['span_days'] / st['min_cycles']:.0f} to "
                          f"{st['p_min']:.0f} d")
         else:
-            detection = (f"stepwise grid search: band {st['band_cpy'][0]:g}-{st['band_cpy'][1]:g} cy/yr; "
-                         f"SNR >= {st['snr_min']:g}; dchi2 >= {st['dchi2_min']:g}")
+            detection = (f"stepwise grid search: band {st['band_cpy'][0]:g}-{st['band_cpy'][1]:g} cy/yr | "
+                         f"SNR >= {st['snr_min']:g} | dchi2 >= {st['dchi2_min']:g}")
         return (base_title + '\n' +
                 f"Noise model: PLN $\\alpha$ = {min(st['alphas']):g}-{max(st['alphas']):g} + white "
-                f"(>= {st['white_min']:g} mm**2) + periodic terms; {nm['n_lags']} fitted lags up to "
+                f"(>= {st['white_min']:g} mm**2) + periodic terms | {nm['n_lags']} fitted lags up to "
                 f"{nm['tau_max']} d\nDetection: {detection}")
 
     def plot_covariance_fit(self, ax, nm: dict, label: str) -> None:
@@ -113,7 +113,7 @@ class NoiseModelTemplate(PlotTemplate):
 
         ref, fin = nm['effective_alpha']['reference'], nm['effective_alpha']['final']
         ax.set_title(f"{label}: empirical covariance fit\n"
-                     f"effective $\\alpha$: reference {self._alpha(ref)}; with cosines {self._alpha(fin)}",
+                     f"effective $\\alpha$: reference {self._alpha(ref)} | with cosines {self._alpha(fin)}",
                      fontsize=10)
 
     def plot_detection(self, ax, nm: dict, label: str) -> None:
