@@ -44,7 +44,7 @@ class NoiseCrossModelTemplate(PlotTemplate):
     def create_figure_layout(self) -> Tuple[plt.Figure, np.ndarray]:
         """3 rows (N-E, N-U, E-U) x 2 columns (covariance fit, alpha_x grid search)"""
         fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(16, 15))
-        fig.subplots_adjust(left=0.06, right=0.98, top=0.89, bottom=0.07, hspace=0.42, wspace=0.16)
+        fig.subplots_adjust(left=0.06, right=0.98, top=0.89, bottom=0.09, hspace=0.42, wspace=0.16)
         return fig, axes
 
     def generate_title(self, plot_data: NoiseModelPlotData, output_config: PlotOutputConfig) -> str:
@@ -73,14 +73,14 @@ class NoiseCrossModelTemplate(PlotTemplate):
         ax.axvline(0, color='k', linestyle=':', linewidth=0.6)
 
         ax.set_xlim(tau[0], tau[-1])
-        ax.set_xlabel('lag [years]')
-        ax.set_ylabel('mm$^2$')
+        ax.set_xlabel('Lag [years]')
+        ax.set_ylabel('[mm$^2$]')
         ax.grid(True, alpha=0.4)
-        ax.legend(fontsize=8, loc='upper right')
+        ax.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=3)
 
         periods = ', '.join(f"{p['period_d']:.0f} d" for p in cc['periodic']) or 'none'
         ax.set_title(f"{label}: fit to the empirical cross-covariance\n"
-                    f"theta_w={_fmt(cc['theta_w'])} w_x={_fmt(cc['w_x'])} mm$^2$ | matched periods: "
+                    f"$\\theta_w$={_fmt(cc['theta_w'])} $w_x$={_fmt(cc['w_x'])} [mm$^2$] | matched periods: "
                     f"{periods}", fontsize=10)
 
     def plot_alpha_grid_search(self, ax, cc: dict, pair: str) -> None:
@@ -92,21 +92,21 @@ class NoiseCrossModelTemplate(PlotTemplate):
         rnorm = _floats(cc['residual_norm_grid'])
 
         ax.plot(alpha_grid, rnorm, 'o-', color=self.colors['grid'], linewidth=1.2, markersize=4,
-                label='residual norm')
+                label='Residual norm')
         best = int(np.nanargmin(rnorm))
         ax.plot(alpha_grid[best], rnorm[best], '*', color=self.colors['chosen'], markersize=14,
-               label=f"chosen: alpha_x={alpha_grid[best]:g}")
+               label=f"Chosen: $\\alpha_x$={alpha_grid[best]:g}")
         ax.axvline(alpha_grid[best], color=self.colors['chosen'], linestyle=':', linewidth=1)
 
-        ax.set_xlabel('alpha_x (cross-spectrum spectral index)')
-        ax.set_ylabel('whitened residual norm')
+        ax.set_xlabel('$\\alpha_x$ (cross-spectrum spectral index)')
+        ax.set_ylabel('Whitened residual norm')
         ax.grid(True, alpha=0.4)
-        ax.legend(fontsize=8, loc='upper right')
+        ax.legend(fontsize=8, loc='upper center', bbox_to_anchor=(0.5, -0.17), ncol=2)
 
         # cc['daily_residual_correlation'] is what the borrowed (Section 10.2) model would give for
         # every parameter pair alike, including the rate -- there is no separate "borrowed rate
         # correlation" to look up, since the two are always numerically identical
-        ax.set_title(f"{label}: search over alpha_x\n"
+        ax.set_title(f"{label}: search over $\\alpha_x$\n"
                     f"rate correlation {_fmt(cc.get('rate_correlation'))} "
                     f"(borrowed: {_fmt(cc.get('daily_residual_correlation'))})",
                     fontsize=10)
