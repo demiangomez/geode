@@ -6,7 +6,7 @@ Author: Demian D. Gomez
 Data preparation utilities for ETM plotting.
 """
 
-from typing import List, Tuple, NamedTuple
+from typing import List, Optional, Tuple, NamedTuple
 import numpy as np
 import logging
 
@@ -16,7 +16,8 @@ from ..core.etm_config import EtmConfig
 from ..core.type_declarations import FitStatus
 from ..data.solution_data import SolutionData
 from ..least_squares.least_squares import EtmFit
-from ..visualization.data_classes import TimeSeriesPlotData, ComponentData, PlotOutputConfig, NoiseModelPlotData
+from ..visualization.data_classes import (TimeSeriesPlotData, ComponentData, PlotOutputConfig,
+                                          NoiseModelPlotData, EllipsePlotData)
 
 # Re-export PlotTemplate for backward compatibility
 from ..visualization.plot_template import PlotTemplate
@@ -92,7 +93,51 @@ class PlotDataPreparer:
             span_completion=solution_data.span_completion,
             latitude=solution_data.lat[0],
             longitude=solution_data.lon[0],
-            noise_models=[result.noise_model for result in etm_fit.results]
+            noise_models=[result.noise_model for result in etm_fit.results],
+            cross_covariance=etm_fit.cross_covariance
+        )
+
+    @staticmethod
+    def prepare_ellipse_data(solution_data: SolutionData, etm_fit: EtmFit) -> Optional[EllipsePlotData]:
+        """
+        Prepare data for the velocity error-ellipse plot: the full rate covariance block of each pair,
+        from the polynomial function's own within-component (.covar) and cross-component
+        (.cross_covar_borrowed/.cross_covar_power_law) blocks, local index 1 = velocity (polynomial
+        columns are always [offset, velocity, acceleration], see etm_functions/polynomial.py). Returns
+        None if there is no fitted polynomial rate term to draw (EtmEngine.plot_ellipses then warns).
+        """
+        poly = etm_fit.design_matrix.get_polynomial()
+        if (poly is None or not poly.fit or poly.param_count <= 1 or
+                any(c.size == 0 for c in poly.p.covar)):
+            # no rate term, or the covariance wasn't (re)computed (e.g. a DB-cached fit loaded without
+            # force_computation -- see EtmEngine.plot_ellipses)
+            return None
+
+        labels = 'NEU'
+        pairs = {}
+        for i, j in ((0, 1), (0, 2), (1, 2)):
+            pair = f'{labels[i]}{labels[j]}'
+            var_i, var_j = poly.p.covar[i][1, 1], poly.p.covar[j][1, 1]
+
+            def block(cov_ij):
+                return np.array([[var_i, cov_ij], [cov_ij, var_j]]) * M_TO_MM ** 2
+
+            borrowed = pair in poly.p.cross_covar_borrowed
+            power_law = pair in poly.p.cross_covar_power_law
+            pairs[pair] = {
+                'borrowed': block(poly.p.cross_covar_borrowed[pair]['matrix'][1][1]) if borrowed else None,
+                'power_law': block(poly.p.cross_covar_power_law[pair]['matrix'][1][1]) if power_law else None
+            }
+
+        return EllipsePlotData(
+            station_id=solution_data.get_station_id().upper(),
+            solution_type=solution_data.soln,
+            stack_name=solution_data.stack_name,
+            completion=solution_data.completion,
+            span_completion=solution_data.span_completion,
+            latitude=solution_data.lat[0],
+            longitude=solution_data.lon[0],
+            pairs=pairs
         )
 
     @staticmethod

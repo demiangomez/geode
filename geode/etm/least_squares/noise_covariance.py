@@ -94,6 +94,9 @@ class NoiseCovarianceSettings:
     signal_alpha_min: float = 1.0
     # compute the colored / white variance factors (needs one n x n triangular inverse per GLS)
     variance_factors: bool = False
+    # compute and store the GLS estimator K = Qx A' C^-1 (u x n) on the GlsResult (cross_covariance.py
+    # needs it for the parameter cross-covariance; one extra matrix multiply, no new Cholesky)
+    compute_estimator: bool = False
     # threads of the FFTs of Sigma (scipy.fft workers; -1 = all cores). Use 1 when many series run in parallel
     fft_workers: int = -1
 
@@ -1025,6 +1028,9 @@ class GlsResult:
     factors: np.ndarray = field(default_factory=lambda: np.full(3, np.nan))
     # [colored, white]
     redundancies: np.ndarray = field(default_factory=lambda: np.full(2, np.nan))
+    # GLS estimator K = Qx A' C^-1 (u x n): x = K y. Only computed when compute_estimator is set
+    # (cross_covariance.py needs it for the parameter cross-covariance K_N C_NE K_E'); None otherwise
+    k_estimator: Optional[np.ndarray] = None
 
     def as_array(self) -> np.ndarray:
         """[rate, sigma, factor_colored, factor_white, factor_whole, jitter] as in the test vectors"""
@@ -1034,7 +1040,8 @@ class GlsResult:
 def gls_fit(t: np.ndarray, y: np.ndarray, a: np.ndarray, c_lag: np.ndarray, irate: Optional[int] = None,
             nugget: float = 0., variance_factors: bool = True,
             n_neq: Optional[np.ndarray] = None, c_neq: Optional[np.ndarray] = None,
-            jitter_start: float = 1e-8, jitter_factor: float = 10., jitter_max: float = 1.) -> GlsResult:
+            jitter_start: float = 1e-8, jitter_factor: float = 10., jitter_max: float = 1.,
+            compute_estimator: bool = False) -> GlsResult:
     """
     GLS fit of y = A x with C_il = c_lag(|t_i - t_l|). Never forms C^-1. Optional constraints are added to
     the normal equations as N + n_neq, c + c_neq.
@@ -1080,6 +1087,10 @@ def gls_fit(t: np.ndarray, y: np.ndarray, a: np.ndarray, c_lag: np.ndarray, irat
     res = GlsResult(x=x, qx=qx, residuals=v, c_inv_v=wv, quadratic_form=quad, redundancy=red, jitter=jitter)
     res.factors[2] = quad / red
 
+    if compute_estimator:
+        # K = Qx A' C^-1 = Qx wa' (cross_covariance.py: parameter cross-covariance K_N C_NE K_E')
+        res.k_estimator = qx @ wa.T
+
     if irate is not None:
         res.rate = float(x[irate])
         res.sigma_rate = float(np.sqrt(qx[irate, irate]))
@@ -1117,6 +1128,9 @@ class NoiseModelResult:
     # step 1
     x0: np.ndarray
     v0: np.ndarray
+    a: np.ndarray                   # ETM design matrix of the observed (inlier) epochs, n x u
+    k0: np.ndarray                  # step-1 estimator, u x n (x0 = k0 @ y): cross_covariance.py needs
+                                     # it, unprojected, to place on the common grid of a pair (Section 4)
     # empirical covariance and kernels
     n_tau: np.ndarray               # pair counts, lags 0..Tmax
     gamma: np.ndarray               # empirical covariance, lags 0..Tmax
@@ -1438,7 +1452,7 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     # terms) is not done, it is not a useful diagnostic and doubles the cost of this step
     gls = gls_fit(t, y, a, c_fin, irate, fin.nugget, settings.variance_factors,
                   n_neq if has_constraints else None, c_neq, settings.jitter_start, settings.jitter_factor,
-                  settings.gls_jitter_max)
+                  settings.gls_jitter_max, settings.compute_estimator)
     timings['gls'] = time() - tt
 
     # effective spectral index (Section 10)
@@ -1462,7 +1476,7 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     noise_lag = gb[:, ~in_signal] @ fin.w[~in_signal]
     noise = np.fft.irfft(np.fft.rfft(circular_embed(noise_lag, fft_len)) * grid_v_fft, fft_len)[:n_days]
 
-    return NoiseModelResult(settings=settings, t=t, n_days=n_days, tmax=tmax, x0=x0, v0=v0,
+    return NoiseModelResult(settings=settings, t=t, n_days=n_days, tmax=tmax, x0=x0, v0=v0, a=a, k0=k0,
                             n_tau=proj.n_tau[:t1], gamma=gamma, gb=gb,
                             gtf=gtf, htf=htf, lags=lags, fit0=fit0, sigma_ct=ct, sigma=sigma,
                             reference=reference, sigma_jitter=fitter.jitter, detection=detection,

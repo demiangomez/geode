@@ -26,7 +26,10 @@ LOGO_PATH = Path(__file__).parent / 'geode_logo_small.png'
 from ..visualization.time_series_template import TimeSeriesTemplate
 from ..visualization.histogram_template import HistogramTemplate
 from ..visualization.noise_model_template import NoiseModelTemplate
-from ..visualization.data_classes import TimeSeriesPlotData, PlotOutputConfig, NoiseModelPlotData
+from ..visualization.noise_cross_template import NoiseCrossModelTemplate, PAIR_LABELS
+from ..visualization.ellipse_template import EllipseTemplate
+from ..visualization.data_classes import (TimeSeriesPlotData, PlotOutputConfig, NoiseModelPlotData,
+                                          EllipsePlotData)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,8 @@ class EtmPlotter:
         self.time_series_template = TimeSeriesTemplate(config)
         self.histogram_template = HistogramTemplate(config)
         self.noise_model_template = NoiseModelTemplate(config)
+        self.noise_cross_template = NoiseCrossModelTemplate(config)
+        self.ellipse_template = EllipseTemplate(config)
 
         # Interactive plotting state
         self.figure = None
@@ -148,6 +153,58 @@ class EtmPlotter:
                 template.plot_not_available(axes[i], label)
 
         return self._handle_plot_output(fig, output_config, suffix='_noise')
+
+    def plot_noise_cross_model(self, plot_data: NoiseModelPlotData,
+                               output_config: Optional[PlotOutputConfig] = None) -> Optional[str]:
+        """
+        Create the cross-covariance diagnostic plot: one row per component pair (N-E, N-U, E-U) with
+        the empirical cross-covariance and its power-law cross-spectrum fit (left) and the alpha_x grid
+        search (right). Pairs that never got a power-law fit (switch off, or that pair fell back) show
+        the same 'not available' placeholder as a missing single-component noise model.
+        """
+        if output_config is None:
+            output_config = self.config.plotting_config
+
+        template = self.noise_cross_template
+
+        fig, axes = template.create_figure_layout()
+
+        title = template.generate_title(plot_data, output_config)
+        fig.suptitle(title, fontsize=9, family='monospace')
+
+        for i, pair in enumerate(('NE', 'NU', 'EU')):
+            comp_i, comp_j = PAIR_LABELS[pair]
+            label = f"{self.config.get_label(comp_i)}-{self.config.get_label(comp_j)}"
+            cc = plot_data.cross_covariance.get(pair)
+            if cc and cc.get('diagnostics'):
+                template.plot_covariance_fit(axes[i, 0], cc, pair)
+                template.plot_alpha_grid_search(axes[i, 1], cc, pair)
+            else:
+                template.plot_not_available(axes[i], label)
+
+        return self._handle_plot_output(fig, output_config, suffix='_noise_cross')
+
+    def plot_ellipses(self, plot_data: EllipsePlotData,
+                      output_config: Optional[PlotOutputConfig] = None) -> Optional[str]:
+        """
+        Create the velocity error-ellipse plot: one column per component pair (N-E, N-U, E-U), each
+        showing the borrowed-residual-correlation ellipse always, and the power-law cross-spectrum
+        ellipse too when that pair's fit used it.
+        """
+        if output_config is None:
+            output_config = self.config.plotting_config
+
+        template = self.ellipse_template
+
+        fig, axes = template.create_figure_layout()
+
+        title = template.generate_title(plot_data, output_config)
+        fig.suptitle(title, fontsize=9, family='monospace')
+
+        for ax, pair in zip(axes, ('NE', 'NU', 'EU')):
+            template.plot_pair(ax, pair, plot_data.pairs.get(pair))
+
+        return self._handle_plot_output(fig, output_config, suffix='_ellipses')
 
     def _plot_component_data(self, ax, plot_data: TimeSeriesPlotData,
                              component: str, component_idx: int,

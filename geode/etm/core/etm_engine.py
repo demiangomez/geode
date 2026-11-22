@@ -354,7 +354,10 @@ class EtmEngine:
                       'time_vector_fyear': self.solution_data.time_vector_cont,
                       'time_vector_mjd': self.solution_data.time_vector_cont_mjd
                       } if dump_model else None,
-            "covariance": self.fit.covar.tolist(),
+            # the 3x3 block derived from the final-fit residuals (borrowed-correlation x wrms,
+            # EtmFit.process_covariance) -- not a model/parameter covariance, hence the name
+            "residual_covariance": self.fit.covar.tolist(),
+            "cross_covariance": self.fit.cross_covariance,
             "design_matrix": dm.matrix if dump_design_matrix else None,
             "data_model_window": mask if dump_design_matrix else None,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -369,11 +372,12 @@ class EtmEngine:
         # (e.g. Django REST Framework's, which stringifies datetimes via isoformat() instead of
         # producing the {year, month, day, mjd, doy, hour, minute, second} dict).
         json_str = json.dumps(etm_dump, indent=4, sort_keys=False, cls=EtmEncoder,
-                              round_digits=6, no_round_fields=['covariance', 'parameter_sigmas',
+                              round_digits=6, no_round_fields=['residual_covariance', 'parameter_sigmas',
                                                                'parameters', 'covariance_matrix',
                                                                'lat', 'lon', 'params', 'sigmas',
                                                                'periodogram_frequencies',
-                                                               'periodogram_power'])
+                                                               'periodogram_power', 'cross_covar_borrowed',
+                                                               'cross_covar_power_law', 'covar'])
 
         if filename:
             if not os.path.basename(filename):
@@ -422,6 +426,37 @@ class EtmEngine:
         plot_data = PlotDataPreparer(self.config).prepare_noise_model_data(self.solution_data, self.fit)
 
         return plotter.plot_noise_model(plot_data)
+
+    def plot_noise_cross(self) -> Union[str, None]:
+        """diagnostic plot of the N-E/N-U/E-U cross-covariance (power-law cross-spectrum model, -xcov)"""
+        if self.config.modeling.status != FitStatus.POSTFIT or not self.fit.cross_covariance:
+            logger.warning('Cross-covariance plot: no cross-covariance available. It requires a fit with '
+                           'the NOISE_COVARIANCE_GLS strategy (solutions loaded from the database do not '
+                           'keep it)')
+            return None
+
+        plotter = EtmPlotter(self.config)
+        plot_data = PlotDataPreparer(self.config).prepare_noise_model_data(self.solution_data, self.fit)
+
+        return plotter.plot_noise_cross_model(plot_data)
+
+    def plot_ellipses(self) -> Union[str, None]:
+        """velocity error-ellipse plot: borrowed-residual-correlation always, power-law cross-spectrum
+        too wherever -xcov produced it (geode/etm/least_squares/cross_covariance.py)"""
+        if self.config.modeling.status != FitStatus.POSTFIT:
+            logger.warning('Ellipse plot: the ETM was not fit (solutions loaded from the database '
+                           'without a fit do not have a rate covariance)')
+            return None
+
+        plot_data = PlotDataPreparer(self.config).prepare_ellipse_data(self.solution_data, self.fit)
+        if plot_data is None:
+            logger.warning('Ellipse plot: no fitted velocity (polynomial rate term) or no covariance '
+                           'available to draw an ellipse from (solutions loaded from the database '
+                           'without force_computation do not keep it)')
+            return None
+
+        plotter = EtmPlotter(self.config)
+        return plotter.plot_ellipses(plot_data)
 
     def get_position(self, dates: Union[Date, list],
                      etm_solution: EtmSolutionType = EtmSolutionType.MODEL) -> Dict:

@@ -243,6 +243,7 @@ def process_etm_station(stn, args_dict, from_kmz):
         config.modeling.fit_auto_detected_jumps_method = args_dict['fit_auto_jumps'][0]
         config.modeling.least_squares_strategy.iterations          = args_dict['max_iterations']
         config.modeling.least_squares_strategy.noise_variance_factors = args_dict['variance_factors']
+        config.modeling.least_squares_strategy.noise_cross_covariance = args_dict['cross_covariance']
         config.modeling.least_squares_strategy.noise_detection        = args_dict['periodic_detection']
         config.modeling.least_squares_strategy.noise_snr_min          = args_dict['snr_min']
         config.modeling.least_squares_strategy.noise_signal_alpha_min = args_dict['signal_alpha_min']
@@ -323,14 +324,19 @@ def process_etm_station(stn, args_dict, from_kmz):
                                relaxation=relax, date=date, action='+'))
 
         etm = EtmEngine(config, cnn=cnn)
-        # the noise model diagnostics are not stored in the database: recompute the fit to plot them
-        plot_noise = ('noise' in args_dict['plot_options'] and 'no-plots' not in args_dict['plot_options'] and
-                      config.modeling.least_squares_strategy.adjustment_model ==
-                      AdjustmentModels.NOISE_COVARIANCE_GLS)
+        # the noise model and cross-covariance diagnostics are not stored in the database: recompute the
+        # fit to plot them. 'ellipses' needs this regardless of adjustment_model (the borrowed-residual-
+        # correlation ellipse is always computed once NOISE_COVARIANCE_GLS fit, see
+        # EtmFit.process_cross_covariance, but a DB-cached fit never repopulates it either way)
+        plot_opts = args_dict['plot_options']
+        force_recompute = ('no-plots' not in plot_opts and
+                           (('noise' in plot_opts and config.modeling.least_squares_strategy.adjustment_model ==
+                             AdjustmentModels.NOISE_COVARIANCE_GLS) or
+                            'ellipses' in plot_opts))
         etm.run_adjustment(cnn=cnn,
                            try_save_to_db=not no_save_db,
                            try_loading_db=not no_save_db,
-                           force_computation=plot_noise)
+                           force_computation=force_recompute)
 
         json_opts = args_dict['json']
         if json_opts is not None:
@@ -346,6 +352,9 @@ def process_etm_station(stn, args_dict, from_kmz):
                 etm.plot_hist()
             if 'noise' in args_dict['plot_options']:
                 etm.plot_noise()
+                etm.plot_noise_cross()
+            if 'ellipses' in args_dict['plot_options']:
+                etm.plot_ellipses()
 
         # --- query output (inlined from print_query, captured to string) ---
         query_output = None
@@ -921,6 +930,15 @@ def main():
                         help="With -lsq gls, also compute the variance factors of the colored and white parts of "
                              "the noise model (costs one n x n triangular inverse per component)")
 
+    parser.add_argument('-xcov', '--cross_covariance', action='store_true', default=False,
+                        help="With -lsq gls, also fit the power-law cross-spectrum model to the N-E/N-U/E-U "
+                             "parameter cross-covariance (Cov(x_i, x_j) = K_i C_ij K_j', the velocity error ellipse "
+                             "and every other ETM parameter pair), fitted to the empirical cross-covariance of the "
+                             "step-1 residuals at the epochs common to all three components. Reported per ETM "
+                             "parameter in each function's 'cross_covar_power_law' JSON section, alongside the "
+                             "cheaper borrowed-residual-correlation approximation (Cov = r * sigma_i * sigma_j, "
+                             "'cross_covar_borrowed') that is always reported regardless of this switch")
+
     parser.add_argument('-sigma', '--sigma_limit', type=float, default=2.5,
                         help="Number of sigmas for the limit of outlier detection. Default is 2.5 sigma")
 
@@ -939,14 +957,20 @@ def main():
                              "the existing configuration")
 
     parser.add_argument('-plot', '--plot_options', nargs='*',
-                        choices=['out', 'hist', 'noise', 'missing', 'residuals', 'no-model', 'no-plots'],
+                        choices=['out', 'hist', 'noise', 'ellipses', 'missing', 'residuals', 'no-model',
+                                'no-plots'],
                         default=[],
                         help="Plotting options: "
                              "out -> plot right panel with the outliers marked in cyan; "
                              "hist -> plot additional file with histograms of residuals; "
                              "noise -> plot additional file with the noise model diagnostics (fit to the empirical "
                              "covariance and detection of periodic terms; -lsq gls only, forces the computation "
-                             "of the ETM); "
+                             "of the ETM); also plots a second file with the N-E/N-U/E-U cross-covariance "
+                             "diagnostics (empirical cross-covariance fit and alpha_x grid search) wherever -xcov "
+                             "produced one; "
+                             "ellipses -> plot the velocity error ellipse of each component pair (N-E, N-U, E-U): "
+                             "the borrowed-residual-correlation ellipse always, plus the power-law cross-spectrum "
+                             "ellipse too wherever -xcov produced one (forces the computation of the ETM); "
                              "residuals -> show only residuals (remove all ETM functions); "
                              "missing -> show missing solution days as magenta lines in the plot "
                              "(only visible with -out activated); "

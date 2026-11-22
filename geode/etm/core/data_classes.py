@@ -83,6 +83,15 @@ class EtmFunctionParameterVector(BaseDataClass):
     params: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
     sigmas: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
     covar: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
+    # cross-component parameter covariance of this function's own columns, keyed by pair label ('NE',
+    # 'NU', 'EU'): {'matrix': [...]}. See cross_covariance.py. Two always-distinct fields rather than
+    # one tagged by method, so both can be reported/plotted together (e.g. the velocity error ellipse):
+    # cross_covar_borrowed is always populated once the ETM is fit with NOISE_COVARIANCE_GLS (the cheap
+    # Section 10.2 approximation, computed regardless of the -xcov switch); cross_covar_power_law is
+    # populated only for a pair where the power-law cross-spectrum model was actually fit (-xcov on and
+    # enough common data)
+    cross_covar_borrowed: dict = field(default_factory=dict)
+    cross_covar_power_law: dict = field(default_factory=dict)
 
     object: str = ''
     metadata: Optional[str] = None
@@ -221,6 +230,11 @@ class LeastSquares(BaseDataClass):
     # near-white noise (alpha=0.5, 0.75) as noise. Raise it (e.g. just above 1.0) to also treat flicker as
     # noise and keep only random-walk-like components as signal
     noise_signal_alpha_min: float = 1.0
+    # NOISE_COVARIANCE_GLS: fit the power-law cross-spectrum model (cross_covariance.py) to the N-E/N-U/E-U
+    # parameter cross-covariance (Cov(x_i, x_j) = K_i C_ij K_j'), reported per ETM parameter. Each component's
+    # own GLS/noise-model fit is unaffected either way. Default False: the N-E/N-U/E-U cross-covariance is
+    # instead approximated by borrowing the correlation of the daily residuals (sigma_ij = r * sigma_i * sigma_j)
+    noise_cross_covariance: bool = False
     # constraints to apply to the fit
     constraints: List = field(default_factory=lambda: [])
 

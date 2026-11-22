@@ -350,6 +350,7 @@ def test_noise_model_figure(case, tmp_path):
         config.plotting_config.filename = str(tmp_path) + os.sep
         nm = r.summary()
         plot_data = NoiseModelPlotData(station_id='TST.CASE', solution_type='ppp', stack_name='ppp',
-                                       completion=100., latitude=0., longitude=0., noise_models=[nm, {}, nm])
+                                       completion=100., span_completion=100., latitude=0., longitude=0.,
+                                       noise_models=[nm, {}, nm])
         EtmPlotter(config).plot_noise_model(plot_data)
         assert (tmp_path / (config.build_filename() + '_noise.png')).is_file()

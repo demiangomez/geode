@@ -243,10 +243,11 @@ class NoiseModelTemplate(PlotTemplate):
         return ', '.join(f"{p['period_d']:.0f} d" for p in periodic) or 'none'
 
     @staticmethod
-    def plot_not_available(axes, label: str) -> None:
-        """Row of a component without a noise model (e.g. the fit fell back to robust least squares)"""
+    def plot_not_available(axes, label: str, message: str = 'noise model not available') -> None:
+        """Row of a component without a noise model (e.g. the fit fell back to robust least squares),
+        or (via a custom message) a component pair without cross-covariance diagnostics"""
         for ax in axes:
-            ax.text(0.5, 0.5, f'{label}: noise model not available', transform=ax.transAxes,
+            ax.text(0.5, 0.5, f'{label}: {message}', transform=ax.transAxes,
                     ha='center', va='center', fontsize=10, color='gray')
             ax.set_xticks([])
             ax.set_yticks([])
