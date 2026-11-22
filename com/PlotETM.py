@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
 """
-Project: Parallel.PPP
+Project: GeoDE
 Date: 10/10/17 9:10 AM
 Author: Demian D. Gomez
 
 User interface to plot and save JSON files of ETM objects.
-Type python pyPlotETM.py -h for usage help
+Type python PlotETM.py -h for usage help
 """
 import os, sys
 
