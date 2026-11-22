@@ -35,7 +35,7 @@ from tqdm import tqdm
 from geode import dbConnection
 from geode.etm.core.logging_config import setup_etm_logging
 from geode.etm.core.data_classes import ModelingParameters, ValidationRules
-from geode.Utils import add_version_argument, get_stack_stations, file_write
+from geode.Utils import add_version_argument, get_stack_stations, file_write, SmartHelpFormatter
 
 
 VERBOSITY_MAP = {
@@ -335,7 +335,7 @@ def main():
     parser = argparse.ArgumentParser(description='Print the velocities (and basic time series '
                                                  'stats) of every station in a solution, computed '
                                                  'directly from the ETM engine.',
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=SmartHelpFormatter)
 
     parser.add_argument('-sol', '--solution', type=str, metavar='{stack|ppp}', default='ppp',
                         help="Required: specify the GAMIT stack name or ppp to use GPSPACE solutions. "

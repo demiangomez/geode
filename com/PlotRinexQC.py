@@ -23,16 +23,18 @@ import sys
 # app
 from geode import dbConnection
 from geode import Utils
-from geode.Utils import add_version_argument, station_list_help
+from geode.Utils import add_version_argument, station_list_help, SmartHelpFormatter
 from geode.rinex_qc import visualization as viz
 
 
 def main():
     parser = argparse.ArgumentParser(
         description='GeoDE RinexQC plots: daily summary time series and elevation/azimuth-vs-time '
-                    'heatmaps, one constellation per figure.')
+                    'heatmaps, one constellation per figure.',
+        formatter_class=SmartHelpFormatter)
 
-    parser.add_argument('stnlist', type=str, nargs='+', help=station_list_help())
+    parser.add_argument('stnlist', type=str, nargs='+',
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-gnss', '--gnss', nargs='+', choices=['G', 'R', 'E', 'C'], metavar='{G|R|E|C}',
                         help='Restrict to these GNSS systems (default: all the station has QC data for).')

@@ -155,6 +155,40 @@ def required_length(nmin, nmax):
     return RequiredLength
 
 
+class SmartHelpFormatter(argparse.HelpFormatter):
+    """
+    argparse.RawTextHelpFormatter/RawDescriptionHelpFormatter disable line wrapping for every
+    argument's help (and the description/epilog) wholesale -- needed for station_list_help()'s
+    hand-formatted text (aligned columns, blank lines between sections), but every other argument's
+    help is a single paragraph that the default HelpFormatter would wrap to the terminal width.
+    Left raw, it's instead emitted as one very long line, left for the terminal itself to hard-wrap
+    -- which doesn't know about argparse's hanging indent, so every continuation line starts at
+    column 0.
+
+    This formatter wraps help/description/epilog text normally, except for the part from
+    RAW_MARKER onward, which is split on its own newlines and left untouched instead (the
+    RawText/RawDescription behavior, scoped to just the marked part). Text before the marker (if
+    any) is still wrapped normally -- e.g. a plain lead-in sentence followed by
+    station_list_help()'s aligned block: `lead_in + SmartHelpFormatter.RAW_MARKER + station_list_help()`.
+    """
+    RAW_MARKER = '\x00RAW\x00'
+
+    def _split_lines(self, text, width):
+        if self.RAW_MARKER in text:
+            pre, raw = text.split(self.RAW_MARKER, 1)
+            lines = super()._split_lines(pre, width) if pre.strip() else []
+            return lines + raw.splitlines()
+        return super()._split_lines(text, width)
+
+    def _fill_text(self, text, width, indent):
+        if self.RAW_MARKER in text:
+            pre, raw = text.split(self.RAW_MARKER, 1)
+            filled = super()._fill_text(pre, width, indent) if pre.strip() else ''
+            raw_filled = ''.join(indent + line for line in raw.splitlines(keepends=True))
+            return filled + '\n' + raw_filled if filled else raw_filled
+        return super()._fill_text(text, width, indent)
+
+
 def station_list_help():
     """
     Generate comprehensive help text for station list specification with geographic filters.

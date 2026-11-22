@@ -38,6 +38,7 @@ from geode.Utils import (
     station_list_help,
     stationID,
     add_version_argument,
+    SmartHelpFormatter,
 )
 from geode.reports.station_kmz import station_data_from_db, build_kmz
 
@@ -46,17 +47,18 @@ def main():
     parser = argparse.ArgumentParser(
         description='Generate GeoDE GNSS station KMZ files for Google Earth.',
         epilog=(
+            SmartHelpFormatter.RAW_MARKER +
             'Examples:\n'
             '  StationKmz.py ars.at47 -o /tmp/kmz/\n'
             '  StationKmz.py ars.%    -o /tmp/kmz/\n'
             '  StationKmz.py ars.at47 ars.at48 --separate -o /tmp/kmz/'
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=SmartHelpFormatter,
     )
 
     parser.add_argument(
         'stnlist', type=str, nargs='*', default=[],
-        help=station_list_help(),
+        help=SmartHelpFormatter.RAW_MARKER + station_list_help(),
     )
     parser.add_argument(
         '-o', '--output', default='./',

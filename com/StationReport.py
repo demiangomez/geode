@@ -39,6 +39,7 @@ from geode.Utils import (
     process_stnlist,
     station_list_help,
     add_version_argument,
+    SmartHelpFormatter,
 )
 from geode.reports.station_report import (
     station_from_db,
@@ -51,17 +52,18 @@ def main():
     parser = argparse.ArgumentParser(
         description='Generate GeoDE GNSS station reports (HTML or PDF).',
         epilog=(
+            SmartHelpFormatter.RAW_MARKER +
             'Examples:\n'
             '  StationReport.py ars.at47 -o /tmp/reports/\n'
             '  StationReport.py ars.%    --pdf -o /tmp/reports/\n'
             '  StationReport.py ars.at47 ars.at48 -o /tmp/reports/'
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=SmartHelpFormatter,
     )
 
     parser.add_argument(
         'stnlist', type=str, nargs='+',
-        help=station_list_help(),
+        help=SmartHelpFormatter.RAW_MARKER + station_list_help(),
     )
     parser.add_argument(
         '-o', '--output', default='./',

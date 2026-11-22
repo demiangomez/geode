@@ -51,6 +51,7 @@ from geode.etm.etm_functions.jumps import JumpFunction
 from geode.Utils import (process_date,
                           process_stnlist,
                           station_list_help,
+                          SmartHelpFormatter,
                           stationID,
                           print_columns,
                           add_version_argument,
@@ -838,11 +839,12 @@ def main():
 
     parser = argparse.ArgumentParser(description='Plot extended trajectory models (ETMs) '
                                                  'for station data stored in the database, json files, or text files',
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stnlist', type=str, nargs='+',
-                        help=station_list_help() + '\n\nAlternatively, read station list from '
-                                                   'kmz/kml file to obtain network codes and stations names')
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help() +
+                             '\n\nAlternatively, read station list from '
+                             'kmz/kml file to obtain network codes and stations names')
 
     parser.add_argument('-sol', '--solution', type=str, metavar='{stack|ppp}', default='ppp',
                         help="Required: specify the GAMIT stack name or ppp to use GPSPACE solutions.")

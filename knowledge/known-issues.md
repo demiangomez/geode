@@ -45,6 +45,13 @@ attempted) and manually re-merge the `sphinx_argparse_cli` blocks per `com/` scr
   gitignored build artifacts — harmless, but `geode.egg-info` is leftover cruft from before the
   PyPI package rename and can be deleted without consequence whenever someone's cleaning up.
 
+- `com/EtmStacker.py --help` currently crashes before argparse even runs: `geode/etm/stacker/stacker.py:9`
+  does `import numpy.linalg.linalg`, a private submodule numpy 2.x removed (`ModuleNotFoundError:
+  No module named 'numpy.linalg.linalg'`). Found incidentally while verifying the CLI help-formatting
+  fix below (`SmartHelpFormatter`) on every `com/` script — unrelated to that fix (confirmed via
+  `git diff`: this file wasn't touched) and not fixed here. The call site needing the actual numpy
+  symbol should import it from `numpy.linalg` directly instead.
+
 ## NumPy 2.x migration fallout (numpy 1.26.4 -> 2.4.6, commit 3c65737)
 
 - `geode/pyETM.py:2311-2334` (`process_covariance`) has the same bug that was fixed in

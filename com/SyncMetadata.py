@@ -44,7 +44,7 @@ from tqdm import tqdm
 
 # GeoDE imports
 from geode import dbConnection
-from geode.Utils import add_version_argument, process_stnlist, station_list_help
+from geode.Utils import add_version_argument, process_stnlist, station_list_help, SmartHelpFormatter
 from geode.metadata.comparator import StationMetadataComparator, ComparatorError
 from geode.metadata.serializers import (
     bundle_from_db,
@@ -854,14 +854,14 @@ def process_station(cnn: dbConnection.Cnn,
 def main():
     parser = argparse.ArgumentParser(
         description='Synchronize station metadata from external sources',
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=SmartHelpFormatter
     )
 
     parser.add_argument(
         'stnlist',
         type=str,
         nargs='+',
-        help=station_list_help()
+        help=SmartHelpFormatter.RAW_MARKER + station_list_help()
     )
 
     parser.add_argument(

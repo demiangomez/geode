@@ -48,7 +48,7 @@ from geode.etm.core.etm_stacker import EtmStacker, ConstraintType, EtmStackerCon
 from geode.etm.core.etm_stacker_vce import EtmStackerVCEEnhanced
 from geode.etm.core.type_declarations import JumpType
 from geode.dbConnection import Cnn
-from geode.Utils import add_version_argument, station_list_help
+from geode.Utils import add_version_argument, station_list_help, SmartHelpFormatter
 from geode.Utils import stationID, process_stnlist
 from geode.pyDate import Date
 from geode.etm.data.solution_data import SolutionData
@@ -772,10 +772,10 @@ def main():
     def_config = EtmStackerConfig()
 
     parser = argparse.ArgumentParser(description='Routines to stack ETMs and jointly estimate parameters',
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stnlist', type=str, nargs='*',
-                        help=station_list_help())
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-is', '--interseismic_sigmas', type=float,
                         default=[def_config.interseismic_h_sigma * 1000., def_config.interseismic_v_sigma * 1000.],

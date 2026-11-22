@@ -49,6 +49,7 @@ from geode.Utils import (add_version_argument,
                           file_read_all,
                           stationID,
                           station_list_help,
+                          SmartHelpFormatter,
                           crc32)
 
 
@@ -1286,10 +1287,11 @@ def get_rinex_file(cnn, stnlist, date, Archive_path):
 
 def main():
 
-    parser = argparse.ArgumentParser(description='Archive operations Main Program')
+    parser = argparse.ArgumentParser(description='Archive operations Main Program',
+                                     formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stnlist', type=str, nargs='+', metavar='all|net.stnm',
-                        help=station_list_help())
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-rinex', '--rinex', metavar='{ignore_stnlist}', type=int, nargs=1, default=None,
                         help="Scan the current archive for RINEX 2/3 files and add them to the database if missing. "

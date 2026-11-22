@@ -35,7 +35,7 @@ from geode import dbConnection
 from geode import pyJobServer
 from geode import pyOptions
 from geode import Utils
-from geode.Utils import add_version_argument, station_list_help
+from geode.Utils import add_version_argument, station_list_help, SmartHelpFormatter
 from geode.rinex_qc import batch, pipeline, writer
 from geode.rinex_qc.config import RinexQCConfig, RinexQCConfigError
 
@@ -105,12 +105,14 @@ def run_db_mode(args, config):
 def main():
     parser = argparse.ArgumentParser(
         description='GeoDE RINEX QC: per-signal/per-bin multipath, SNR and cycle-slip '
-                    'statistics via RINGO.')
+                    'statistics via RINGO.',
+        formatter_class=SmartHelpFormatter)
 
     parser.add_argument('targets', nargs='*', metavar='rinex_file|station',
                         help='Standalone mode: one or more RINEX/CRINEX(Z) file paths. With '
                              '--backfill/--incremental: a station list instead (see below); '
-                             'omit entirely to select the whole archive.\n\n' + station_list_help())
+                             'omit entirely to select the whole archive.' +
+                             SmartHelpFormatter.RAW_MARKER + '\n' + station_list_help())
     parser.add_argument('-config', '--config', metavar='{json}',
                         help='JSON config file. CLI switches below override its values.')
     parser.add_argument('-elev', '--elev-cutoff', type=float, metavar='{deg}',
