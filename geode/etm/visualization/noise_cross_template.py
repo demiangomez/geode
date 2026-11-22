@@ -103,10 +103,12 @@ class NoiseCrossModelTemplate(PlotTemplate):
         ax.grid(True, alpha=0.4)
         ax.legend(fontsize=8, loc='upper right')
 
-        rate_corr = cc.get('rate_correlation')
-        comparison = cc.get('comparison') or {}
+        # cc['daily_residual_correlation'] is what the borrowed (Section 10.2) model would give for
+        # every parameter pair alike, including the rate -- there is no separate "borrowed rate
+        # correlation" to look up, since the two are always numerically identical
         ax.set_title(f"{label}: grid search over alpha_x\n"
-                    f"rate correlation {_fmt(rate_corr)} (borrowed: {_fmt(comparison.get('rate_correlation'))})",
+                    f"rate correlation {_fmt(cc.get('rate_correlation'))} "
+                    f"(borrowed: {_fmt(cc.get('daily_residual_correlation'))})",
                     fontsize=10)
 
     @staticmethod

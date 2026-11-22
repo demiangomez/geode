@@ -376,8 +376,7 @@ class EtmEngine:
                                                                'parameters', 'covariance_matrix',
                                                                'lat', 'lon', 'params', 'sigmas',
                                                                'periodogram_frequencies',
-                                                               'periodogram_power', 'cross_covar_borrowed',
-                                                               'cross_covar_power_law', 'covar'])
+                                                               'periodogram_power', 'cross_covar', 'covar'])
 
         if filename:
             if not os.path.basename(filename):

@@ -84,14 +84,11 @@ class EtmFunctionParameterVector(BaseDataClass):
     sigmas: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
     covar: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
     # cross-component parameter covariance of this function's own columns, keyed by pair label ('NE',
-    # 'NU', 'EU'): {'matrix': [...]}. See cross_covariance.py. Two always-distinct fields rather than
-    # one tagged by method, so both can be reported/plotted together (e.g. the velocity error ellipse):
-    # cross_covar_borrowed is always populated once the ETM is fit with NOISE_COVARIANCE_GLS (the cheap
-    # Section 10.2 approximation, computed regardless of the -xcov switch); cross_covar_power_law is
-    # populated only for a pair where the power-law cross-spectrum model was actually fit (-xcov on and
-    # enough common data)
-    cross_covar_borrowed: dict = field(default_factory=dict)
-    cross_covar_power_law: dict = field(default_factory=dict)
+    # 'NU', 'EU'): {'matrix': [...], 'method': ...}. See cross_covariance.py. 'method' names whichever
+    # one actually produced this block (see EtmFit.cross_covariance[pair]['method'] at the station
+    # level) -- the power-law cross-spectrum model when it was fit for this pair, otherwise the
+    # borrowed-residual-correlation fallback. Empty unless the ETM was fit with NOISE_COVARIANCE_GLS
+    cross_covar: dict = field(default_factory=dict)
 
     object: str = ''
     metadata: Optional[str] = None

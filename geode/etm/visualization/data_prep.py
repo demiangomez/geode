@@ -101,10 +101,21 @@ class PlotDataPreparer:
     def prepare_ellipse_data(solution_data: SolutionData, etm_fit: EtmFit) -> Optional[EllipsePlotData]:
         """
         Prepare data for the velocity error-ellipse plot: the full rate covariance block of each pair,
-        from the polynomial function's own within-component (.covar) and cross-component
-        (.cross_covar_borrowed/.cross_covar_power_law) blocks, local index 1 = velocity (polynomial
-        columns are always [offset, velocity, acceleration], see etm_functions/polynomial.py). Returns
-        None if there is no fitted polynomial rate term to draw (EtmEngine.plot_ellipses then warns).
+        from the polynomial function's own within-component (.covar) and cross-component (.cross_covar)
+        blocks, local index 1 = velocity (polynomial columns are always [offset, velocity,
+        acceleration], see etm_functions/polynomial.py). Returns None if there is no fitted polynomial
+        rate term to draw (EtmEngine.plot_ellipses then warns).
+
+        cross_covar[pair] holds whichever model was actually used (see
+        EtmFit.cross_covariance[pair]['method']) -- not a separate stored value per model. When that is
+        the power-law cross-spectrum model, the borrowed-approximation ellipse shown alongside it for
+        comparison is reconstructed on the fly from EtmFit.cross_covariance[pair]['daily_residual_correlation']
+        (a bare scalar r -- always present, and always the right one: the borrowed model's rate
+        correlation is mathematically identical to its daily_residual_correlation for any pair, power-law
+        or not, so there is nothing separate to look up) and this function's own within-component
+        variances: the borrowed model is Cov(x_i, x_j) = r * sigma_i * sigma_j for every parameter pair
+        alike, so its rate block is always exactly r * sqrt(Var(rate_i) * Var(rate_j)) -- no need to have
+        stored a whole matrix for it.
         """
         poly = etm_fit.design_matrix.get_polynomial()
         if (poly is None or not poly.fit or poly.param_count <= 1 or
@@ -122,12 +133,16 @@ class PlotDataPreparer:
             def block(cov_ij):
                 return np.array([[var_i, cov_ij], [cov_ij, var_j]]) * M_TO_MM ** 2
 
-            borrowed = pair in poly.p.cross_covar_borrowed
-            power_law = pair in poly.p.cross_covar_power_law
-            pairs[pair] = {
-                'borrowed': block(poly.p.cross_covar_borrowed[pair]['matrix'][1][1]) if borrowed else None,
-                'power_law': block(poly.p.cross_covar_power_law[pair]['matrix'][1][1]) if power_law else None
-            }
+            cc = etm_fit.cross_covariance.get(pair, {})
+            entry = poly.p.cross_covar.get(pair)
+            official = block(entry['matrix'][1][1]) if entry else None
+
+            if cc.get('method') == 'power_law_cross_spectrum':
+                r_borrowed = cc.get('daily_residual_correlation')
+                reconstructed = block(r_borrowed * np.sqrt(var_i * var_j)) if r_borrowed is not None else None
+                pairs[pair] = {'power_law': official, 'borrowed': reconstructed}
+            else:
+                pairs[pair] = {'power_law': None, 'borrowed': official}
 
         return EllipsePlotData(
             station_id=solution_data.get_station_id().upper(),

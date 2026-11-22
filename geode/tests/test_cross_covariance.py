@@ -506,15 +506,21 @@ def test_fallback_daily_residual_correlation_uses_final_fit_residuals_without_a_
 
 
 @needs_raw
-def test_process_cross_covariance_populates_both_per_function_fields():
+def test_process_cross_covariance_populates_cross_covar_with_the_official_method():
     """
-    cross_covar_borrowed must always be populated (regardless of the switch); cross_covar_power_law
-    only for a pair whose power-law fit actually succeeded. Uses the real IGM1 N/E/U noise models (via
-    the same fixtures the rest of this file builds real contexts from) so the power-law path genuinely
-    runs for N-E, not just the fallback -- closing the coverage gap that let earlier bugs through: no
-    prior test exercised EtmFit.process_cross_covariance() with a real DesignMatrix function in the
-    loop (the other orchestration tests here use an empty FakeDesignMatrix.functions). U is given no
-    noise model at all, so N-U/E-U must fall back, exercising both outcomes in one run.
+    cross_covar[pair] must always be populated, tagged with whichever method actually produced it (see
+    cross_covariance[pair]['method']): the power-law cross-spectrum model when it was fit for that pair,
+    otherwise the borrowed-residual-correlation fallback. There is no second, always-present field for
+    the other model at all -- not even a bare scalar: the station-level summary's own
+    'daily_residual_correlation' already *is* what the borrowed model would give for any parameter pair
+    (see data_prep.prepare_ellipse_data for how the comparison ellipse is reconstructed from exactly
+    that field, no separate one). Uses the real
+    IGM1 N/E/U noise models (via the same fixtures the rest of this file builds real contexts from) so
+    the power-law path genuinely runs for N-E, not just the fallback -- closing the coverage gap that
+    let earlier bugs through: no prior test exercised EtmFit.process_cross_covariance() with a real
+    DesignMatrix function in the loop (the other orchestration tests here use an empty
+    FakeDesignMatrix.functions). U is given no noise model at all, so N-U/E-U must fall back, exercising
+    both outcomes in one run.
     """
     from geode.etm.core.etm_config import EtmConfig
     from geode.etm.core.data_classes import AdjustmentResults
@@ -575,11 +581,117 @@ def test_process_cross_covariance_populates_both_per_function_fields():
 
     fit.process_cross_covariance()
 
-    # borrowed is always populated, for every pair
-    assert set(func.p.cross_covar_borrowed) == {'NE', 'NU', 'EU'}
-    # power_law only for N-E (the only pair with a noise model on both sides)
-    assert set(func.p.cross_covar_power_law) == {'NE'}
+    # cross_covar is always populated, for every pair, tagged with whichever method ran
+    assert set(func.p.cross_covar) == {'NE', 'NU', 'EU'}
+    assert func.p.cross_covar['NE']['method'] == 'power_law_cross_spectrum'
     assert fit.cross_covariance['NE']['method'] == 'power_law_cross_spectrum'
-    assert 'comparison' in fit.cross_covariance['NE']
+    # no separate "borrowed" field anywhere in the summary -- daily_residual_correlation already is
+    # that number for any pair; the station-level summary doesn't duplicate it under another name
+    assert 'borrowed_rate_correlation' not in fit.cross_covariance['NE']
+    assert fit.cross_covariance['NE']['daily_residual_correlation'] is not None
     for pair in ('NU', 'EU'):
+        assert func.p.cross_covar[pair]['method'] == 'borrowed_residual_correlation'
         assert fit.cross_covariance[pair]['method'] == 'borrowed_residual_correlation'
+        # same redundancy bug as 'borrowed_rate_correlation' above, one level down: a rate_correlation
+        # re-derived from the borrowed (rank-1) matrix would always equal daily_residual_correlation
+        # in this same dict, so the fallback leaves it None rather than repeating that number
+        assert fit.cross_covariance[pair]['rate_correlation'] is None
+
+
+@needs_raw
+def test_prepare_ellipse_data_reconstructs_the_borrowed_block():
+    """
+    data_prep.prepare_ellipse_data must reconstruct the comparison (borrowed) ellipse for a power-law
+    pair from 'daily_residual_correlation' (the same field every summary already has -- not a separate
+    "borrowed rate correlation" scalar, which would just be a duplicate of it) plus the within-component
+    rate variances, rather than reading a stored matrix -- this is the exact replacement for the dual
+    cross_covar_borrowed/cross_covar_power_law fields the user asked to revert. Reuses the same real
+    IGM1 N/E fixtures as test_process_cross_covariance_populates_cross_covar_with_the_official_method.
+    """
+    import types
+    from geode.etm.core.etm_config import EtmConfig
+    from geode.etm.core.data_classes import AdjustmentResults
+    from geode.etm.etm_functions.etm_function import EtmFunction
+    from geode.etm.least_squares.least_squares import EtmFit, NoiseCovarianceGLS
+    from geode.etm.visualization.data_prep import PlotDataPreparer
+
+    class _FakeFunction(EtmFunction):
+        def initialize(self, **kwargs):
+            pass
+
+        def get_design_ts(self, ts):
+            return np.zeros((len(ts), 2))
+
+        def rehash(self):
+            self.hash = 0
+
+        def print_parameters(self, **kwargs):
+            return [], [], []
+
+        def short_name(self):
+            return 'fake'
+
+    station = 'igm1'
+    nm_n = _single_component_nm(station, 'n')
+    nm_e = _single_component_nm(station, 'e')
+    mjd, ko, kc = _raw_masks(station)
+
+    results = [AdjustmentResults(), AdjustmentResults(), AdjustmentResults()]
+    for idx in range(3):
+        results[idx].outlier_flags = ko[:, idx]
+        results[idx].residuals = np.random.default_rng(idx).standard_normal(ko.shape[0])
+        results[idx].parameter_sigmas = np.array([0.1 * (idx + 1), 0.2 * (idx + 1)])
+        results[idx].covariance_matrix = np.diag([0.01 * (idx + 1), 0.04 * (idx + 1)])
+
+    config = EtmConfig('tst', 'gls', silent=True)
+    func = _FakeFunction(config)
+    func.fit = True
+    func.param_count = 2
+    func.column_index = np.array([0, 1])
+    # normally populated by EtmFunction.load_parameters(), called before process_cross_covariance() in
+    # the real pipeline (EtmFit.load_results_to_functions) -- set directly here since this test only
+    # exercises process_cross_covariance()/prepare_ellipse_data()
+    func.p.covar = [r.covariance_matrix for r in results]
+
+    class FakeDesignMatrix:
+        functions = [func]
+
+        @staticmethod
+        def get_polynomial():
+            return func
+
+    fit = EtmFit(config, FakeDesignMatrix())
+    fit.results = results
+    fit.outlier_flags = kc
+
+    strategy = NoiseCovarianceGLS(config)
+    strategy.settings.compute_estimator = True
+    mjd0_n, mjd0_e = int(round(mjd[ko[:, 0]][0])), int(round(mjd[ko[:, 1]][0]))
+    strategy.noise_models = [nm_n, nm_e, None]
+    strategy.noise_model_mjd0 = [mjd0_n, mjd0_e, None]
+    fit._adjustment_strategy = strategy
+    fit.process_cross_covariance()
+
+    solution_data = types.SimpleNamespace(
+        get_station_id=lambda: 'tst', soln='ppp', stack_name='ppp', completion=100., span_completion=100.,
+        lat=np.array([0.]), lon=np.array([0.]))
+    plot_data = PlotDataPreparer.prepare_ellipse_data(solution_data, fit)
+
+    assert plot_data is not None
+    ne = plot_data.pairs['NE']
+    assert ne['power_law'] is not None
+    assert ne['borrowed'] is not None
+
+    assert 'borrowed_rate_correlation' not in fit.cross_covariance['NE']
+    r_borrowed = fit.cross_covariance['NE']['daily_residual_correlation']
+    var_n, var_e = func.p.covar[0][1, 1], func.p.covar[1][1, 1]
+    expected_cov_mm = r_borrowed * np.sqrt(var_n * var_e) * 1000. ** 2
+    assert ne['borrowed'][0, 1] == pytest.approx(expected_cov_mm)
+    assert ne['borrowed'][0, 0] == pytest.approx(var_n * 1000. ** 2)
+    assert ne['borrowed'][1, 1] == pytest.approx(var_e * 1000. ** 2)
+    # the power-law and borrowed ellipses are genuinely different matrices, not the same one twice
+    assert not np.allclose(ne['power_law'], ne['borrowed'])
+
+    for pair in ('NU', 'EU'):
+        assert plot_data.pairs[pair]['power_law'] is None
+        assert plot_data.pairs[pair]['borrowed'] is not None

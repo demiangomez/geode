@@ -931,13 +931,12 @@ def main():
                              "the noise model (costs one n x n triangular inverse per component)")
 
     parser.add_argument('-xcov', '--cross_covariance', action='store_true', default=False,
-                        help="With -lsq gls, also fit the power-law cross-spectrum model to the N-E/N-U/E-U "
-                             "parameter cross-covariance (Cov(x_i, x_j) = K_i C_ij K_j', the velocity error ellipse "
-                             "and every other ETM parameter pair), fitted to the empirical cross-covariance of the "
-                             "step-1 residuals at the epochs common to all three components. Reported per ETM "
-                             "parameter in each function's 'cross_covar_power_law' JSON section, alongside the "
-                             "cheaper borrowed-residual-correlation approximation (Cov = r * sigma_i * sigma_j, "
-                             "'cross_covar_borrowed') that is always reported regardless of this switch")
+                        help="With -lsq gls, fit the power-law cross-spectrum model to the N-E/N-U/E-U parameter "
+                             "cross-covariance (Cov(x_i, x_j) = K_i C_ij K_j', the velocity error ellipse and every "
+                             "other ETM parameter pair), fitted to the empirical cross-covariance of the step-1 "
+                             "residuals at the epochs common to all three components. Reported per ETM parameter in "
+                             "each function's 'cross_covar' JSON section. Default: a cheaper borrowed-residual-"
+                             "correlation approximation (Cov = r * sigma_i * sigma_j) is reported instead")
 
     parser.add_argument('-sigma', '--sigma_limit', type=float, default=2.5,
                         help="Number of sigmas for the limit of outlier detection. Default is 2.5 sigma")

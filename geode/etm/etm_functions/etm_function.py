@@ -92,27 +92,19 @@ class EtmFunction(ABC):
                 # avoid errors because of this
                 self.p.covar[i] = etm_results[i].covariance_matrix[self.column_index][:, self.column_index]
 
-    def _slice_cross_covariance(self, matrix: np.ndarray) -> list:
-        """this function's own rows/cols of a station-level pair cross-covariance matrix, the same way
-        load_parameters slices the within-component one"""
-        return matrix[self.column_index][:, self.column_index].tolist()
-
-    def set_cross_covariance_borrowed(self, pair: str, matrix: np.ndarray) -> None:
-        """borrowed-residual-correlation cross-covariance (spec Section 10.2) of this function's own
-        columns for one component pair ('NE', 'NU' or 'EU') -- always populated once the ETM is fit
-        with NOISE_COVARIANCE_GLS, regardless of the -xcov switch (EtmFit.process_cross_covariance,
-        geode/etm/least_squares/cross_covariance.py)"""
+    def set_cross_covariance(self, pair: str, matrix: np.ndarray, method: str) -> None:
+        """
+        cross-component parameter covariance of this function's own columns for one component pair
+        ('NE', 'NU' or 'EU'), sliced from the station-level matrix the same way load_parameters slices
+        the within-component one (EtmFit.process_cross_covariance, geode/etm/least_squares/
+        cross_covariance.py). method: 'power_law_cross_spectrum' or 'borrowed_residual_correlation'
+        (see cross_covariance.py) -- which one produced this block (also declared at the station level,
+        EtmFit.cross_covariance[pair]['method']).
+        """
         if matrix is None or not matrix.size:
             return
-        self.p.cross_covar_borrowed[pair] = {'matrix': self._slice_cross_covariance(matrix)}
-
-    def set_cross_covariance_power_law(self, pair: str, matrix: np.ndarray) -> None:
-        """power-law cross-spectrum cross-covariance of this function's own columns for one component
-        pair -- only populated when that pair's fit actually used this model (-xcov on and enough
-        common data; see cross_covariance.fit_pair)"""
-        if matrix is None or not matrix.size:
-            return
-        self.p.cross_covar_power_law[pair] = {'matrix': self._slice_cross_covariance(matrix)}
+        self.p.cross_covar[pair] = {'matrix': matrix[self.column_index][:, self.column_index].tolist(),
+                                    'method': method}
 
     @abstractmethod
     def print_parameters(self, **kwargs) -> Tuple[list, list, list]:
