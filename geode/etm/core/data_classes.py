@@ -232,6 +232,15 @@ class LeastSquares(BaseDataClass):
     # own GLS/noise-model fit is unaffected either way. Default False: the N-E/N-U/E-U cross-covariance is
     # instead approximated by borrowing the correlation of the daily residuals (sigma_ij = r * sigma_i * sigma_j)
     noise_cross_covariance: bool = False
+    # NOISE_COVARIANCE_GLS: minimum data span (years, first to last solution) required to attempt a GLS fit;
+    # below this, EtmEngine falls back to ROBUST_LEAST_SQUARES. Matches EtmStackerConfig.min_time_span and
+    # clears the joint harmonic fit's own ~2-year floor for resolving the annual signal (jhf_min_cycles=2).
+    # 0 disables this check.
+    min_gls_time_span: float = 2.5
+    # NOISE_COVARIANCE_GLS: minimum span_completion (%, fraction of days with data within the station's own
+    # [first, last] window) required to attempt a GLS fit; below this (campaign-like stations) EtmEngine falls
+    # back to ROBUST_LEAST_SQUARES. 0 disables this check.
+    min_gls_span_completion: float = 20.0
     # constraints to apply to the fit
     constraints: List = field(default_factory=lambda: [])
 

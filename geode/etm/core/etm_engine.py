@@ -198,6 +198,21 @@ class EtmEngine:
             logger.info('Disabling metadata jumps because solution count < 100')
             self.config.modeling.fit_metadata_jumps = False
 
+        # guard against estimating a GLS noise/covariance model from too little or too sparse data: fall
+        # back to ROBUST_LEAST_SQUARES if the station doesn't clear min_gls_time_span/min_gls_span_completion
+        strategy = self.config.modeling.least_squares_strategy
+        if strategy.adjustment_model == AdjustmentModels.NOISE_COVARIANCE_GLS:
+            time_span = (self.solution_data.time_vector[-1] - self.solution_data.time_vector[0]
+                        if self.solution_data.time_vector.size else 0.0)
+            if time_span < strategy.min_gls_time_span or \
+                    self.solution_data.span_completion < strategy.min_gls_span_completion:
+                logger.warning(
+                    f'Falling back to ROBUST_LEAST_SQUARES for {self.solution_data.get_station_id()}: '
+                    f'{time_span:.2f} years of data (min {strategy.min_gls_time_span}) / '
+                    f'{self.solution_data.span_completion:.1f}% span completion '
+                    f'(min {strategy.min_gls_span_completion}%) do not meet the NOISE_COVARIANCE_GLS minimums')
+                strategy.adjustment_model = AdjustmentModels.ROBUST_LEAST_SQUARES
+
         # @todo: evaluate if mask should be applied here or inside solution_data
         mask = self.config.modeling.get_observation_mask(self.solution_data.time_vector)
 
