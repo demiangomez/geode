@@ -435,7 +435,7 @@ def plot_velocity_map(stations, output_file):
     scale   = vh_max / (0.08 * ref_dim) if vh_max > 0 else 1.
 
     q = ax.quiver(x, y, ve, vn, scale=scale, scale_units='xy', color='red',
-                 width=0.004, edgecolor='black', linewidth=0.4, zorder=6)
+                 width=0.0022, edgecolor='black', linewidth=0.3, zorder=6)
 
     ref = round(vh_max / 2, 1) or 1.0
     ax.quiverkey(q, 0.85, 0.05, ref, '%g mm/yr' % ref, labelpos='E', coordinates='axes',
