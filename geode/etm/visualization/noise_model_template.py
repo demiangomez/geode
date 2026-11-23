@@ -124,12 +124,14 @@ class NoiseModelTemplate(PlotTemplate):
             self.plot_scan(ax, nm, label)
 
     def plot_spectrum(self, ax, nm: dict, label: str) -> None:
-        """Joint harmonic fit: ratio of the misfit spectrum to the noise per bin, reference fit and final check"""
+        """Joint harmonic fit: ratio of the misfit spectrum to the noise per bin, reference fit and final check,
+        over the whole spectrum (candidates are only searched for within the band, marked by the red lines)"""
         diag = nm['diagnostics']
         st = nm['settings']
         f = _floats(diag['spec_f_cpy'])
         r_ref = _floats(diag['spec_r_reference'])
         r_fin = _floats(diag['spec_r_final'])
+        band_f = _floats(diag['band_f_cpy'])
         periodic = nm['periodic']
 
         # the tallest peak at half the height: the top half is for the legend (7 entries)
@@ -149,6 +151,8 @@ class NoiseModelTemplate(PlotTemplate):
                    label=f"Candidates: ratio $\\geq$ {st['cand_ratio']:g}")
         ax.axhline(st['snr_min'], color='gray', linestyle='--', linewidth=0.8,
                    label=f"Final check: ratio $\\geq$ {st['snr_min']:g}")
+        ax.axvline(band_f[0], color='red', linestyle='--', linewidth=1, label='Searched band')
+        ax.axvline(band_f[1], color='red', linestyle='--', linewidth=1)
 
         for p in periodic:
             ax.axvline(p['f_cpy'], color='k', linestyle=':', linewidth=0.8)
@@ -226,7 +230,7 @@ class NoiseModelTemplate(PlotTemplate):
         """log axes over the searched band, plain frequency ticks instead of powers of 10"""
         ax.set_xlim(f[0], f[-1])
         ax.set_ylim(floor, top)
-        ax.xaxis.set_major_locator(FixedLocator([t for t in (0.1, 0.2, 0.3, 0.5, 1, 2, 3, 5, 10, 20, 50)
+        ax.xaxis.set_major_locator(FixedLocator([t for t in (0.1, 0.2, 0.3, 0.5, 1, 2, 3, 5, 10, 20, 50, 100, 200)
                                                  if f[0] <= t <= f[-1]]))
         ax.xaxis.set_major_formatter(FormatStrFormatter('%g'))
         ax.xaxis.set_minor_formatter(NullFormatter())

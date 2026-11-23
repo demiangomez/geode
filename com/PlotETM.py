@@ -247,6 +247,8 @@ def process_etm_station(stn, args_dict, from_kmz):
         config.modeling.least_squares_strategy.noise_cross_covariance = args_dict['cross_covariance']
         config.modeling.least_squares_strategy.noise_detection        = args_dict['periodic_detection']
         config.modeling.least_squares_strategy.noise_snr_min          = args_dict['snr_min']
+        config.modeling.least_squares_strategy.noise_taper_alpha      = args_dict['taper_alpha']
+        config.modeling.least_squares_strategy.noise_p_min_days       = args_dict['p_min_days']
         config.modeling.least_squares_strategy.noise_signal_alpha_min = args_dict['signal_alpha_min']
         config.modeling.least_squares_strategy.sigma_filter_limit  = args_dict['sigma_limit']
         config.modeling.least_squares_strategy.covariance_function = \
@@ -919,6 +921,17 @@ def main():
                         help="With -lsq gls, SNR threshold of the detection of periodic terms. Default is 8 for the "
                              "joint harmonic fit (where it is also the misfit-ratio threshold of the final check) "
                              "and 7 for the stepwise grid search")
+
+    parser.add_argument('-taper', '--taper_alpha', type=float, default=0.75, metavar='alpha',
+                        help="With -lsq gls -pdet joint, Tukey taper applied to the misfit before its FFT in the "
+                             "candidate search (spectral leakage/sidelobe control). 0 = no taper, rectangular "
+                             "window; 0 < alpha <= 1 = taper fraction (1 = full Hann). Default is 0.75")
+
+    parser.add_argument('-pmin', '--p_min_days', type=float, default=None, metavar='days',
+                        help="With -lsq gls -pdet joint, shortest period searched for periodic terms, in days "
+                             "(the high-frequency edge of the candidate search band; lower = higher max "
+                             "frequency, but also more candidate frequencies tested). Default is the method's own "
+                             "(NoiseCovarianceSettings.jhf_p_min)")
 
     parser.add_argument('-alpha_min', '--signal_alpha_min', type=float, default=1.0, metavar='alpha',
                         help="With -lsq gls, minimum spectral index (alpha, from the 0.5-1.5 power-law basis) kept "

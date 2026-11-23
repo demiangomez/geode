@@ -220,6 +220,14 @@ class LeastSquares(BaseDataClass):
     # (8 for the joint harmonic fit, where it is also the misfit-ratio threshold of the final check; 7 for the
     # stepwise grid search)
     noise_snr_min: Optional[float] = None
+    # NOISE_COVARIANCE_GLS, joint harmonic fit only: Tukey taper applied to the misfit before its FFT, to
+    # control spectral leakage/sidelobes in the candidate search. 0 = no taper, rectangular window;
+    # 0 < alpha <= 1 = taper fraction (1 = full Hann). Default 0.75
+    noise_taper_alpha: float = 0.75
+    # NOISE_COVARIANCE_GLS, joint harmonic fit only: shortest period searched, in days (the high-frequency
+    # edge of the candidate search band -- lower = higher max frequency). None = the method's own default
+    # (NoiseCovarianceSettings.jhf_p_min)
+    noise_p_min_days: Optional[float] = None
     # NOISE_COVARIANCE_GLS: the stochastic_signal (the part of the noise model collocation-predicted and
     # removed from the residuals) is the detected periodic terms plus the power-law components with spectral
     # index alpha >= this threshold; flatter power laws and the white noise stay in the residuals as noise.

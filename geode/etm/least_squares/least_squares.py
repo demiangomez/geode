@@ -671,12 +671,17 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
                                                 white_min=lsq.noise_white_floor_mm ** 2,
                                                 detection=lsq.noise_detection,
                                                 signal_alpha_min=lsq.noise_signal_alpha_min,
-                                                compute_estimator=lsq.noise_cross_covariance)
+                                                compute_estimator=lsq.noise_cross_covariance,
+                                                jhf_taper_alpha=lsq.noise_taper_alpha)
         if lsq.noise_snr_min is not None:
             if lsq.noise_snr_min <= 0:
                 raise ValueError(f'NoiseCovarianceGLS: the SNR threshold must be positive ({lsq.noise_snr_min})')
             # only the threshold of the detection in use matters
             self.settings.jhf_snr_min = self.settings.sgs_snr_min = float(lsq.noise_snr_min)
+        if lsq.noise_p_min_days is not None:
+            if lsq.noise_p_min_days <= 0:
+                raise ValueError(f'NoiseCovarianceGLS: p_min must be positive days ({lsq.noise_p_min_days})')
+            self.settings.jhf_p_min = float(lsq.noise_p_min_days)
         # one NoiseModelResult per component (N, E, U), kept by EtmFit.process_cross_covariance after
         # all three have been fit; None where the noise model could not be estimated (robust-fit fallback)
         self.noise_models: List[object] = [None, None, None]
