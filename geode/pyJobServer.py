@@ -232,6 +232,20 @@ def setup(modules):
     """
     from tqdm import tqdm
 
+    # limit BLAS/OpenMP threading to 1 so each of this node's job processes (one per allocated CPU,
+    # all forked from the same dispynode daemon) doesn't additionally spawn its own multi-threaded
+    # pool and oversubscribe the machine -- this is the per-process equivalent of the os.environ[...]
+    # lines at the top of PlotETM.py/PrintVelocities.py/etc., which only affect the client process
+    # that submits jobs, never the dispynode worker processes that actually run them. Must happen
+    # before numpy/scipy (below, via 'modules') are imported for the first time in this process --
+    # these libraries read the thread-count env vars once, at BLAS initialization, and ignore any
+    # later change to os.environ.
+    os.environ['OMP_NUM_THREADS']        = '1'   # OpenMP (general)
+    os.environ['MKL_NUM_THREADS']        = '1'   # Intel MKL
+    os.environ['OPENBLAS_NUM_THREADS']   = '1'   # OpenBLAS
+    os.environ['NUMEXPR_NUM_THREADS']    = '1'   # NumExpr
+    os.environ['VECLIB_MAXIMUM_THREADS'] = '1'   # macOS Accelerate framework
+
     tqdm.write(' >> Initializing node...')
     for module in modules:
         # create a global object containing our module
