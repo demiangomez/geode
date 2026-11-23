@@ -17,6 +17,7 @@ if __name__ == "__main__":
     },
     include_package_data=True,
     scripts=[
+        'com/ApplyCountryCode.py',
         'com/ArchiveService.py',
         'com/CampaignPlanner.py',
         'com/GenerateKml.py',

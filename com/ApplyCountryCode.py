@@ -35,6 +35,16 @@ avoid timeout error
         print('Station %s.%s has no ISO3 lat: %12.8f lon: %13.8f'
               % (stn['NetworkCode'], stn['StationCode'],
                  stn['lat'], stn['lon']))
+
+        # Nominatim has no country_code for Antarctica (no sovereign
+        # boundaries in OSM), so stations south of the Antarctic Treaty
+        # line get ATA directly instead of relying on reverse geocoding.
+        if stn['lat'] <= -60:
+            print(' -- Updating %s.%s with ISO3 ATA (south of -60 lat)'
+                  % (stn['NetworkCode'], stn['StationCode']))
+            cnn.update('stations', {'country_code': 'ATA'}, **stn)
+            continue
+
         location = reverse("%f, %f" % (stn['lat'], stn['lon']))
         if location and 'country_code' in location.raw['address'].keys():
             ISO3 = coco.convert(names=location.raw['address']['country_code'],
