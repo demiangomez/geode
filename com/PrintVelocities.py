@@ -427,6 +427,22 @@ def plot_velocity_map(stations, output_file):
     xy   = projection.transform_points(ccrs.PlateCarree(), lon, lat)
     x, y = xy[:, 0], xy[:, 1]
 
+    # Local east/north do NOT correspond to constant screen x/y directions on an azimuthal
+    # projection (e.g. polar stereographic): meridian convergence rotates "east"/"north" by a
+    # different amount at every longitude (on a Mercator map this rotation happens to be ~0
+    # everywhere, since standard cylindrical Mercator keeps every meridian vertical, but that's a
+    # special case, not something to assume in general). Find that per-station rotation by
+    # finite-differencing a tiny eastward lon/lat step and seeing which screen direction it lands
+    # in, then rotate every vector (and, below, every ellipse) from local (east, north) into screen
+    # (x, y) accordingly, before plotting.
+    eps  = 0.01
+    e0   = projection.transform_points(ccrs.PlateCarree(), lon - eps, lat)
+    e1   = projection.transform_points(ccrs.PlateCarree(), lon + eps, lat)
+    rot  = np.arctan2(e1[:, 1] - e0[:, 1], e1[:, 0] - e0[:, 0])
+    cosr, sinr = np.cos(rot), np.sin(rot)
+    ve_scr = ve * cosr - vn * sinr
+    vn_scr = ve * sinr + vn * cosr
+
     ref_dim = min(xlim[1] - xlim[0], ylim[1] - ylim[0])
 
     # vectors: longest arrow spans ~8% of the shorter map dimension
@@ -434,7 +450,7 @@ def plot_velocity_map(stations, output_file):
     vh_max  = np.nanmax(vh) if np.any(np.isfinite(vh)) else 0.
     scale   = vh_max / (0.08 * ref_dim) if vh_max > 0 else 1.
 
-    q = ax.quiver(x, y, ve, vn, scale=scale, scale_units='xy', color='red',
+    q = ax.quiver(x, y, ve_scr, vn_scr, scale=scale, scale_units='xy', color='red',
                  width=0.0022, edgecolor='black', linewidth=0.3, zorder=6)
 
     ref = round(vh_max / 2, 1) or 1.0
@@ -443,17 +459,19 @@ def plot_velocity_map(stations, output_file):
 
     # ellipses: centered on the arrow tip (the vector's endpoint), not the station itself -- the
     # usual GNSS velocity-map convention (e.g. GMT's psvelo). Tip position uses the same quiver
-    # 'scale' (scale_units='xy'), so it lands exactly where the plotted arrowhead is.
+    # 'scale' (scale_units='xy') and the same screen-rotated vector, so it lands exactly where the
+    # plotted arrowhead is. The ellipse's own orientation (computed in the local east/north frame)
+    # gets the same per-station rotation applied as the vectors, for the same reason.
     # Own independent scale for the ellipse size itself, so the largest one spans ~5% of the
     # shorter map dimension.
     ellipses = []
-    for s, xi, yi, dve, dvn in zip(stations, x, y, ve, vn):
+    for s, xi, yi, dve, dvn, rot_deg in zip(stations, x, y, ve_scr, vn_scr, np.degrees(rot)):
         cov_ne, se, sn = s['cov_ne'], s['se'], s['sn']
         if not (np.isfinite(cov_ne) and np.isfinite(se) and np.isfinite(sn)):
             continue
         width, height, angle = _ellipse_from_covariance(np.array([[se ** 2, cov_ne], [cov_ne, sn ** 2]]))
         tip_x, tip_y = xi + dve / scale, yi + dvn / scale
-        ellipses.append((tip_x, tip_y, width, height, angle))
+        ellipses.append((tip_x, tip_y, width, height, angle + rot_deg))
 
     if ellipses:
         major_max    = max(max(w, h) for _, _, w, h, _ in ellipses)
