@@ -205,6 +205,30 @@ class EtmStackerShell(cmd.Cmd):
 
         print(f'Sparse-station constraints: {"ON" if new_state else "OFF"}. Invoke solve again when ready.')
 
+    def do_sparse_fixes(self, arg):
+        """
+        Turn the three sparse-injection corrections on/off without restarting the CLI,
+        so the same session can be re-solved both ways -- see -no_sparse_fixes and
+        EtmStackerConfig.sparse_injection_fixes. Only changes the config; invoke solve
+        again to see its effect.
+        syntax: sparse_fixes [on|off]  (no argument prints the current setting)
+        """
+        arg = arg.strip().lower()
+        config = self.etm_stacker.config
+        if arg == '':
+            print(f'Sparse-injection fixes: {"ON" if config.sparse_injection_fixes else "OFF"}')
+            return
+        if arg in ('on', 'true', '1'):
+            config.sparse_injection_fixes = True
+        elif arg in ('off', 'false', '0'):
+            config.sparse_injection_fixes = False
+        else:
+            print('Usage: sparse_fixes [on|off]')
+            return
+
+        print(f'Sparse-injection fixes: {"ON" if config.sparse_injection_fixes else "OFF"}. '
+              f'Invoke solve again when ready.')
+
     def do_adaptive_ratio(self, arg):
         """
         Set the adaptive per-station constraint target ratio, or turn the mechanism on/
@@ -345,6 +369,90 @@ class EtmStackerShell(cmd.Cmd):
         else:
             print('EtmStacker is not showing as solved. Execute solve first.')
 
+    def do_plot_all(self, arg):
+        """
+        Plot and save the constrained ETM for every station in the current stack (full
+        and sparse), so you can flip through every fit at once instead of one at a time.
+        syntax: plot_all <folder> [full|sparse]
+        Full and sparse stations are written to <folder>/full and <folder>/sparse, both
+        created if needed: the two are not the same kind of plot (a full station's own
+        parameters are in the solution, a sparse station's prediction is interpolated to
+        it), so flipping through a run means looking at one group at a time. If
+        full|sparse is given, only that group is plotted; default is both. A station
+        whose fit fails (e.g. missing noise model) is skipped with a message, not fatal
+        to the rest of the batch.
+        """
+        if not self.etm_stacker.solved:
+            print('EtmStacker is not showing as solved. Execute solve first.')
+            return
+
+        parts = arg.split()
+        if not parts:
+            print('syntax: plot_all <folder> [full|sparse]')
+            return
+
+        folder = parts[0]
+        which = parts[1] if len(parts) > 1 else 'both'
+        if which not in ('full', 'sparse', 'both'):
+            print('syntax: plot_all <folder> [full|sparse]')
+            return
+
+        full_list = list(enumerate(self.etm_stacker.stations)) if which in ('full', 'both') else []
+        sparse_list = list(enumerate(self.etm_stacker.sparse_stations)) if which in ('sparse', 'both') else []
+        total = len(full_list) + len(sparse_list)
+        if total == 0:
+            print('No stations to plot.')
+            return
+
+        def _subfolder(name):
+            """<folder>/<name>/, created if needed.
+
+            The trailing separator is not cosmetic: _handle_plot_output only treats the
+            path as a directory (one auto-named file per station) when
+            os.path.basename(...) is empty -- otherwise it's a single file-name prefix
+            and every station in the loop below would silently overwrite one file.
+            """
+            path = os.path.join(folder, name)
+            if not os.path.exists(path):
+                os.makedirs(path)
+            return os.path.join(path, '')
+
+        full_folder = _subfolder('full') if full_list else None
+        sparse_folder = _subfolder('sparse') if sparse_list else None
+
+        print(f'Plotting {total} station(s) to ' +
+              ' and '.join(f for f in (full_folder, sparse_folder) if f) + ' ...')
+        tic = time.time()
+        failed = []
+
+        for n, (i, stn) in enumerate(full_list, start=1):
+            name = stationID(stn)
+            print(f'  [{n}/{total}] {name} (full)')
+            try:
+                self.etm_stacker.plot_constrained_etm(i, full_folder)
+            except Exception as e:
+                print(f'    FAILED: {e}')
+                failed.append(name)
+
+        for n, (i, stn) in enumerate(sparse_list, start=len(full_list) + 1):
+            name = stationID(stn)
+            print(f'  [{n}/{total}] {name} (sparse)')
+            try:
+                self.etm_stacker.plot_constrained_sparse_etm(i, sparse_folder)
+            except Exception as e:
+                print(f'    FAILED: {e}')
+                failed.append(name)
+
+        print(f'Done: {total - len(failed)}/{total} plot(s) saved '
+              f'in {(time.time() - tic):.1f}s')
+        if full_folder:
+            print(f'  full:   {full_folder} ({len(full_list)})')
+        if sparse_folder:
+            print(f'  sparse: {sparse_folder} ({len(sparse_list)})')
+        if failed:
+            print(f'Failed ({len(failed)}): {", ".join(failed)}')
+        print(self.prompt)
+
     def do_list(self, arg):
         """
         list all the <events> or <constraints>
@@ -421,38 +529,47 @@ class EtmStackerShell(cmd.Cmd):
     def do_okada_weights(self, arg):
         """
         Update SW-Okada regularization weights for co/postseismic constraints and re-solve.
-        syntax: okada_weights <h_weight> <v_weight> [event_id [relax]]
+        syntax: okada_weights <h_weight> <v_weight> [event_id|all [relax]] [coseismic|postseismic]
         Examples:
-          okada_weights 10 10                      apply to all co/postseismic constraints
-          okada_weights 50 50 us20005iis            apply to one event (co + postseismic)
-          okada_weights 20 20 us20005iis 0.050      apply to one postseismic relaxation only
+          okada_weights 10 10                                apply to all co/postseismic constraints
+          okada_weights 5 5 all postseismic                   apply to all postseismic, any event
+          okada_weights 50 50 us20005iis                       apply to one event (co + postseismic)
+          okada_weights 20 20 us20005iis 0.050                 apply to one postseismic relaxation only
+          okada_weights 50 50 us20005iis none coseismic        apply to one event, coseismic only
         The solver runs automatically after updating (without field interpolation).
         Use predict afterwards if you want the interpolated grid fields refreshed.
         """
         if not arg:
-            print('syntax: okada_weights <h_weight> <v_weight> [event_id [relax]]')
+            print('syntax: okada_weights <h_weight> <v_weight> [event_id|all [relax]] [coseismic|postseismic]')
             return
 
         parts = arg.split()
+
+        constraint_type = None
+        if parts and parts[-1] in ('coseismic', 'postseismic'):
+            constraint_type = parts.pop()
+
         try:
             if len(parts) == 2:
                 h_weight, v_weight = float(parts[0]), float(parts[1])
                 event_id, relax = None, None
             elif len(parts) == 3:
                 h_weight, v_weight = float(parts[0]), float(parts[1])
-                event_id, relax = parts[2], None
+                event_id = None if parts[2] in ('all', 'none') else parts[2]
+                relax = None
             elif len(parts) == 4:
                 h_weight, v_weight = float(parts[0]), float(parts[1])
-                event_id, relax = parts[2], float(parts[3])
+                event_id = None if parts[2] in ('all', 'none') else parts[2]
+                relax = float(parts[3])
             else:
-                print('syntax: okada_weights <h_weight> <v_weight> [event_id [relax]]')
+                print('syntax: okada_weights <h_weight> <v_weight> [event_id|all [relax]] [coseismic|postseismic]')
                 return
         except ValueError:
-            print('syntax: okada_weights <h_weight> <v_weight> [event_id [relax]]')
+            print('syntax: okada_weights <h_weight> <v_weight> [event_id|all [relax]] [coseismic|postseismic]')
             return
 
-        n = self.etm_stacker.update_okada_weights(h_weight, v_weight,
-                                                   event_id=event_id, relax=relax)
+        n = self.etm_stacker.update_okada_weights(h_weight, v_weight, event_id=event_id,
+                                                   relax=relax, constraint_type=constraint_type)
         if n == 0:
             return
 
@@ -464,17 +581,19 @@ class EtmStackerShell(cmd.Cmd):
 
     def do_print(self, arg=''):
         """
-        print the <rms>|<vel> |<config>
+        print the <rms>|<vel>|<config>|<sparse>
               <rms>   : summary for the RMS of applied constraints 
               <vel>   : a priori vs constrained velocities
               <config>: summary of the stacker configuration 
+              <sparse>: sparse-station misfit -- the WRMS increment table printed by
+                        solve covers full stations only 
         """""
 
-        if arg not in ('rms', 'vel', 'config'):
+        if arg not in ('rms', 'vel', 'config', 'sparse'):
             print(f'Unknown argument {arg}')
             return
 
-        if arg in ('rms', 'vel') and not self.etm_stacker.solved:
+        if arg in ('rms', 'vel', 'sparse') and not self.etm_stacker.solved:
             print('System is not solved. Invoke solve first!')
             return
 
@@ -495,6 +614,9 @@ class EtmStackerShell(cmd.Cmd):
                 #for eq in item[3]:
                 #    res = ' '.join([f'{v * 1000:8.3f}' for v in eq[1]])
                 #    print(f'  -> {eq[0]} {res} ' + unit)
+
+        elif arg == 'sparse':
+            sparse_constraint.report_sparse_misfit(self.etm_stacker)
 
         elif arg == 'config':
             self.etm_stacker.print_config()
@@ -920,6 +1042,17 @@ def main():
                              "the default (data-strength) injection can produce; still off by default "
                              "pending cleanup of the two paths. Recommended when using -sparse.")
 
+    parser.add_argument('-no_sparse_fixes', '--no_sparse_injection_fixes', action='store_true',
+                        default=not def_config.sparse_injection_fixes,
+                        help="With -sparse: disable the three corrections to the sparse-station "
+                             "injection (on by default) and restore the behavior that preceded "
+                             "them -- a flat per-field 1/sigma**2 injection weight, no intercept "
+                             "in the local reduction, and a free-fit mechanical jump subtracted on "
+                             "top of the prefit that already removed it. Present only so the two "
+                             "can be compared side by side (see also the interactive sparse_fixes "
+                             "command); the old path is measurably worse than not using -sparse at "
+                             "all and is meant to be deleted, not chosen.")
+
     parser.add_argument('-no_adaptive_weighting', '--no_adaptive_weighting', action='store_true',
                         default=not def_config.adaptive_constraint_weighting_enabled,
                         help="Disable adaptive per-station mutual-constraint weighting (on by default). "
@@ -949,6 +1082,41 @@ def main():
                              "machine only) instead of one at a time. Only affects how stations are built, "
                              f"not the shared normal-equation solve itself. Default {def_config.parallel_workers} "
                              "(serial).")
+
+    parser.add_argument('-coseismic_okada_h_weight', '--coseismic_sw_okada_h_weight', type=float,
+                        default=def_config.coseismic_sw_okada_h_weight, metavar='weight',
+                        help="How strongly a coseismic field's spatial interpolation is regularized toward "
+                             "that event's Okada elastic-dislocation shape (decay with distance from the "
+                             "fault) versus a free data-driven spline. 1.0 (default) weighs both equally; "
+                             "~0.01 is data-dominated, ~10 is strongly Okada-dominated (values above ~10 "
+                             "saturate). Only constrains the field's spatial shape, never its overall "
+                             "amplitude. Usually best left at the default: a coseismic jump is a "
+                             "discontinuous step the data alone resolves well, including genuine "
+                             "station-to-station variation a strong Okada penalty would suppress -- see "
+                             "-postseismic_okada_h_weight for the knob meant to be turned up. Applied to "
+                             "every event from the start of the run -- see the interactive okada_weights "
+                             "command to change it mid-session instead.")
+
+    parser.add_argument('-coseismic_okada_v_weight', '--coseismic_sw_okada_v_weight', type=float,
+                        default=def_config.coseismic_sw_okada_v_weight, metavar='weight',
+                        help="Vertical-component counterpart of -coseismic_okada_h_weight. Default "
+                             f"{def_config.coseismic_sw_okada_v_weight}.")
+
+    parser.add_argument('-postseismic_okada_h_weight', '--postseismic_sw_okada_h_weight', type=float,
+                        default=def_config.postseismic_sw_okada_h_weight, metavar='weight',
+                        help="Same mechanism as -coseismic_okada_h_weight, applied to postseismic "
+                             "constraints instead. This is the knob meant to be turned up: postseismic "
+                             "decay is collinear with each station's own interseismic velocity within its "
+                             "own normal equations, so the data alone can't reliably separate the two, and "
+                             "the fault's spatially-consistent physical shape helps break that ambiguity. "
+                             "Start around 3-5 and raise from there -- 10 can be too strong (some stations' "
+                             "postseismic predictions stop following their data); values above ~10 "
+                             "saturate regardless. Default 1.0 (same as coseismic, data-dominated).")
+
+    parser.add_argument('-postseismic_okada_v_weight', '--postseismic_sw_okada_v_weight', type=float,
+                        default=def_config.postseismic_sw_okada_v_weight, metavar='weight',
+                        help="Vertical-component counterpart of -postseismic_okada_h_weight. Default "
+                             f"{def_config.postseismic_sw_okada_v_weight}.")
 
     parser.add_argument('-load', '--load_from_file', type=str, default=None, metavar='filename',
                         help="Load ETM stacker session from pickle file")
@@ -1011,10 +1179,15 @@ def main():
             sparse_validity_override=(process_date_str(args.sparse_validity_date).fyear
                                       if args.sparse_validity_date else None),
             sparse_constraint_mode=args.sparse_constraint_mode,
+            sparse_injection_fixes=not args.no_sparse_injection_fixes,
             adaptive_constraint_weighting_enabled=not args.no_adaptive_weighting,
             adaptive_constraint_target_ratio=args.adaptive_constraint_target_ratio,
             gls_for_all_stations=args.gls_for_all_stations,
-            parallel_workers=args.parallel_workers
+            parallel_workers=args.parallel_workers,
+            coseismic_sw_okada_h_weight=args.coseismic_sw_okada_h_weight,
+            coseismic_sw_okada_v_weight=args.coseismic_sw_okada_v_weight,
+            postseismic_sw_okada_h_weight=args.postseismic_sw_okada_h_weight,
+            postseismic_sw_okada_v_weight=args.postseismic_sw_okada_v_weight
         )
 
         etm_stacker = EtmStacker(config)

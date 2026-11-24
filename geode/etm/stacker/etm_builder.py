@@ -17,7 +17,6 @@ import math
 from typing import List, Optional, Tuple
 
 import numpy as np
-import numpy.linalg.linalg
 from tqdm import tqdm
 
 from .data_classes import EtmStackerConfig, Station
@@ -309,7 +308,7 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         # is about to discard.
         etm.config.plotting_config.trust_stochastic_signal = False
         etm.plot()
-    except (DesignMatrixException, numpy.linalg.linalg.LinAlgError):
+    except (DesignMatrixException, np.linalg.LinAlgError):
         tqdm.write(print_yellow(f' -- Unable to fit {network_code}.{station_code} -> system is rank deficient. '
                                 f'Will redo ETM with only 10 years of postseismic events.'))
         etm_config.validation.max_condition_number = 3

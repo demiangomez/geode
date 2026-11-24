@@ -7,7 +7,6 @@ from operator import itemgetter
 from typing import List, Tuple
 
 import numpy as np
-import numpy.linalg.linalg
 from tqdm import tqdm
 
 from .constraints import adaptive_weight
@@ -120,6 +119,10 @@ class SolverMixin:
             tqdm.write(f'{stn} WRMS increment: (total={wrmsi:.2f}) {wrms[0]:.2f} {wrms[1]:.2f} {wrms[2]:.2f}')
             c += 1
 
+        # Sparse stations never appear in the table above: it reads each station's own
+        # normal equations, and a sparse station owns none. This is their counterpart.
+        sparse_constraint.report_sparse_misfit(self)
+
         tqdm.write(f'Equations: {self.total_equations * 3}')
         tqdm.write(f'Constraints: {self.total_constraints}')
         tqdm.write(f'Parameters: {self.total_parameters * 3}')
@@ -202,14 +205,21 @@ class SolverMixin:
             for event in self.earthquakes:
                 idx = stn.get_coseismic_column(event.id)
                 if idx:
-                    ap = stn.etm.jump_manager.get_geophysical_jump(event.id).p.params
+                    jump = stn.etm.jump_manager.get_geophysical_jump(event.id)
+                    ap = jump.p.params
+                    # for a combined COSEISMIC_JUMP_DECAY fit, ap[*] holds both the jump
+                    # and decay amplitude (shape (2,) per component) -- index down to just
+                    # the jump term (get_jump_col's local, non-design-matrix column) so
+                    # a_priori lines up with 'constrained', which is only ever the jump
+                    # column (get_coseismic_column never returns the decay column).
+                    col = jump.get_jump_col(return_col_of_design_matrix=False)
                     earthquakes.append({
                         'station': stationID(stn),
                         'lon': stn.lon,
                         'lat': stn.lat,
                         'event_id': event.id,
                         'relax': 0.0,
-                        'a_priori': [ap[1], ap[0], ap[2]],
+                        'a_priori': [ap[1][col], ap[0][col], ap[2][col]],
                         'constrained': self.solution[:, idx].tolist(),
                     })
                 for relax in self.config.relaxation:
@@ -256,7 +266,7 @@ class SolverMixin:
                             EtmStackerField.create_field(
                                 self.stations, self.solution, self.covariance, self.grids, constraint)
                         )
-                    except numpy.linalg.linalg.LinAlgError:
+                    except np.linalg.LinAlgError:
                         tqdm.write(f'Skipping field interpolation for {constraint.short_description()} '
                                    f'(singular matrix: not enough independent stations)')
                         continue

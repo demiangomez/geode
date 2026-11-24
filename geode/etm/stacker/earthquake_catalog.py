@@ -373,6 +373,20 @@ class EarthquakeCatalogMixin:
                 )
             )
 
+        # Apply any non-default Okada regularization weight to this event's new
+        # constraints too -- see stacker.build_system's own call for why coseismic and
+        # postseismic are applied separately instead of sharing one value.
+        if (self.config.coseismic_sw_okada_h_weight != 1.0 or
+                self.config.coseismic_sw_okada_v_weight != 1.0):
+            self.update_okada_weights(self.config.coseismic_sw_okada_h_weight,
+                                      self.config.coseismic_sw_okada_v_weight,
+                                      event_id=event.id, constraint_type='coseismic')
+        if (self.config.postseismic_sw_okada_h_weight != 1.0 or
+                self.config.postseismic_sw_okada_v_weight != 1.0):
+            self.update_okada_weights(self.config.postseismic_sw_okada_h_weight,
+                                      self.config.postseismic_sw_okada_v_weight,
+                                      event_id=event.id, constraint_type='postseismic')
+
     def remove_earthquake(self, event: Earthquake, json_folder: str = None, save_json_folder: str = None):
         """Remove event from the list of modeled earthquakes."""
 

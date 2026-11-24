@@ -267,6 +267,23 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         # 3. Register all constraints
         self._register_constraints()
 
+        # 3b. Apply any non-default Okada regularization weight to every constraint just
+        # built, so config.*_sw_okada_h_weight/v_weight take effect from the start of a
+        # run instead of needing the interactive okada_weights command afterward. Each
+        # type (coseismic/postseismic) is applied separately and is a no-op (and silent)
+        # at the SWOkada-internal default (1.0, 1.0) -- see data_classes.py for why they
+        # aren't meant to share one value.
+        if (self.config.coseismic_sw_okada_h_weight != 1.0 or
+                self.config.coseismic_sw_okada_v_weight != 1.0):
+            self.update_okada_weights(self.config.coseismic_sw_okada_h_weight,
+                                      self.config.coseismic_sw_okada_v_weight,
+                                      constraint_type='coseismic')
+        if (self.config.postseismic_sw_okada_h_weight != 1.0 or
+                self.config.postseismic_sw_okada_v_weight != 1.0):
+            self.update_okada_weights(self.config.postseismic_sw_okada_h_weight,
+                                      self.config.postseismic_sw_okada_v_weight,
+                                      constraint_type='postseismic')
+
         # 4. Sparse stations' validity-windowed free fits (needs station_list, populated
         # by _register_constraints above)
         if self.config.sparse_constraints_enabled:
@@ -330,7 +347,8 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         self.solved = False
 
     def update_okada_weights(self, h_weight: float, v_weight: float,
-                              event_id: str = None, relax: float = None) -> int:
+                              event_id: str = None, relax: float = None,
+                              constraint_type: str = None) -> int:
         """
         Update SW-Okada regularization weights on coseismic/postseismic constraints.
 
@@ -348,15 +366,26 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         relax : float, optional
             If given together with event_id, only the postseismic constraint with
             this relaxation constant is updated.
+        constraint_type : str, optional
+            'coseismic' or 'postseismic'. If given, restricts to that type only
+            (independent of event_id/relax) -- e.g. constraint_type='postseismic'
+            with no event_id updates every postseismic constraint, any event, any
+            relaxation, without touching coseismic. If omitted, both types are
+            candidates, same as before this parameter existed.
 
         Returns
         -------
         int
             Number of constraints updated.
         """
+        if constraint_type:
+            candidates = self.constraint_registry.constraints[constraint_type]
+        else:
+            candidates = (self.constraint_registry.constraints['coseismic'] +
+                         self.constraint_registry.constraints['postseismic'])
+
         apply_to = []
-        for constraint in (self.constraint_registry.constraints['coseismic'] +
-                           self.constraint_registry.constraints['postseismic']):
+        for constraint in candidates:
             if event_id and constraint.event.id != event_id:
                 continue
             if relax is not None and getattr(constraint, 'relaxation', None) != relax:

@@ -71,6 +71,29 @@ class EtmStackerConfig(BaseDataClass):
     # data strength -- see constraints/sparse._collapse_to_tempered_constraint. False
     # (default) keeps the original direct-injection behavior.
     sparse_constraint_mode: bool = False
+    # Temporary A/B switch for three corrections to the sparse-station injection
+    # (constraints/sparse.py), all of which were measured to be necessary before a
+    # sparse station helps rather than hurts the shared solution:
+    #
+    #   1. The per-field injection weight in _collapse_to_tempered_constraint is the
+    #      field tolerance combined WITH the station's own estimated covariance
+    #      (pinv(cov_theta + diag(sigma**2))) rather than a flat 1/sigma**2. The flat
+    #      form discards the cross-field correlations the joint pseudo-inverse was
+    #      computed to preserve, and claims full field-tolerance precision along
+    #      directions this station's own data barely determines.
+    #   2. The local reduction carries its own intercept column, reduced out by Schur
+    #      complement before injection. Without one, the difference between the free
+    #      fit's anchor epoch (the validity date -- see etm_builder.build_free_fit) and
+    #      the constrained ETM's own reference epoch (which supplies the basis columns)
+    #      has nowhere to go but the velocity and decay amplitudes.
+    #   3. clean_station_data does not subtract a free-fit mechanical jump that the
+    #      constrained ETM already removed from the data as a prefit model.
+    #
+    # True (default) applies all three. False restores the behavior that existed before
+    # them, for side-by-side comparison only -- see the interactive sparse_fixes
+    # command. This switch (and the False path) is meant to be deleted once the
+    # comparison is settled, rather than kept as a reachable route back to the bug.
+    sparse_injection_fixes: bool = True
     # On by default: tightens (never loosens) the mutual-constraint weight on a full
     # station's own velocity/postseismic-decay ties when that station's own
     # normal-equation diagonal implies far more confidence than its external tie, which
@@ -107,6 +130,38 @@ class EtmStackerConfig(BaseDataClass):
     # how stations are built, not the shared normal-equation solve itself, which stays
     # single-process. See stacker.add_stations_parallel.
     parallel_workers: int = 1
+    # How strongly a coseismic or postseismic field's own leave-one-out interpolation
+    # (constraints/sw_okada.py's SWOkada) is regularized toward the Okada
+    # elastic-dislocation shape for that specific event's fault geometry, versus left
+    # free to follow a pure data-driven spline. 1.0 (default, matching SWOkada's own
+    # internal default) gives the Okada term equal Frobenius-norm weight to the data
+    # term; ~0.01 is data-dominated, ~10 is strongly Okada-dominated (values above ~10
+    # saturate -- see constraints/fault_geometry.py._compute_sw_okada_system's own
+    # comment). Only constrains the field's spatial SHAPE/decay-with-distance, never
+    # its overall amplitude (Pok is an annihilator of the Okada column space, so any
+    # uniformly-scaled version of the Okada pattern costs nothing -- see that same
+    # function).
+    #
+    # Coseismic and postseismic have separate knobs (below) because they don't need the
+    # same treatment: a coseismic jump is a discontinuous step that the data alone
+    # usually resolves well, including genuine station-to-station variation (e.g. local
+    # site effects, non-uniform slip) that a strong Okada penalty would suppress. It
+    # should stay close to data-dominated (default 1.0). Postseismic decay, in contrast,
+    # is collinear with each station's own interseismic velocity within its own normal
+    # equations, so the data alone can't reliably separate the two -- that's exactly
+    # where the fault's spatially-consistent physical shape earns its keep, and why
+    # postseismic is the one meant to be turned up.
+    #
+    # Both are applied automatically to every matching constraint as soon as it's built
+    # (stacker.build_system and earthquake_catalog.add_earthquake), not something you
+    # need the interactive okada_weights command for unless you want to change it again
+    # mid-session. See stacker.update_okada_weights for the mechanism (also clears the
+    # cached dislocation model so a changed value actually takes effect on the next
+    # solve).
+    coseismic_sw_okada_h_weight: float = 1.0
+    coseismic_sw_okada_v_weight: float = 1.0
+    postseismic_sw_okada_h_weight: float = 1.0
+    postseismic_sw_okada_v_weight: float = 1.0
 
 
 @dataclass
