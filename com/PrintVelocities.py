@@ -148,6 +148,7 @@ def process_etm_velocity(stn, args_dict):
                            earthquake_magnitude_limit=args_dict['s_score_mag_limit'],
                            earthquakes_cherry_picked=args_dict['force_earthquakes'])
 
+        config.modeling.postseismic_min_separability = args_dict['postseismic_min_separability']
         config.modeling.relaxation        = np.array(args_dict['default_relax'])
         config.modeling.data_model_window = args_dict['_fit_dates']
 
@@ -580,6 +581,19 @@ def main():
                         help="How many years (or date) before the start of the time series should the ETM fit "
                              "postseismic transients of M>=7 earthquakes. Default is "
                              f"{ModelingParameters().post_seismic_back_lim // 365} years (the ETM module default)")
+
+    parser.add_argument('-ps_separability', '--postseismic_min_separability', type=float,
+                        default=ModelingParameters().postseismic_min_separability,
+                        metavar='fraction',
+                        help="Drop an earthquake's postseismic term when the station has no data from "
+                             "before that event AND less than this fraction of the decay column's "
+                             "variance survives removing a constant and a trend over the station's "
+                             "own span -- i.e. the column is effectively a straight line, so fitting "
+                             "it recovers no postseismic signal while taking an arbitrary share of "
+                             "the velocity. An event the station actually observed is never dropped, "
+                             "however collinear. Works alongside -post_back, which decides which "
+                             "pre-observation events are candidates in the first place. Default "
+                             f"{ModelingParameters().postseismic_min_separability:g}; 0 disables the filter.")
 
     parser.add_argument('-force', '--force_earthquakes', nargs='+', default=[], metavar='event_id',
                         help="Add cherry-picked seismic earthquake (that fall outside of s_score_mag_limit) to the "

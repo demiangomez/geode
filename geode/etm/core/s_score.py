@@ -134,8 +134,16 @@ class ScoreTable(object):
                 score = Score(float(j['lat']), float(j['lon']), float(j['depth']), float(j['mag']),
                               strike, dip, rake, j['date'], location=j['location'], event_id=j['id'])
 
-                # capture co-seismic and post-seismic scores
+                # capture co-seismic and post-seismic scores. Score.score_values returns
+                # a one-element array rather than a scalar whenever the event has a fault
+                # mask (pyOkada: the masked branch indexes c_mask/p_mask with a KD-tree
+                # query result, which is an array even for a single query point) and a
+                # plain scalar otherwise -- so coerce here, once, rather than at each of
+                # the uses below. Under numpy 2.x float() on a one-element array raises,
+                # which made every mask-carrying event fail on a cache miss.
                 s_score, p_score = score.score(lat, lon)
+                s_score = float(np.asarray(s_score).reshape(-1)[0])
+                p_score = float(np.asarray(p_score).reshape(-1)[0])
 
                 if j['hash'] is not None:
                     to_delete_keys.append((j['id'], network_code, station_code))
@@ -143,8 +151,8 @@ class ScoreTable(object):
                     'event_id': j['id'],
                     'network_code': network_code,
                     'station_code': station_code,
-                    'coseismic': float(s_score),
-                    'postseismic': float(p_score),
+                    'coseismic': s_score,
+                    'postseismic': p_score,
                     'hash': current_hash,
                 })
 
