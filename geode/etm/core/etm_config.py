@@ -111,7 +111,8 @@ class EtmConfig:
                 "jumps": "Jumps",
                 "polynomial": "Polynomial",
                 "seasonal": "Seasonal",
-                "stochastic": "Stochastic",
+                "stochastic_signal": "Stochastic Signal",
+                "stochastic_noise": "Stochastic Noise",
                 "removed": "Removed",
                 "prefit": "Prefit"
             },
@@ -140,7 +141,8 @@ class EtmConfig:
                 "jumps": "Saltos",
                 "polynomial": "Polinomio",
                 "seasonal": "Estacionales",
-                "stochastic": "Estocástico",
+                "stochastic_signal": "Señal Estocástica",
+                "stochastic_noise": "Ruido Estocástico",
                 "removed": "Removido(s)",
                 "prefit": "Pre-ajuste"
             },
@@ -169,7 +171,8 @@ class EtmConfig:
                 "jumps": "Sauts",
                 "polynomial": "Polynôme",
                 "seasonal": "Saisonnier",
-                "stochastic": "Stochastique",
+                "stochastic_signal": "Signal Stochastique",
+                "stochastic_noise": "Bruit Stochastique",
                 "removed": "Supprimé",
                 "prefit": "Prefit"
             }

@@ -31,6 +31,7 @@ import numpy as np
 import scipy.fft
 from scipy.linalg import cholesky, solve_triangular, qr, orth, lapack, LinAlgError
 from scipy.optimize import nnls, brentq
+from scipy.signal.windows import tukey
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +56,32 @@ class NoiseCovarianceSettings:
     # detection of periodic terms: 'joint' (joint harmonic fit, Section 8.2) or 'stepwise' (stepwise grid search,
     # Section 8.3, kept for comparison)
     detection: str = 'joint'
-    # joint harmonic fit: SNR threshold; candidates = peaks of the misfit-spectrum ratio >= cand_ratio, at least
-    # cand_sep / N cycles/day apart, at most cand_max, skipped if the projected cosine at lag 0 < keep_min;
-    # periods searched from N / min_cycles down to p_min days; zero padding of the lag FFT
+    # joint harmonic fit (Section 8.2): a candidate is kept if its SNR in the harmonic fit (and the final
+    # check) is >= this
     jhf_snr_min: float = 8.0
+    # minimum misfit-spectrum ratio R for a local peak of the reference fit to be proposed as a candidate
     jhf_cand_ratio: float = 1.5
+    # minimum separation between two candidates, in bins of 1 / N cycles/day; a weaker peak closer than this
+    # to a stronger one is the same signal (spectral leakage), not a second one, and is dropped
     jhf_cand_sep: float = 2.0
+    # at most this many candidates are kept from the peak search, strongest misfit first
     jhf_cand_max: int = 30
+    # minimum projected cosine at lag 0 (fraction of a sinusoid's variance surviving the ETM fit) for a
+    # candidate to be kept; skips frequencies the ETM's own periodic terms (annual, semiannual) already absorb
     jhf_keep_min: float = 0.5
+    # low-frequency edge of the search band: a period is only searched if at least this many full cycles fit
+    # in the series span (period <= N / min_cycles days)
     jhf_min_cycles: float = 2.0
-    jhf_p_min: float = DAYS_PER_YEAR / 4
+    # high-frequency edge of the search band: shortest period searched, in days (lower = higher max frequency)
+    jhf_p_min: float = DAYS_PER_YEAR / 7
+    # zero-padding factor of the lag FFT (misfit spectrum): gives a finer frequency grid than 1 / Tmax so that
+    # a peak is not missed between two grid frequencies
     jhf_pad: int = 8
+    # Tukey taper applied to the misfit before its FFT in misfit_ratio (0 = no taper, rectangular window;
+    # 0 < alpha <= 1 = fraction of the misfit tapered at each end, 1 = full Hann). Rescaled to unit mean so
+    # that an oscillation of amplitude a still gives a peak of height ~ a (Section 8.1's convention).
+    # Default 0.75: best resolving power of the candidates tested against real station data
+    jhf_taper_alpha: float = 0.75
     # stepwise grid search: band [cycles/yr], candidate grid oversampling, smallest delta chi2, SNR threshold
     sgs_band: Tuple[float, float] = (0.2, 4.0)
     sgs_over: int = 5
@@ -94,6 +110,9 @@ class NoiseCovarianceSettings:
     signal_alpha_min: float = 1.0
     # compute the colored / white variance factors (needs one n x n triangular inverse per GLS)
     variance_factors: bool = False
+    # compute and store the GLS estimator K = Qx A' C^-1 (u x n) on the GlsResult (cross_covariance.py
+    # needs it for the parameter cross-covariance; one extra matrix multiply, no new Cholesky)
+    compute_estimator: bool = False
     # threads of the FFTs of Sigma (scipy.fft workers; -1 = all cores). Use 1 when many series run in parallel
     fft_workers: int = -1
 
@@ -577,6 +596,11 @@ class JointDetection:
     spec_sigma2_bin: np.ndarray # noise per bin of the reference fit (NaN outside the band)
     spec_r: np.ndarray          # ratio R of the reference fit (NaN outside the band)
     check_r: np.ndarray         # ratio R of the final check
+    # the same two ratios extended over the whole spectrum, for the diagnostic plot only: the band is where
+    # periodic terms are searched for and the MATLAB reference vectors validate R, not a validity boundary of
+    # the ratio formula itself, but nothing outside it has been checked against that reference either
+    spec_r_wide: np.ndarray
+    check_r_wide: np.ndarray
     check_found: np.ndarray     # final check: peaks with R >= snr_min away from the kept periods [cycles/day]
     check_added: np.ndarray     # final check: the added ones (after refinement) [cycles/day]
     check_removed: np.ndarray   # final check: terms it removed (found ones that failed, kept ones with variance 0)
@@ -630,6 +654,11 @@ class JointHarmonicFit:
         # half a resolution bin of the lag spectrum: a peak of the final check closer than this to a kept period
         # is the same period
         self.dsep = 1 / (2 * self.tmax)
+        # taper of the misfit before its FFT (misfit_ratio), rescaled to unit mean; None = no taper (rectangular)
+        self.taper = None
+        if settings.jhf_taper_alpha > 0:
+            w = tukey(self.tmax, settings.jhf_taper_alpha)
+            self.taper = w / w.mean()
 
     def proj_cos(self, f: np.ndarray) -> np.ndarray:
         """
@@ -658,6 +687,8 @@ class JointHarmonicFit:
         # misfit at lags 1..Tmax (lag 0 holds the white noise and is left out), without its mean
         r = self.gamma[1:self.tmax + 1] - model[1:self.tmax + 1]
         r = r - r.mean()
+        if self.taper is not None:
+            r = r * self.taper
         # amplitude spectrum over the lags, normalized by the number of lags (Tmax) so that an oscillation
         # s cos(2 pi f tau) in the misfit [mm^2] gives a peak of height ~ s at f (within a few % for 3+ cycles over
         # the lags, ~10% for 1-2). A sinusoid of amplitude a [mm] left in the residuals gives s ~ a^2 / 2
@@ -753,7 +784,7 @@ class JointHarmonicFit:
         # 6. final check: peaks of the misfit ratio against the full model with R >= snr_min, more than half a
         # bin from the kept periods, are added at once; the added term with the lowest SNR (or any term with
         # variance 0) is removed until every added term passes; the added terms are then refined (not re-tested)
-        r_check, _, _ = self.misfit_ratio(rf)
+        r_check, s_check, _ = self.misfit_ratio(rf)
         fx = fr[self.local_peaks(r_check, st.jhf_snr_min)]
         if fc.size:
             fx = fx[np.all(np.abs(fx[:, None] - fc[None, :]) > self.dsep, axis=1)]
@@ -806,10 +837,16 @@ class JointHarmonicFit:
         # final check action on each final period, for the report
         action = ['added' if np.any(np.abs(added - fi) < 1e-12) else 'passed' for fi in fc]
 
+        # the same two ratios over the whole spectrum (diagnostic plot only, see JointDetection.spec_r_wide):
+        # reuses s0/s_check, just a different (unrestricted) noise_bin evaluation, no new FFT
+        r0_wide = s0 / self.fitter.noise_bin(reference, fr, cumulative=True)
+        r_check_wide = s_check / self.fitter.noise_bin(rf, fr, cumulative=True)
+
         return JointDetection(final_fit=rf, snr=self.snr(rf), snr_harmonic=snr_harmonic, candidates=candidates,
                               harmonic_fit=harm, spec_f=fr, band=self.inb, spec_s=s0, spec_sigma2_bin=sb0,
                               spec_r=r0, check_r=r_check, check_found=found, check_added=added,
-                              check_removed=np.array(removed), check_action=action)
+                              check_removed=np.array(removed), check_action=action,
+                              spec_r_wide=r0_wide, check_r_wide=r_check_wide)
 
 
 @dataclass
@@ -1071,6 +1108,9 @@ class GlsResult:
     factors: np.ndarray = field(default_factory=lambda: np.full(3, np.nan))
     # [colored, white]
     redundancies: np.ndarray = field(default_factory=lambda: np.full(2, np.nan))
+    # GLS estimator K = Qx A' C^-1 (u x n): x = K y. Only computed when compute_estimator is set
+    # (cross_covariance.py needs it for the parameter cross-covariance K_N C_NE K_E'); None otherwise
+    k_estimator: Optional[np.ndarray] = None
 
     def as_array(self) -> np.ndarray:
         """[rate, sigma, factor_colored, factor_white, factor_whole, jitter] as in the test vectors"""
@@ -1080,7 +1120,8 @@ class GlsResult:
 def gls_fit(t: np.ndarray, y: np.ndarray, a: np.ndarray, c_lag: np.ndarray, irate: Optional[int] = None,
             nugget: float = 0., variance_factors: bool = True,
             n_neq: Optional[np.ndarray] = None, c_neq: Optional[np.ndarray] = None,
-            jitter_start: float = 1e-8, jitter_factor: float = 10., jitter_max: float = 1.) -> GlsResult:
+            jitter_start: float = 1e-8, jitter_factor: float = 10., jitter_max: float = 1.,
+            compute_estimator: bool = False) -> GlsResult:
     """
     GLS fit of y = A x with C_il = c_lag(|t_i - t_l|). Never forms C^-1. Optional constraints are added to
     the normal equations as N + n_neq, c + c_neq.
@@ -1126,6 +1167,10 @@ def gls_fit(t: np.ndarray, y: np.ndarray, a: np.ndarray, c_lag: np.ndarray, irat
     res = GlsResult(x=x, qx=qx, residuals=v, c_inv_v=wv, quadratic_form=quad, redundancy=red, jitter=jitter)
     res.factors[2] = quad / red
 
+    if compute_estimator:
+        # K = Qx A' C^-1 = Qx wa' (cross_covariance.py: parameter cross-covariance K_N C_NE K_E')
+        res.k_estimator = qx @ wa.T
+
     if irate is not None:
         res.rate = float(x[irate])
         res.sigma_rate = float(np.sqrt(qx[irate, irate]))
@@ -1163,6 +1208,9 @@ class NoiseModelResult:
     # step 1
     x0: np.ndarray
     v0: np.ndarray
+    a: np.ndarray                   # ETM design matrix of the observed (inlier) epochs, n x u
+    k0: np.ndarray                  # step-1 estimator, u x n (x0 = k0 @ y): cross_covariance.py needs
+                                     # it, unprojected, to place on the common grid of a pair (Section 4)
     # empirical covariance and kernels
     n_tau: np.ndarray               # pair counts, lags 0..Tmax
     gamma: np.ndarray               # empirical covariance, lags 0..Tmax
@@ -1181,11 +1229,15 @@ class NoiseModelResult:
     c_lag_final: np.ndarray
     colored_lag_final: np.ndarray   # power-law + periodic part (no white noise)
     signal_lag: np.ndarray          # covariance function of the predicted signal (periodic + steep power laws)
+    noise_lag: np.ndarray           # covariance function of the predicted noise (flat power laws only, no
+                                    # periodic terms, no white noise/nugget)
     # GLS of the ETM with the final covariance
     gls: GlsResult
     alpha_reference: EffectiveAlpha
     alpha_final: EffectiveAlpha
     signal: np.ndarray              # signal prediction on the daily grid 0..N-1
+    noise: np.ndarray               # noise prediction on the daily grid 0..N-1 (excludes white noise: see
+                                    # noise_lag). Zero when every alpha is >= signal_alpha_min
     timings: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -1313,7 +1365,7 @@ class NoiseModelResult:
             out['settings'].update({'snr_min': st.jhf_snr_min, 'cand_ratio': st.jhf_cand_ratio,
                                     'cand_sep': st.jhf_cand_sep, 'cand_max': st.jhf_cand_max,
                                     'keep_min': st.jhf_keep_min, 'min_cycles': st.jhf_min_cycles,
-                                    'p_min': st.jhf_p_min, 'pad': st.jhf_pad})
+                                    'p_min': st.jhf_p_min, 'pad': st.jhf_pad, 'taper_alpha': st.jhf_taper_alpha})
             for p, q_h, action in zip(periodic, det.snr_harmonic, det.check_action):
                 p['snr_harmonic_fit'] = num(q_h)
                 p['final_check'] = action
@@ -1327,10 +1379,14 @@ class NoiseModelResult:
             out['final_check'] = {'found_period_d': nums(1 / det.check_found),
                                   'added_period_d': nums(1 / det.check_added),
                                   'removed_period_d': nums(1 / det.check_removed)}
-            band = det.band
-            diagnostics.update({'spec_f_cpy': nums(det.spec_f[band] * DAYS_PER_YEAR),
-                                'spec_r_reference': nums(det.spec_r[band]),
-                                'spec_r_final': nums(det.check_r[band])})
+            # the full spectrum (DC excluded: f=0 has no period, and breaks the plot's log frequency axis),
+            # not just the searched band -- lets the diagnostic plot show where the band sits in context.
+            # spec_r_wide/check_r_wide, not spec_r/check_r: those two are validated against the MATLAB
+            # reference vectors band-only (NaN outside), this is the same ratio formula extended for display
+            diagnostics.update({'spec_f_cpy': nums(det.spec_f[1:] * DAYS_PER_YEAR),
+                                'spec_r_reference': nums(det.spec_r_wide[1:]),
+                                'spec_r_final': nums(det.check_r_wide[1:]),
+                                'band_f_cpy': nums(det.spec_f[[det.band[0], det.band[-1]]] * DAYS_PER_YEAR)})
         else:
             out['settings'].update({'band_cpy': list(st.sgs_band), 'over': st.sgs_over,
                                     'dchi2_min': st.sgs_dchi2_min, 'snr_min': st.sgs_snr_min})
@@ -1480,7 +1536,7 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     # terms) is not done, it is not a useful diagnostic and doubles the cost of this step
     gls = gls_fit(t, y, a, c_fin, irate, fin.nugget, settings.variance_factors,
                   n_neq if has_constraints else None, c_neq, settings.jitter_start, settings.jitter_factor,
-                  settings.gls_jitter_max)
+                  settings.gls_jitter_max, settings.compute_estimator)
     timings['gls'] = time() - tt
 
     # effective spectral index (Section 10)
@@ -1494,13 +1550,21 @@ def estimate_noise_model(t: np.ndarray, y: np.ndarray, a: np.ndarray, p0: Option
     in_signal = np.asarray(settings.alphas) >= settings.signal_alpha_min
     signal_lag = gb[:, in_signal] @ fin.w[in_signal] + (colored - gb @ fin.w)
     fft_len = proj.fft_len
-    signal = np.fft.irfft(np.fft.rfft(circular_embed(signal_lag, fft_len)) *
-                          np.fft.rfft(to_grid(t, gls.c_inv_v, n_days), fft_len), fft_len)[:n_days]
+    grid_v_fft = np.fft.rfft(to_grid(t, gls.c_inv_v, n_days), fft_len)
+    signal = np.fft.irfft(np.fft.rfft(circular_embed(signal_lag, fft_len)) * grid_v_fft, fft_len)[:n_days]
 
-    return NoiseModelResult(settings=settings, t=t, n_days=n_days, tmax=tmax, x0=x0, v0=v0,
+    # complementary collocation prediction of the noise: power laws with alpha < signal_alpha_min only, no
+    # periodic terms and no white noise/nugget. White noise has no meaningful predictor away from the data
+    # it was observed at, so it is deliberately left out of this array entirely -- callers that want it can
+    # still get it from the full residual (e.g. AdjustmentResults.residuals), not from this noise band
+    noise_lag = gb[:, ~in_signal] @ fin.w[~in_signal]
+    noise = np.fft.irfft(np.fft.rfft(circular_embed(noise_lag, fft_len)) * grid_v_fft, fft_len)[:n_days]
+
+    return NoiseModelResult(settings=settings, t=t, n_days=n_days, tmax=tmax, x0=x0, v0=v0, a=a, k0=k0,
                             n_tau=proj.n_tau[:t1], gamma=gamma, gb=gb,
                             gtf=gtf, htf=htf, lags=lags, fit0=fit0, sigma_ct=ct, sigma=sigma,
                             reference=reference, sigma_jitter=fitter.jitter, detection=detection,
-                            c_lag_final=c_fin, colored_lag_final=colored, signal_lag=signal_lag, gls=gls,
+                            c_lag_final=c_fin, colored_lag_final=colored, signal_lag=signal_lag,
+                            noise_lag=noise_lag, gls=gls,
                             alpha_reference=alpha_reference, alpha_final=alpha_final, signal=signal,
-                            timings=timings)
+                            noise=noise, timings=timings)

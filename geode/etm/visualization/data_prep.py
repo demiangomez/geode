@@ -6,7 +6,7 @@ Author: Demian D. Gomez
 Data preparation utilities for ETM plotting.
 """
 
-from typing import List, Tuple, NamedTuple
+from typing import List, Optional, Tuple, NamedTuple
 import numpy as np
 import logging
 
@@ -16,7 +16,8 @@ from ..core.etm_config import EtmConfig
 from ..core.type_declarations import FitStatus
 from ..data.solution_data import SolutionData
 from ..least_squares.least_squares import EtmFit
-from ..visualization.data_classes import TimeSeriesPlotData, ComponentData, PlotOutputConfig, NoiseModelPlotData
+from ..visualization.data_classes import (TimeSeriesPlotData, ComponentData, PlotOutputConfig,
+                                          NoiseModelPlotData, EllipsePlotData)
 
 # Re-export PlotTemplate for backward compatibility
 from ..visualization.plot_template import PlotTemplate
@@ -92,7 +93,66 @@ class PlotDataPreparer:
             span_completion=solution_data.span_completion,
             latitude=solution_data.lat[0],
             longitude=solution_data.lon[0],
-            noise_models=[result.noise_model for result in etm_fit.results]
+            noise_models=[result.noise_model for result in etm_fit.results],
+            cross_covariance=etm_fit.cross_covariance
+        )
+
+    @staticmethod
+    def prepare_ellipse_data(solution_data: SolutionData, etm_fit: EtmFit) -> Optional[EllipsePlotData]:
+        """
+        Prepare data for the velocity error-ellipse plot: the full rate covariance block of each pair,
+        from the polynomial function's own within-component (.covar) and cross-component (.cross_covar)
+        blocks, local index 1 = velocity (polynomial columns are always [offset, velocity,
+        acceleration], see etm_functions/polynomial.py). Returns None if there is no fitted polynomial
+        rate term to draw (EtmEngine.plot_ellipses then warns).
+
+        cross_covar[pair] holds whichever model was actually used (see
+        EtmFit.cross_covariance[pair]['method']) -- not a separate stored value per model. When that is
+        the power-law cross-spectrum model, the borrowed-approximation ellipse shown alongside it for
+        comparison is reconstructed on the fly from EtmFit.cross_covariance[pair]['daily_residual_correlation']
+        (a bare scalar r -- always present, and always the right one: the borrowed model's rate
+        correlation is mathematically identical to its daily_residual_correlation for any pair, power-law
+        or not, so there is nothing separate to look up) and this function's own within-component
+        variances: the borrowed model is Cov(x_i, x_j) = r * sigma_i * sigma_j for every parameter pair
+        alike, so its rate block is always exactly r * sqrt(Var(rate_i) * Var(rate_j)) -- no need to have
+        stored a whole matrix for it.
+        """
+        poly = etm_fit.design_matrix.get_polynomial()
+        if (poly is None or not poly.fit or poly.param_count <= 1 or
+                any(c.size == 0 for c in poly.p.covar)):
+            # no rate term, or the covariance wasn't (re)computed (e.g. a DB-cached fit loaded without
+            # force_computation -- see EtmEngine.plot_ellipses)
+            return None
+
+        labels = 'NEU'
+        pairs = {}
+        for i, j in ((0, 1), (0, 2), (1, 2)):
+            pair = f'{labels[i]}{labels[j]}'
+            var_i, var_j = poly.p.covar[i][1, 1], poly.p.covar[j][1, 1]
+
+            def block(cov_ij):
+                return np.array([[var_i, cov_ij], [cov_ij, var_j]]) * M_TO_MM ** 2
+
+            cc = etm_fit.cross_covariance.get(pair, {})
+            entry = poly.p.cross_covar.get(pair)
+            official = block(entry['matrix'][1][1]) if entry else None
+
+            if cc.get('method') == 'power_law_cross_spectrum':
+                r_borrowed = cc.get('daily_residual_correlation')
+                reconstructed = block(r_borrowed * np.sqrt(var_i * var_j)) if r_borrowed is not None else None
+                pairs[pair] = {'power_law': official, 'borrowed': reconstructed}
+            else:
+                pairs[pair] = {'power_law': None, 'borrowed': official}
+
+        return EllipsePlotData(
+            station_id=solution_data.get_station_id().upper(),
+            solution_type=solution_data.soln,
+            stack_name=solution_data.stack_name,
+            completion=solution_data.completion,
+            span_completion=solution_data.span_completion,
+            latitude=solution_data.lat[0],
+            longitude=solution_data.lon[0],
+            pairs=pairs
         )
 
     @staticmethod
@@ -148,19 +208,28 @@ class PlotDataPreparer:
             mask=mask
         )
 
-    def _add_model_and_residuals(self, data: ComponentData, component_idx: int,
+    @staticmethod
+    def _add_model_and_residuals(data: ComponentData, component_idx: int,
                                  solution_data: SolutionData, etm_results: EtmFit) -> None:
-        """Add model values and residuals to component data"""
+        """
+        Add model values and residuals to component data. model_values is always the pure
+        deterministic model (polynomial + periodic + jumps) -- it never includes the
+        collocation-predicted stochastic signal, so with no -rm flag at all, nothing is added to
+        or removed from either the model or the data (see _handle_stochastic_signal). residuals is
+        computed directly as observations minus this model, so it is exact by construction (for
+        LSQ_COLLOCATION/NOISE_COVARIANCE_GLS, this is the full stochastic realization: noise +
+        signal together) and stays consistent under any combination of removals applied afterward.
+        """
         result = etm_results.results[component_idx]
         design = etm_results.design_matrix
 
         model_values = design.alternate_time_vector(solution_data.time_vector_cont) @ result.parameters
-        if self.output_config.trust_stochastic_signal:
-            model_values = model_values + result.stochastic_signal
 
         data.model_time_vector = solution_data.time_vector_cont
         data.model_values = model_values * M_TO_MM
-        data.residuals = result.residuals * M_TO_MM
+
+        model_fit = design.alternate_time_vector(solution_data.time_vector[data.mask]) @ result.parameters
+        data.residuals = data.observations_fit - model_fit * M_TO_MM
 
         if np.any(~data.mask):
             # create a residual vector for the data not fit
@@ -183,8 +252,7 @@ class PlotDataPreparer:
 
             # Handle stochastic signal specially
             if obj_type == 'stochastic':
-                self._handle_stochastic_signal(data, component_idx, funct,
-                                               solution_data, etm_results)
+                self._handle_stochastic_signal(data, component_idx, funct, solution_data)
 
     @staticmethod
     def _should_remove_signal(obj_type: str, cfg: PlotOutputConfig) -> bool:
@@ -204,22 +272,31 @@ class PlotDataPreparer:
         data.model_values -= funct.eval(component_idx, time_vector_cont) * M_TO_MM
 
     def _handle_stochastic_signal(self, data: ComponentData, component_idx: int,
-                                  funct, solution_data: SolutionData,
-                                  etm_results: EtmFit) -> None:
-        """Handle stochastic signal removal or restoration in residuals"""
+                                  funct, solution_data: SolutionData) -> None:
+        """Independently remove the stochastic signal and/or noise from the observations and
+        residuals. Neither is ever part of model_values (always the pure deterministic model, see
+        _add_model_and_residuals) -- with both flags false (the default), this is a no-op: nothing
+        is added to or removed from the data or the model. data.residuals already equals noise +
+        signal by direct construction, so subtracting either term here keeps
+        observations - model_values == residuals exactly, for any combination of the two flags."""
+        cfg = self.output_config
         time_mjd = solution_data.time_vector_mjd
 
-        if self.output_config.plot_remove_stochastic:
-            # Remove stochastic signal from observations and model
+        if cfg.plot_remove_stochastic_signal:
+            signal_fit = funct.eval(component_idx, time_mjd[data.mask]) * M_TO_MM
             data.observations -= funct.eval(component_idx, time_mjd) * M_TO_MM
-            data.observations_fit -= funct.eval(component_idx, time_mjd[data.mask]) * M_TO_MM
+            data.observations_fit -= signal_fit
             if np.any(~data.mask):
                 data.observations_not_fit -= funct.eval(component_idx, time_mjd[~data.mask]) * M_TO_MM
-            data.model_values -= etm_results.results[component_idx].stochastic_signal * M_TO_MM
-            # Note: residuals don't include stochastic signal, so no removal needed
-        else:
-            # Residuals have stochastic removed by default; add it back if user wants to see it
-            data.residuals += funct.eval(component_idx, time_mjd[data.mask]) * M_TO_MM
+            data.residuals -= signal_fit
+
+        if cfg.plot_remove_stochastic_noise:
+            noise_fit = funct.eval_noise(component_idx, time_mjd[data.mask]) * M_TO_MM
+            data.observations -= funct.eval_noise(component_idx, time_mjd) * M_TO_MM
+            data.observations_fit -= noise_fit
+            if np.any(~data.mask):
+                data.observations_not_fit -= funct.eval_noise(component_idx, time_mjd[~data.mask]) * M_TO_MM
+            data.residuals -= noise_fit
 
     def _add_confidence_bounds(self, data: ComponentData, component_idx: int,
                                etm_results: EtmFit) -> None:

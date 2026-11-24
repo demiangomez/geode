@@ -707,6 +707,38 @@ def process_crinex_file(crinez, filename, data_rejected, data_retry):
     return None, None, imported_station
 
 
+def process_rinex_qc(JobServer):
+    """
+    RinexQC hook: after the main archiving pass, process any rinex row
+    that doesn't yet have a QC run under RinexQC's current default
+    config. Deliberately decoupled from the per-file archiving job
+    (process_crinex_file) -- a QC failure, or RINGO's own runtime, never
+    affects whether a file gets archived. See
+    knowledge/architecture/rinex-qc.md. Reuses the JobServer this run
+    already built (create_cluster() can be called again on the same
+    JobServer after the main pass' close_cluster(), same as
+    process_visits()'s two clusters above).
+    """
+    # local import: keeps everything rinex_qc pulls in out of
+    # ArchiveService's import graph for anyone running with
+    # --no_rinex_qc, or on an install that hasn't installed the ringo
+    # binary yet (scripts/install_ringo.sh).
+    from geode.rinex_qc import batch
+    from geode.rinex_qc.config import RinexQCConfig
+
+    cnn = dbConnection.Cnn('gnss_data.cfg')
+    config = RinexQCConfig.load()
+
+    candidates = batch.find_pending(cnn, config, newest_first=False)
+
+    if not candidates:
+        tqdm.write(' >> RinexQC: nothing pending')
+        return
+
+    tqdm.write(' >> RinexQC: %i file(s) pending' % len(candidates))
+    batch.process_batch(JobServer, candidates, config, desc='RinexQC')
+
+
 def remove_empty_folders(folder):
     # Listing the files
     for dirpath, _, files in os.walk(folder, topdown=False):
@@ -926,6 +958,11 @@ def main():
     parser.add_argument('-np', '--noparallel', action='store_true',
                         help="Execute command without parallelization.")
 
+    parser.add_argument('-no_qc', '--no_rinex_qc', action='store_true',
+                        help="Skip the RinexQC pass at the end of this run (runs by default -- "
+                             "see com/RinexQC.py). QC failures never block archiving regardless; "
+                             "this flag only controls whether the pass runs at all.")
+
     add_version_argument(parser)
 
     args = parser.parse_args()
@@ -1083,6 +1120,9 @@ def main():
     JobServer.close_cluster()
 
     print_archive_service_summary()
+
+    if not args.no_rinex_qc:
+        process_rinex_qc(JobServer)
 
     # iterate to delete empty folders
     remove_empty_folders(data_in)

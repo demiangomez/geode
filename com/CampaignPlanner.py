@@ -38,7 +38,7 @@ import os
 import sys
 from pathlib import Path
 
-from geode.Utils import add_version_argument, station_list_help
+from geode.Utils import add_version_argument, station_list_help, SmartHelpFormatter
 from geode.campaign_planner.planner import (
     DEFAULT_CONFIG, CampaignPlannerError, plan_campaign,
 )
@@ -73,13 +73,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description='Plan a multi-day GNSS field campaign and write an HTML report.',
         epilog=(
+            SmartHelpFormatter.RAW_MARKER +
             'Examples:\n'
             '  CampaignPlanner.py --config example_campaign.json\n'
             '  CampaignPlanner.py --start-city "Buenos Aires, Argentina" '
             '--end-city "San Juan, Argentina" \\\n'
             '      --stations arg.unsj arg.vmol --start-date 2025-09-01'
         ),
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=SmartHelpFormatter,
     )
     parser.add_argument(
         '--config', metavar='FILE',
@@ -95,11 +96,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '--stations', metavar='SPEC', nargs='+',
-        help=station_list_help(),
+        help=SmartHelpFormatter.RAW_MARKER + station_list_help(),
     )
     parser.add_argument(
         '--new-sites', metavar='SPEC', nargs='+',
         help=(
+            SmartHelpFormatter.RAW_MARKER +
             'Planned installation sites not yet in the GeoDE database.\n'
             'Each value is either a "lat,lon" pair (e.g. -34.1667,-69.7167)\n'
             'or a place name to geocode (e.g. "Mendoza, Argentina").\n'
@@ -114,6 +116,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--station-time', metavar='ID=MINUTES', nargs='+',
         help=(
+            SmartHelpFormatter.RAW_MARKER +
             'Override time-on-site for specific stops (repeatable).\n'
             'ID is a station code (net.stnm) or a new site\'s display name,\n'
             'matched case-insensitively. Takes precedence over --time-on-site\n'

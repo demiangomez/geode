@@ -15,7 +15,7 @@ from typing import List, Dict
 
 from geode import dbConnection
 from geode import Utils
-from geode.Utils import process_date, station_list_help, add_version_argument
+from geode.Utils import process_date, station_list_help, add_version_argument, SmartHelpFormatter
 from geode.pyDate import Date
 from geode.etm.core.etm_config import EtmConfig
 from geode.etm.core.etm_engine import EtmEngine
@@ -28,8 +28,8 @@ from geode.etm.data.solution_data import SolutionDataException
 def main():
     parser = argparse.ArgumentParser(
         description='Manage ETM (trajectory model) parameters for GNSS stations.',
-        formatter_class=argparse.RawTextHelpFormatter,
-        epilog="""
+        formatter_class=SmartHelpFormatter,
+        epilog=SmartHelpFormatter.RAW_MARKER + """
 Examples:
   # Set polynomial to 3 terms (velocity + acceleration) for a station
   %(prog)s igs.algo polynomial --terms 3
@@ -58,7 +58,7 @@ Examples:
 
     # Station list argument (common to all commands)
     parser.add_argument('stations', type=str, nargs='+', metavar='station',
-                        help=station_list_help())
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     # Create subparsers for different commands
     subparsers = parser.add_subparsers(dest='command', title='commands',

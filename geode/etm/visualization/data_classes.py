@@ -81,6 +81,26 @@ class NoiseModelPlotData:
 
     # noise_model report of each component (N, E, U); empty dict if not available
     noise_models: List[dict] = field(default_factory=list)
+    # EtmFit.cross_covariance: station-level cross-covariance summary per pair ('NE', 'NU', 'EU'),
+    # empty dict if not available. Used by the separate cross-covariance diagnostic plot
+    # (plot_noise_cross_model), not by plot_noise_model itself
+    cross_covariance: Dict[str, dict] = field(default_factory=dict)
+
+
+@dataclass
+class EllipsePlotData:
+    """Container for the velocity error-ellipse plot (one borrowed + one power-law ellipse per pair)"""
+    station_id: str
+    solution_type: str
+    stack_name: str
+    completion: float
+    span_completion: float
+    latitude: float
+    longitude: float
+
+    # per pair ('NE', 'NU', 'EU'): {'borrowed': 2x2 ndarray, 'power_law': 2x2 ndarray or None} -- the
+    # full rate covariance block [[Var(rate_i), Cov(rate_i,rate_j)], [Cov, Var(rate_j)]], mm/yr
+    pairs: Dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass
@@ -98,20 +118,9 @@ class PlotOutputConfig(BaseDataClass):
     plot_remove_jumps: bool = False
     plot_remove_polynomial: bool = False
     plot_remove_periodic: bool = False
-    plot_remove_stochastic: bool = False
+    plot_remove_stochastic_signal: bool = False
+    plot_remove_stochastic_noise: bool = False
     plot_no_model: bool = False
-    # On by default: the model line/confidence band include the fit's own GLS-estimated
-    # stochastic (colored-noise) signal. A cherry-picked (constrained) ETM's own noise
-    # model can be distorted by large residuals near the very geophysical events it's
-    # fitting -- see etm_builder.build_etm's Step 3 docstring, which restores a
-    # constrained fit's obs_sigmas/noise_covariance_lag from the unconstrained run for
-    # exactly this reason. Callers plotting such a fit (before that restoration can even
-    # apply to a plot, since plot() runs first) set this False so the model line/
-    # confidence band stay deterministic-only instead of bending to a noise estimate the
-    # pipeline itself doesn't trust. Unlike plot_remove_stochastic (a user-facing display
-    # toggle that also changes what raw observations are shown), this never touches the
-    # plotted observations -- only whether the model curve includes the stochastic term.
-    trust_stochastic_signal: bool = True
 
     # Missing data
     plot_missing_solutions: bool = False

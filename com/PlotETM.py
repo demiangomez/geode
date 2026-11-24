@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 
 """
-Project: Parallel.PPP
+Project: GeoDE
 Date: 10/10/17 9:10 AM
 Author: Demian D. Gomez
 
 User interface to plot and save JSON files of ETM objects.
-Type python pyPlotETM.py -h for usage help
+Type python PlotETM.py -h for usage help
 """
 import os, sys
 
@@ -51,6 +51,7 @@ from geode.etm.etm_functions.jumps import JumpFunction
 from geode.Utils import (process_date,
                           process_stnlist,
                           station_list_help,
+                          SmartHelpFormatter,
                           stationID,
                           print_columns,
                           add_version_argument,
@@ -194,7 +195,9 @@ def process_etm_station(stn, args_dict, from_kmz):
             config.plotting_config.plot_remove_polynomial  = 'poly'  in remove
             config.plotting_config.plot_remove_jumps       = 'jumps' in remove
             config.plotting_config.plot_remove_periodic    = 'per'   in remove
-            config.plotting_config.plot_remove_stochastic  = 'stoch' in remove
+            # stoch = both the signal and the noise; stoch_s/stoch_n remove each independently
+            config.plotting_config.plot_remove_stochastic_signal = 'stoch' in remove or 'stoch_s' in remove
+            config.plotting_config.plot_remove_stochastic_noise  = 'stoch' in remove or 'stoch_n' in remove
 
         if args_dict.get('interactive'):
             config.plotting_config.interactive = True
@@ -241,8 +244,12 @@ def process_etm_station(stn, args_dict, from_kmz):
         config.modeling.fit_auto_detected_jumps_method = args_dict['fit_auto_jumps'][0]
         config.modeling.least_squares_strategy.iterations          = args_dict['max_iterations']
         config.modeling.least_squares_strategy.noise_variance_factors = args_dict['variance_factors']
+        config.modeling.least_squares_strategy.noise_cross_covariance = args_dict['cross_covariance']
         config.modeling.least_squares_strategy.noise_detection        = args_dict['periodic_detection']
         config.modeling.least_squares_strategy.noise_snr_min          = args_dict['snr_min']
+        config.modeling.least_squares_strategy.noise_taper_alpha      = args_dict['taper_alpha']
+        config.modeling.least_squares_strategy.noise_p_min_days       = args_dict['p_min_days']
+        config.modeling.least_squares_strategy.noise_signal_alpha_min = args_dict['signal_alpha_min']
         config.modeling.least_squares_strategy.sigma_filter_limit  = args_dict['sigma_limit']
         config.modeling.least_squares_strategy.covariance_function = \
             COVARIANCE_MAP[args_dict['covariance'][0]]
@@ -320,14 +327,19 @@ def process_etm_station(stn, args_dict, from_kmz):
                                relaxation=relax, date=date, action='+'))
 
         etm = EtmEngine(config, cnn=cnn)
-        # the noise model diagnostics are not stored in the database: recompute the fit to plot them
-        plot_noise = ('noise' in args_dict['plot_options'] and 'no-plots' not in args_dict['plot_options'] and
-                      config.modeling.least_squares_strategy.adjustment_model ==
-                      AdjustmentModels.NOISE_COVARIANCE_GLS)
+        # the noise model and cross-covariance diagnostics are not stored in the database: recompute the
+        # fit to plot them. 'ellipses' needs this regardless of adjustment_model (the borrowed-residual-
+        # correlation ellipse is always computed once NOISE_COVARIANCE_GLS fit, see
+        # EtmFit.process_cross_covariance, but a DB-cached fit never repopulates it either way)
+        plot_opts = args_dict['plot_options']
+        force_recompute = ('no-plots' not in plot_opts and
+                           (('covariance' in plot_opts and config.modeling.least_squares_strategy.adjustment_model ==
+                             AdjustmentModels.NOISE_COVARIANCE_GLS) or
+                            'ellipses' in plot_opts))
         etm.run_adjustment(cnn=cnn,
                            try_save_to_db=not no_save_db,
                            try_loading_db=not no_save_db,
-                           force_computation=plot_noise)
+                           force_computation=force_recompute)
 
         json_opts = args_dict['json']
         if json_opts is not None:
@@ -341,8 +353,11 @@ def process_etm_station(stn, args_dict, from_kmz):
             etm.plot()
             if 'hist' in args_dict['plot_options']:
                 etm.plot_hist()
-            if 'noise' in args_dict['plot_options']:
+            if 'covariance' in args_dict['plot_options']:
                 etm.plot_noise()
+                etm.plot_noise_cross()
+            if 'ellipses' in args_dict['plot_options']:
+                etm.plot_ellipses()
 
         # --- query output (inlined from print_query, captured to string) ---
         query_output = None
@@ -826,11 +841,12 @@ def main():
 
     parser = argparse.ArgumentParser(description='Plot extended trajectory models (ETMs) '
                                                  'for station data stored in the database, json files, or text files',
-                                     formatter_class=argparse.RawTextHelpFormatter)
+                                     formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stnlist', type=str, nargs='+',
-                        help=station_list_help() + '\n\nAlternatively, read station list from '
-                                                   'kmz/kml file to obtain network codes and stations names')
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help() +
+                             '\n\nAlternatively, read station list from '
+                             'kmz/kml file to obtain network codes and stations names')
 
     parser.add_argument('-sol', '--solution', type=str, metavar='{stack|ppp}', default='ppp',
                         help="Required: specify the GAMIT stack name or ppp to use GPSPACE solutions.")
@@ -906,9 +922,36 @@ def main():
                              "joint harmonic fit (where it is also the misfit-ratio threshold of the final check) "
                              "and 7 for the stepwise grid search")
 
+    parser.add_argument('-taper', '--taper_alpha', type=float, default=0.75, metavar='alpha',
+                        help="With -lsq gls -pdet joint, Tukey taper applied to the misfit before its FFT in the "
+                             "candidate search (spectral leakage/sidelobe control). 0 = no taper, rectangular "
+                             "window; 0 < alpha <= 1 = taper fraction (1 = full Hann). Default is 0.75")
+
+    parser.add_argument('-pmin', '--p_min_days', type=float, default=None, metavar='days',
+                        help="With -lsq gls -pdet joint, shortest period searched for periodic terms, in days "
+                             "(the high-frequency edge of the candidate search band; lower = higher max "
+                             "frequency, but also more candidate frequencies tested). Default is the method's own "
+                             "(NoiseCovarianceSettings.jhf_p_min)")
+
+    parser.add_argument('-alpha_min', '--signal_alpha_min', type=float, default=1.0, metavar='alpha',
+                        help="With -lsq gls, minimum spectral index (alpha, from the 0.5-1.5 power-law basis) kept "
+                             "as stochastic signal: the collocation prediction of periodic terms plus power laws "
+                             "with alpha >= this value (removable with -rm stoch_s). Power laws with alpha below "
+                             "it are stochastic noise instead (white noise is always noise, removable with "
+                             "-rm stoch_n). Default is 1.0 (flicker and steeper are signal; white noise and "
+                             "flatter power laws are noise)")
+
     parser.add_argument('-vfac', '--variance_factors', action='store_true', default=False,
                         help="With -lsq gls, also compute the variance factors of the colored and white parts of "
                              "the noise model (costs one n x n triangular inverse per component)")
+
+    parser.add_argument('-xcov', '--cross_covariance', action='store_true', default=False,
+                        help="With -lsq gls, fit the power-law cross-spectrum model to the N-E/N-U/E-U parameter "
+                             "cross-covariance (Cov(x_i, x_j) = K_i C_ij K_j', the velocity error ellipse and every "
+                             "other ETM parameter pair), fitted to the empirical cross-covariance of the step-1 "
+                             "residuals at the epochs common to all three components. Reported per ETM parameter in "
+                             "each function's 'cross_covar' JSON section. Default: a cheaper borrowed-residual-"
+                             "correlation approximation (Cov = r * sigma_i * sigma_j) is reported instead")
 
     parser.add_argument('-sigma', '--sigma_limit', type=float, default=2.5,
                         help="Number of sigmas for the limit of outlier detection. Default is 2.5 sigma")
@@ -928,14 +971,20 @@ def main():
                              "the existing configuration")
 
     parser.add_argument('-plot', '--plot_options', nargs='*',
-                        choices=['out', 'hist', 'noise', 'missing', 'residuals', 'no-model', 'no-plots'],
+                        choices=['out', 'hist', 'covariance', 'ellipses', 'missing', 'residuals', 'no-model',
+                                'no-plots'],
                         default=[],
                         help="Plotting options: "
                              "out -> plot right panel with the outliers marked in cyan; "
                              "hist -> plot additional file with histograms of residuals; "
-                             "noise -> plot additional file with the noise model diagnostics (fit to the empirical "
-                             "covariance and detection of periodic terms; -lsq gls only, forces the computation "
-                             "of the ETM); "
+                             "covariance -> plot additional file with the noise model diagnostics (fit to the "
+                             "empirical covariance and detection of periodic terms; -lsq gls only, forces the "
+                             "computation of the ETM); also plots a second file with the N-E/N-U/E-U "
+                             "cross-covariance diagnostics (empirical cross-covariance fit and alpha_x grid search) "
+                             "wherever -xcov produced one; "
+                             "ellipses -> plot the velocity error ellipse of each component pair (N-E, N-U, E-U): "
+                             "the borrowed-residual-correlation ellipse always, plus the power-law cross-spectrum "
+                             "ellipse too wherever -xcov produced one (forces the computation of the ETM); "
                              "residuals -> show only residuals (remove all ETM functions); "
                              "missing -> show missing solution days as magenta lines in the plot "
                              "(only visible with -out activated); "
@@ -958,10 +1007,15 @@ def main():
                         help="Interactive mode: allows to zoom and view the plot interactively")
 
     parser.add_argument('-rm', '--remove', nargs='+',
-                        choices=['poly', 'per', 'jumps', 'stoch'], default=None,
+                        choices=['poly', 'per', 'jumps', 'stoch', 'stoch_s', 'stoch_n'], default=None,
                         help="Remove components from model and time series before plotting. Options are: "
                              "poly -> polynomial; per -> periodic; jumps -> mechanical and geophysical jumps; "
-                             "stoch -> stochastic signal if adjustment strategy is lsc or gls. "
+                             "stoch -> full stochastic component (signal + noise), leaving only the "
+                             "deterministic model, if adjustment strategy is lsc or gls; "
+                             "stoch_s -> stochastic signal only (the collocation-predicted periodic/correlated "
+                             "part; leaves the noise scatter in); "
+                             "stoch_n -> stochastic noise only (whatever is left in the residuals after the "
+                             "signal; leaves the signal in). "
                              "If no arguments are given, then all components are removed (same output as "
                              "residuals mode)")
 

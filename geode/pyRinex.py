@@ -32,6 +32,9 @@ TYPE_RINEX  = 1
 TYPE_RINEZ  = 2
 TYPE_CRINEX = 3
 TYPE_CRINEZ_2 = 4
+TYPE_RINEZ_2  = 5
+TYPE_RINEZ_3  = 6
+TYPE_CRINEZ_3 = 7
 
 
 class pyRinexException(Exception):
@@ -46,6 +49,72 @@ class pyRinexException(Exception):
 class pyRinexExceptionBadFile     (pyRinexException): pass
 class pyRinexExceptionSingleEpoch (pyRinexException): pass
 class pyRinexExceptionNoAutoCoord (pyRinexException): pass
+
+
+class _PrnObsFixer:
+    """
+    Fixes RINEX 2 'PRN / # OF OBS' header lines across a whole header:
+    a satellite's observable that legitimately has zero observations
+    (e.g. GPS P1 on a satellite affected by Anti-Spoofing, where the
+    receiver tracks C1 but never decodes P1) is written as a blank
+    6-character field rather than '0'. RINEX 2 writes an explicit 0 for
+    "not tracked" everywhere else in this record -- but some tools
+    (gnssmultipath 2.2.0) tokenize these lines by splitting on
+    whitespace, so a blank field reads as a missing token rather than
+    zero, eventually raising on an empty list elsewhere in their parser.
+
+    When a file declares more than 9 observation types, this record
+    (like '# / TYPES OF OBSERV' itself) continues onto a second physical
+    line per satellite, with the PRN field left blank on the
+    continuation -- and if a satellite has zero observations for every
+    one of the 1-9 obscodes that fall on that continuation line, the
+    *entire* line is blank, not just one field in the middle of others.
+    A purely line-local fix (filling only blanks that fall between two
+    populated fields) misses that case entirely, since nothing on the
+    line is populated to anchor it. This class instead tracks, across
+    the whole header, how many obscodes are declared (from '# / TYPES OF
+    OBSERV', itself handling the same continuation convention) and how
+    many of them this physical line actually covers, so it knows exactly
+    which of the 9 slots are real (zero-fill if blank) versus genuine
+    unused padding (leave blank) without needing any slot to already
+    have a value.
+    """
+
+    def __init__(self):
+        self.total_obs_types = None
+        self._consumed = 0
+
+    def note_obs_types_line(self, line):
+        # '# / TYPES OF OBSERV': count field is blank on continuation
+        # lines (the count was already given on the first line).
+        count_field = line[:6]
+        if count_field.strip():
+            self.total_obs_types = int(count_field)
+
+    def fix_prn_obs_line(self, line):
+        head, rest, label = line[:6], line[6:60], line[60:]
+        slots = [rest[i:i + 6] for i in range(0, len(rest), 6)]
+
+        is_new_satellite = head[3:6].strip() != ''
+        if is_new_satellite:
+            self._consumed = 0
+
+        if self.total_obs_types is None:
+            # '# / TYPES OF OBSERV' is a required record and should
+            # always have been seen by now; fall back to the old,
+            # content-sniffing behavior rather than guessing a count --
+            # doesn't fix a wholly-blank continuation line, but never
+            # makes a well-formed line worse.
+            real_slots = len([s for s in slots if s.strip()])
+            if real_slots:
+                last_populated = max(i for i, s in enumerate(slots) if s.strip())
+                real_slots = last_populated + 1
+        else:
+            real_slots = max(0, min(len(slots), self.total_obs_types - self._consumed))
+
+        slots = [s if s.strip() or i >= real_slots else '     0' for i, s in enumerate(slots)]
+        self._consumed += len(slots)
+        return head + ''.join(slots) + label
 
 
 class RinexRecord(object):
@@ -96,6 +165,7 @@ class RinexRecord(object):
         self.rel_completion    = None
         self.rinex_version     = None
         self.min_time_seconds  = 3600
+        self.header_fixed      = False
 
         # log list to append all actions performed to rinex file
         self.log = []
@@ -377,6 +447,7 @@ class ReadRinex(RinexRecord):
 
         self.system = ''
         first_obs   = None
+        prn_obs_fixer = _PrnObsFixer()
 
         for line in self.header:
             # DDG: to avoid problems with accents, and non-UTF-8 chars, remove them
@@ -421,8 +492,14 @@ class ReadRinex(RinexRecord):
                     # reformat the header line
                     if record in ('TIME OF FIRST OBS',
                                   'TIME OF LAST OBS'):
-                        if self.system == 'M' and not fields[6].strip():
-                            fields[6] = 'GPS'
+                        if not fields[6].strip():
+                            # RINEX 2 allows TIME SYSTEM to be blank for single-GNSS files
+                            # (GPS time is implied), but some tools downstream (e.g.
+                            # gnssmultipath 2.2.0) raise on a blank field regardless of
+                            # system. Always fill it in on the temporary copy.
+                            fields[6] = {'G': 'GPS', 'R': 'GLO', 'E': 'GAL',
+                                        'S': 'GPS'}.get(self.system, 'GPS')
+                            self.header_fixed = True
                             self.log_event('Adding TIME SYSTEM to TIME OF FIRST OBS')
 
                         if first_obs is None:
@@ -463,6 +540,17 @@ class ReadRinex(RinexRecord):
                         # reformat comments (some come in wrong positions!)
                         fields, _ = self.read_fields(line, 'COMMENT', self.required_records['COMMENT']['format_tuple'])
                         new_header += [self.format_record(self.required_records, 'COMMENT', fields) + '\n']
+                    elif line_strip.endswith('# / TYPES OF OBSERV'):
+                        # not modified -- just observed, so prn_obs_fixer knows how many
+                        # obscodes are declared by the time it sees 'PRN / # OF OBS' below.
+                        prn_obs_fixer.note_obs_types_line(line)
+                        new_header += [line]
+                    elif line_strip.endswith('PRN / # OF OBS'):
+                        fixed_line = prn_obs_fixer.fix_prn_obs_line(line)
+                        if fixed_line != line:
+                            self.header_fixed = True
+                            self.log_event('Zero-filled blank PRN / # OF OBS field(s)')
+                        new_header += [fixed_line]
                     else:
                         # leave END OF HEADER until the end to add possible missing records
                         new_header += [line]
@@ -535,13 +623,13 @@ class ReadRinex(RinexRecord):
                 prg1 = 'zcat "%s" ' % self.local_copy
 
         # determine the program to pipe into
-        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_CRINEZ_2):
-            prg2 = ' crx2rnx > "%s"' % self.rinex_path
+        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_CRINEZ_2, TYPE_CRINEZ_3):
+            prg2 = ' | crx2rnx > "%s"' % self.rinex_path
         else:
             prg2 = ' > "%s"' % self.rinex_path
 
         # create an uncompression script
-        self.create_script('uncompress.sh', prg1 + '|' + prg2)
+        self.create_script('uncompress.sh', prg1 + prg2)
 
         # run crz2rnx with timeout structure
         cmd = pyRunWithRetry.RunCommand(os.path.join(self.rootdir, 'uncompress.sh'), 45)
@@ -668,7 +756,8 @@ class ReadRinex(RinexRecord):
 
         copy(origin_file, self.rootdir)
 
-        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_RINEZ, TYPE_CRINEZ_2):
+        if self.origin_type in (TYPE_CRINEZ, TYPE_CRINEX, TYPE_RINEZ, TYPE_CRINEZ_2,
+                                TYPE_RINEZ_2, TYPE_RINEZ_3, TYPE_CRINEZ_3):
             self.uncompress()
 
         # check basic infor in the rinex header to avoid problems with RinSum

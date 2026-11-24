@@ -310,12 +310,6 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         etm.run_adjustment(cnn=cnn, force_computation=not loaded_from_json,
                            try_loading_db=False, try_save_to_db=False)
         etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_stacker'
-        # This is the cherry-picked (constrained) fit -- its own noise model can be
-        # distorted by large residuals near the very geophysical events it's fitting
-        # (see STEP 3 below, which is why that step doesn't trust it either). Don't let
-        # the model line/confidence band bend to a noise estimate the pipeline itself
-        # is about to discard.
-        etm.config.plotting_config.trust_stochastic_signal = False
         etm.plot()
     except (DesignMatrixException, np.linalg.LinAlgError):
         tqdm.write(print_yellow(f' -- Unable to fit {network_code}.{station_code} -> system is rank deficient. '
@@ -353,7 +347,6 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         try:
             etm.run_adjustment(cnn=cnn, try_loading_db=False, force_computation=True, try_save_to_db=False)
             etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_stacker'
-            etm.config.plotting_config.trust_stochastic_signal = False  # same reasoning as above
             etm.plot()
         except Exception:
             tqdm.write(print_yellow(f' -- Still unable to fit {network_code}.{station_code} with constraints. '

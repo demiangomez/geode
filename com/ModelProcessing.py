@@ -21,7 +21,8 @@ from geode.pyDate import Date
 from geode import dbConnection
 from geode.pyDate import Date
 from geode.clustering import BisectingQMeans, select_central_point, overcluster, prune, DeterministicClustering, plot_global_network, plot_geographic_cluster_graph
-from geode.Utils import station_list_help, process_date, process_stnlist, stationID, add_version_argument, file_write
+from geode.Utils import (station_list_help, process_date, process_stnlist, stationID, add_version_argument,
+                          file_write, SmartHelpFormatter)
 
 
 def generate_kmz(OC, lla, stations, central_points, filename):
@@ -85,11 +86,12 @@ def main():
 
     parser = argparse.ArgumentParser(
         description='Script to estimate run times from clustering. Two algorithms are '
-                    'available: qmeans and deterministic.'
+                    'available: qmeans and deterministic.',
+        formatter_class=SmartHelpFormatter
     )
 
     parser.add_argument('stnlist', type=str, nargs='+', metavar='all|net.stnm',
-                        help=station_list_help())
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-d', '--date_filter', nargs='+', metavar='date',
                         help='''Date range filter. Can be specified in

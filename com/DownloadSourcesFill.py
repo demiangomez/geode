@@ -22,7 +22,8 @@ from geode import dbConnection, pyDate
 from geode.proto_download import Client
 from geode.pyRinexName import path_replace_tags
 from geode.Utils import (fqdn_parse, process_date, process_stnlist,
-                          required_length, station_list_help, stationID, add_version_argument)
+                          required_length, station_list_help, stationID, add_version_argument,
+                          SmartHelpFormatter)
 
 
 def query_yes_no(question, default="yes"):
@@ -61,11 +62,12 @@ def query_yes_no(question, default="yes"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Probe FTP server to find stations')
+        description='Probe FTP server to find stations',
+        formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stnlist', type=str, nargs='+',
                         metavar='all|net.stnm',
-                        help=station_list_help())
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-date', '--date_range', nargs='+',
                         action=required_length(1, 2),

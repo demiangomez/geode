@@ -90,7 +90,7 @@ jointly determine.
 **Attempt 1 — per-epoch design matrix, uniform data-noise sigma.**
 For each sparse station, build `K_e, K_n, K_u` matrices mapping global parameters
 (spatially interpolated velocity × `Δt`, coseismic step `H(t)`, postseismic decay
-`log10(1+Δt/τ)`) to the predicted position at every inlier epoch of the station's
+`log(1+Δt/τ)`) to the predicted position at every inlier epoch of the station's
 *cleaned* data, and accumulate `K^T W K` / `K^T W obs` into the global system with a
 uniform per-epoch weight `w = 1/(k·wrms)²` (`wrms` = the free fit's RMS, `k≈2` as a
 safety inflation).

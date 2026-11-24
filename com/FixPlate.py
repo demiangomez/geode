@@ -25,7 +25,7 @@ from geode.pyLeastSquares import adjust_lsq
 from geode.pyOkada import ScoreTable
 from geode.Utils import (cart2euler, get_stack_stations, process_stnlist, add_version_argument,
                           stationID, file_write, xyz2sphere_lla, required_length, print_columns,
-                          lg2ct, station_list_help)
+                          lg2ct, station_list_help, SmartHelpFormatter)
 
 
 def build_design(hdata, vdata):
@@ -603,10 +603,11 @@ def euler_pole(args, cnn):
 def main():
     parser = argparse.ArgumentParser(
         description='''Script to compute Euler pole given a set of stations.
-                    Program can be invoked in two different ways: 1) to produce 
-                    a list of candidate sites (obtained from the provided stack_name) 
+                    Program can be invoked in two different ways: 1) to produce
+                    a list of candidate sites (obtained from the provided stack_name)
                     to compute the Euler pole 2) obtain Euler vector parameters and
-                    (optionally) produce time series in the resulting fixed-plate frame.''')
+                    (optionally) produce time series in the resulting fixed-plate frame.''',
+        formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stack_name', type=str, nargs=1,
                         metavar='{stack name}',
@@ -663,14 +664,12 @@ def main():
 
     parser.add_argument('-save_filter', '--save_filter', nargs='+', type=str,
                         metavar='{filter}',
-                        help='''Restrict which stations from the source
-                             stack are written out when using -save. Useful
-                             to avoid saving the entire (possibly global)
-                             source stack when only an area of interest is
-                             needed. Does not affect the stations used to
-                             compute the Euler pole (see -include/-vref).
-                             If omitted, every station in the source stack
-                             is saved. ''' + station_list_help())
+                        help='Restrict which stations from the source stack are written out when using '
+                             '-save. Useful to avoid saving the entire (possibly global) source stack when '
+                             'only an area of interest is needed. Does not affect the stations used to '
+                             'compute the Euler pole (see -include/-vref). If omitted, every station in '
+                             'the source stack is saved.' +
+                             SmartHelpFormatter.RAW_MARKER + '\n' + station_list_help())
 
     parser.add_argument('-candidates', '--candidate_sites', nargs='+',
                         action=required_length(5, 6),

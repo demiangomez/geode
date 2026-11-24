@@ -3,8 +3,11 @@ _version.py
 
 # JetBrains IDE files
 .idea/
-.claude/
+
+# Claude Code: track project config (settings.json, skills, hooks, agents);
+# keep only personal/local overrides and session scheduler state out of git
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

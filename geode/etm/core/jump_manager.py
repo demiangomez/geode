@@ -138,6 +138,10 @@ class JumpManager:
 
         A jump carrying several relaxation terms is kept whenever its most separable one
         clears the threshold; it is dropped only if every one of its columns is flat.
+
+        The log base is immaterial to the result -- the measure is a ratio of two
+        quantities that scale together -- but it matches etm_functions/jumps.py's own
+        decay column so the two cannot drift apart unnoticed.
         """
         tolerance = self.config.modeling.postseismic_min_separability
         if not tolerance or eq_date.fyear >= time_vector.min():
@@ -153,7 +157,7 @@ class JumpManager:
                                              time_vector - time_vector.min()]))
 
         for tau in relaxation:
-            column = np.log10(1.0 + (time_vector - eq_date.fyear) / tau)
+            column = np.log(1.0 + (time_vector - eq_date.fyear) / tau)
             centered = column - column.mean()
             total = float(centered @ centered)
             if total <= 0.:

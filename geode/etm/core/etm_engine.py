@@ -37,7 +37,7 @@ from ..least_squares.least_squares import EtmFit, AdjustmentModels
 from ..etm_functions.polynomial import PolynomialFunction
 from ..etm_functions.jumps import JumpFunction
 from ..etm_functions.periodic import PeriodicFunction
-from ..etm_functions.stochastic_signal import StochasticSignal
+from ..etm_functions.stochastic import Stochastic
 from ..core.jump_manager import JumpManager
 from ..core.logging_config import setup_etm_logging
 from ..visualization.data_prep import PlotDataPreparer
@@ -198,6 +198,21 @@ class EtmEngine:
             logger.info('Disabling metadata jumps because solution count < 100')
             self.config.modeling.fit_metadata_jumps = False
 
+        # guard against estimating a GLS noise/covariance model from too little or too sparse data: fall
+        # back to ROBUST_LEAST_SQUARES if the station doesn't clear min_gls_time_span/min_gls_span_completion
+        strategy = self.config.modeling.least_squares_strategy
+        if strategy.adjustment_model == AdjustmentModels.NOISE_COVARIANCE_GLS:
+            time_span = (self.solution_data.time_vector[-1] - self.solution_data.time_vector[0]
+                        if self.solution_data.time_vector.size else 0.0)
+            if time_span < strategy.min_gls_time_span or \
+                    self.solution_data.span_completion < strategy.min_gls_span_completion:
+                logger.warning(
+                    f'Falling back to ROBUST_LEAST_SQUARES for {self.solution_data.get_station_id()}: '
+                    f'{time_span:.2f} years of data (min {strategy.min_gls_time_span}) / '
+                    f'{self.solution_data.span_completion:.1f}% span completion '
+                    f'(min {strategy.min_gls_span_completion}%) do not meet the NOISE_COVARIANCE_GLS minimums')
+                strategy.adjustment_model = AdjustmentModels.ROBUST_LEAST_SQUARES
+
         # @todo: evaluate if mask should be applied here or inside solution_data
         mask = self.config.modeling.get_observation_mask(self.solution_data.time_vector)
 
@@ -234,7 +249,7 @@ class EtmEngine:
         if self.config.modeling.least_squares_strategy.adjustment_model in (AdjustmentModels.LSQ_COLLOCATION,
                                                                             AdjustmentModels.NOISE_COVARIANCE_GLS):
             self.design_matrix.functions.append(
-                StochasticSignal(self.config, self.solution_data.time_vector_cont_mjd))
+                Stochastic(self.config, self.solution_data.time_vector_cont_mjd))
 
         self.fit = EtmFit(self.config, self.design_matrix, self.solution_data.hash)
 
@@ -354,7 +369,10 @@ class EtmEngine:
                       'time_vector_fyear': self.solution_data.time_vector_cont,
                       'time_vector_mjd': self.solution_data.time_vector_cont_mjd
                       } if dump_model else None,
-            "covariance": self.fit.covar.tolist(),
+            # the 3x3 block derived from the final-fit residuals (borrowed-correlation x wrms,
+            # EtmFit.process_covariance) -- not a model/parameter covariance, hence the name
+            "residual_covariance": self.fit.covar.tolist(),
+            "cross_covariance": self.fit.cross_covariance,
             "design_matrix": dm.matrix if dump_design_matrix else None,
             "data_model_window": mask if dump_design_matrix else None,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -369,11 +387,11 @@ class EtmEngine:
         # (e.g. Django REST Framework's, which stringifies datetimes via isoformat() instead of
         # producing the {year, month, day, mjd, doy, hour, minute, second} dict).
         json_str = json.dumps(etm_dump, indent=4, sort_keys=False, cls=EtmEncoder,
-                              round_digits=6, no_round_fields=['covariance', 'parameter_sigmas',
+                              round_digits=6, no_round_fields=['residual_covariance', 'parameter_sigmas',
                                                                'parameters', 'covariance_matrix',
                                                                'lat', 'lon', 'params', 'sigmas',
                                                                'periodogram_frequencies',
-                                                               'periodogram_power'])
+                                                               'periodogram_power', 'cross_covar', 'covar'])
 
         if filename:
             if not os.path.basename(filename):
@@ -422,6 +440,37 @@ class EtmEngine:
         plot_data = PlotDataPreparer(self.config).prepare_noise_model_data(self.solution_data, self.fit)
 
         return plotter.plot_noise_model(plot_data)
+
+    def plot_noise_cross(self) -> Union[str, None]:
+        """diagnostic plot of the N-E/N-U/E-U cross-covariance (power-law cross-spectrum model, -xcov)"""
+        if self.config.modeling.status != FitStatus.POSTFIT or not self.fit.cross_covariance:
+            logger.warning('Cross-covariance plot: no cross-covariance available. It requires a fit with '
+                           'the NOISE_COVARIANCE_GLS strategy (solutions loaded from the database do not '
+                           'keep it)')
+            return None
+
+        plotter = EtmPlotter(self.config)
+        plot_data = PlotDataPreparer(self.config).prepare_noise_model_data(self.solution_data, self.fit)
+
+        return plotter.plot_noise_cross_model(plot_data)
+
+    def plot_ellipses(self) -> Union[str, None]:
+        """velocity error-ellipse plot: borrowed-residual-correlation always, power-law cross-spectrum
+        too wherever -xcov produced it (geode/etm/least_squares/cross_covariance.py)"""
+        if self.config.modeling.status != FitStatus.POSTFIT:
+            logger.warning('Ellipse plot: the ETM was not fit (solutions loaded from the database '
+                           'without a fit do not have a rate covariance)')
+            return None
+
+        plot_data = PlotDataPreparer(self.config).prepare_ellipse_data(self.solution_data, self.fit)
+        if plot_data is None:
+            logger.warning('Ellipse plot: no fitted velocity (polynomial rate term) or no covariance '
+                           'available to draw an ellipse from (solutions loaded from the database '
+                           'without force_computation do not keep it)')
+            return None
+
+        plotter = EtmPlotter(self.config)
+        return plotter.plot_ellipses(plot_data)
 
     def get_position(self, dates: Union[Date, list],
                      etm_solution: EtmSolutionType = EtmSolutionType.MODEL) -> Dict:

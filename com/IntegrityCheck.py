@@ -33,7 +33,7 @@ from geode import pyArchiveStruct
 from geode import pyPPP
 from geode import Utils
 from geode.Utils import (process_date, ecef2lla, parse_atx_antennas,
-                          determine_frame, station_list_help, add_version_argument)
+                          determine_frame, station_list_help, add_version_argument, SmartHelpFormatter)
 from geode import pyJobServer
 
 
@@ -633,10 +633,11 @@ def exclude_solutions(cnn, stnlist, start_date, end_date):
 
 def main():
 
-    parser = argparse.ArgumentParser(description='Database integrity tools, metadata check and fixing tools program')
+    parser = argparse.ArgumentParser(description='Database integrity tools, metadata check and fixing tools program',
+                                     formatter_class=SmartHelpFormatter)
 
     parser.add_argument('stnlist', type=str, nargs='+', metavar='all|net.stnm',
-                        help=station_list_help())
+                        help=SmartHelpFormatter.RAW_MARKER + station_list_help())
 
     parser.add_argument('-d', '--date_filter', nargs='+', metavar='date',
                         help='Date range filter for all operations. '

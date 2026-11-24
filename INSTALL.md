@@ -59,6 +59,18 @@ the environment, edit the environment.yml file and then run:
 conda env update --file environment.yml --name geode
 ```
 
+RINEX QC (`com/RinexQC.py`) needs the `ringo` binary — not a pip/conda package, a standalone
+executable from GSI (Japan). Install it with:
+
+```
+scripts/install_ringo.sh
+```
+
+This downloads the right platform build fresh from GSI and places it in `$HOME/.local/bin` (add
+that to your `PATH` if the script tells you to). See
+[knowledge/decisions/0005-switch-to-ringo.md](knowledge/decisions/0005-switch-to-ringo.md) for why
+RINGO and not gnssmultipath (ADR-0003/0004, now superseded).
+
 Other external dependencies that require a licence
 --------------------------------------------------
 

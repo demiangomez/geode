@@ -65,12 +65,12 @@ class DiagnosticsMixin:
                             idx = np.isin(np.array([stationID(stn) for stn in self.stations]),
                                           np.array([stationID(stn) for stn in f.constrain_stations]))
                             # pick the max relaxation and use it a dt
-                            r_field += f.enu_field * np.log10(1 + self.config.relaxation.max()/f.relaxation)
+                            r_field += f.enu_field * np.log(1 + self.config.relaxation.max()/f.relaxation)
                             # assign values to where they belong
                             parameters[:, idx] += (f.constrained_parameters *
-                                                   np.log10(1 + self.config.relaxation.max()/f.relaxation))
+                                                   np.log(1 + self.config.relaxation.max()/f.relaxation))
                             # predicted value at each sparse station (summed across relaxations)
-                            dt_weight = np.log10(1 + self.config.relaxation.max()/f.relaxation)
+                            dt_weight = np.log(1 + self.config.relaxation.max()/f.relaxation)
                             for k, stn in enumerate(self.sparse_stations):
                                 vals, _ = f.get_values_geo(stn.lon, stn.lat)
                                 if vals is not None:

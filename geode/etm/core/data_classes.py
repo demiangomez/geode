@@ -41,6 +41,13 @@ class AdjustmentResults(BaseDataClass):
     empirical_covariance: np.ndarray = field(default_factory=lambda: np.array([]))
     covariance_function_params: np.ndarray = field(default_factory=lambda: np.array([]))
     stochastic_signal: np.ndarray = 0
+    # complement of stochastic_signal (NOISE_COVARIANCE_GLS only): collocation-predicted power
+    # laws with alpha < noise_signal_alpha_min, no periodic terms, and deliberately excluding white
+    # noise (it has no meaningful predictor away from the data). Always 0 for LSQ_COLLOCATION,
+    # which has no colored band below its single kernel. Saved to/restored from the DB alongside
+    # stochastic_signal (see etm_functions/stochastic.py's Stochastic.p.params, a (2, n)
+    # array per component: row 0 signal, row 1 noise).
+    stochastic_noise: np.ndarray = 0
     spectral_index_random_noise: float = 0
     spectral_index_stochastic_noise: float = 0
     periodogram_frequencies: np.ndarray = field(default_factory=lambda: np.array([]))
@@ -67,8 +74,9 @@ class AdjustmentResults(BaseDataClass):
 
         # Convert lists to numpy arrays if needed
         array_fields = ['parameters', 'parameter_sigmas', 'residuals', 'empirical_covariance',
-                        'covariance_function_params', 'stochastic_signal', 'obs_sigmas', 'covariance_matrix',
-                        'outlier_flags', 'periodogram_frequencies', 'periodogram_power', 'noise_covariance_lag']
+                        'covariance_function_params', 'stochastic_signal', 'stochastic_noise', 'obs_sigmas',
+                        'covariance_matrix', 'outlier_flags', 'periodogram_frequencies', 'periodogram_power',
+                        'noise_covariance_lag']
         for field_name in array_fields:
             value = getattr(self, field_name)
             if isinstance(value, list):
@@ -83,6 +91,12 @@ class EtmFunctionParameterVector(BaseDataClass):
     params: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
     sigmas: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
     covar: List[np.ndarray] = field(default_factory=lambda: [np.array([]), np.array([]), np.array([])])
+    # cross-component parameter covariance of this function's own columns, keyed by pair label ('NE',
+    # 'NU', 'EU'): {'matrix': [...], 'method': ...}. See cross_covariance.py. 'method' names whichever
+    # one actually produced this block (see EtmFit.cross_covariance[pair]['method'] at the station
+    # level) -- the power-law cross-spectrum model when it was fit for this pair, otherwise the
+    # borrowed-residual-correlation fallback. Empty unless the ETM was fit with NOISE_COVARIANCE_GLS
+    cross_covar: dict = field(default_factory=dict)
 
     object: str = ''
     metadata: Optional[str] = None
@@ -214,6 +228,35 @@ class LeastSquares(BaseDataClass):
     # (8 for the joint harmonic fit, where it is also the misfit-ratio threshold of the final check; 7 for the
     # stepwise grid search)
     noise_snr_min: Optional[float] = None
+    # NOISE_COVARIANCE_GLS, joint harmonic fit only: Tukey taper applied to the misfit before its FFT, to
+    # control spectral leakage/sidelobes in the candidate search. 0 = no taper, rectangular window;
+    # 0 < alpha <= 1 = taper fraction (1 = full Hann). Default 0.75
+    noise_taper_alpha: float = 0.75
+    # NOISE_COVARIANCE_GLS, joint harmonic fit only: shortest period searched, in days (the high-frequency
+    # edge of the candidate search band -- lower = higher max frequency). None = the method's own default
+    # (NoiseCovarianceSettings.jhf_p_min)
+    noise_p_min_days: Optional[float] = None
+    # NOISE_COVARIANCE_GLS: the stochastic_signal (the part of the noise model collocation-predicted and
+    # removed from the residuals) is the detected periodic terms plus the power-law components with spectral
+    # index alpha >= this threshold; flatter power laws and the white noise stay in the residuals as noise.
+    # Default 1.0 keeps flicker (alpha=1.0) and steeper (random walk, alpha up to 1.5) as signal, and white /
+    # near-white noise (alpha=0.5, 0.75) as noise. Raise it (e.g. just above 1.0) to also treat flicker as
+    # noise and keep only random-walk-like components as signal
+    noise_signal_alpha_min: float = 1.0
+    # NOISE_COVARIANCE_GLS: fit the power-law cross-spectrum model (cross_covariance.py) to the N-E/N-U/E-U
+    # parameter cross-covariance (Cov(x_i, x_j) = K_i C_ij K_j'), reported per ETM parameter. Each component's
+    # own GLS/noise-model fit is unaffected either way. Default False: the N-E/N-U/E-U cross-covariance is
+    # instead approximated by borrowing the correlation of the daily residuals (sigma_ij = r * sigma_i * sigma_j)
+    noise_cross_covariance: bool = False
+    # NOISE_COVARIANCE_GLS: minimum data span (years, first to last solution) required to attempt a GLS fit;
+    # below this, EtmEngine falls back to ROBUST_LEAST_SQUARES. Matches EtmStackerConfig.min_time_span and
+    # clears the joint harmonic fit's own ~2-year floor for resolving the annual signal (jhf_min_cycles=2).
+    # 0 disables this check.
+    min_gls_time_span: float = 2.5
+    # NOISE_COVARIANCE_GLS: minimum span_completion (%, fraction of days with data within the station's own
+    # [first, last] window) required to attempt a GLS fit; below this (campaign-like stations) EtmEngine falls
+    # back to ROBUST_LEAST_SQUARES. 0 disables this check.
+    min_gls_span_completion: float = 20.0
     # constraints to apply to the fit
     constraints: List = field(default_factory=lambda: [])
 
@@ -274,7 +317,7 @@ class ModelingParameters(BaseDataClass):
     # shared postseismic field) is for, and dropping the column would throw that away.
     #
     # For an event the station missed entirely, the question is different. Its
-    # log10(1 + dt/tau) column over the station's own span may carry no information the
+    # log(1 + dt/tau) column over the station's own span may carry no information the
     # constant and velocity terms do not already carry, in which case fitting it does not
     # recover any postseismic signal -- it only hands an arbitrary share of the velocity
     # to a parameter that cannot be determined, and (in the stacker) keeps the station

@@ -17,6 +17,7 @@ if __name__ == "__main__":
     },
     include_package_data=True,
     scripts=[
+        'com/ApplyCountryCode.py',
         'com/ArchiveService.py',
         'com/CampaignPlanner.py',
         'com/GenerateKml.py',
@@ -41,8 +42,10 @@ if __name__ == "__main__":
         'com/OTL_FES2014b.py',
         'com/ParallelGamit.py',
         'com/PlotMapView.py',
+        'com/PlotRinexQC.py',
         'com/PrintVelocities.py',
         'com/QueryETM.py',
+        'com/RinexQC.py',
         'com/S-score.py',
         'com/ScanArchive.py',
         'com/Stacker.py',

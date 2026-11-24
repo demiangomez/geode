@@ -7,12 +7,32 @@ This module handles the cluster nodes and checks all the necessary dependencies
 before sending jobs to each node
 """
 
+import collections
+import inspect
 import time
 import _thread
 import queue
 import traceback
 import os
 import threading
+
+# dispy 4.15.2 (the latest release on PyPI as of this writing) still calls the
+# long-removed inspect.getargspec() to validate the job_status/cluster_status
+# callbacks passed to dispy.JobCluster() -- removed outright in Python 3.11
+# (deprecated since Python 3.0), so every dispy.JobCluster(..., cluster_status=...)
+# call (i.e. every JobServer(..., run_parallel=True), the default) raises
+# AttributeError on import and then a confusing "Invalid cluster_status function"
+# Exception. dispy itself has not been updated for this; shim the removed
+# function back in -- same (args, varargs, keywords, defaults) shape
+# getargspec always returned, which is all dispy's own assertions read.
+if not hasattr(inspect, 'getargspec'):
+    _ArgSpec = collections.namedtuple('ArgSpec', ['args', 'varargs', 'keywords', 'defaults'])
+
+    def _getargspec_shim(func):
+        spec = inspect.getfullargspec(func)
+        return _ArgSpec(spec.args, spec.varargs, spec.varkw, spec.defaults)
+
+    inspect.getargspec = _getargspec_shim
 
 # deps
 from tqdm import tqdm
@@ -211,6 +231,20 @@ def setup(modules):
     :return: 0
     """
     from tqdm import tqdm
+
+    # limit BLAS/OpenMP threading to 1 so each of this node's job processes (one per allocated CPU,
+    # all forked from the same dispynode daemon) doesn't additionally spawn its own multi-threaded
+    # pool and oversubscribe the machine -- this is the per-process equivalent of the os.environ[...]
+    # lines at the top of PlotETM.py/PrintVelocities.py/etc., which only affect the client process
+    # that submits jobs, never the dispynode worker processes that actually run them. Must happen
+    # before numpy/scipy (below, via 'modules') are imported for the first time in this process --
+    # these libraries read the thread-count env vars once, at BLAS initialization, and ignore any
+    # later change to os.environ.
+    os.environ['OMP_NUM_THREADS']        = '1'   # OpenMP (general)
+    os.environ['MKL_NUM_THREADS']        = '1'   # Intel MKL
+    os.environ['OPENBLAS_NUM_THREADS']   = '1'   # OpenBLAS
+    os.environ['NUMEXPR_NUM_THREADS']    = '1'   # NumExpr
+    os.environ['VECLIB_MAXIMUM_THREADS'] = '1'   # macOS Accelerate framework
 
     tqdm.write(' >> Initializing node...')
     for module in modules:

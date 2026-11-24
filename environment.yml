@@ -3,13 +3,12 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - python=3.10
-  - basemap
+  - python=3.11
   - geopy
   - h5py
   - matplotlib
   - networkx
-  - numpy=1.26.4
+  - numpy=2.4.6
   - pandas
   - paramiko
   - psycopg2-binary
@@ -33,7 +32,6 @@ dependencies:
     - dispy
     - hdf5storage
     - simplekml
-    - usgs-libcomcat
     - textual>=0.50.0
     - rich>=13.0.0
     - staticmap>=0.5.4

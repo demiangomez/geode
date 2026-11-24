@@ -266,7 +266,7 @@ class Model(object):
                     # for each relaxation, evaluate the model to subtract it from self.l
                     hl = np.zeros((t.shape[0],))
                     pmodel = np.zeros((3, t.shape[0]))
-                    hl[t > self.date.fyear] = np.log10(1. + (t[t > self.date.fyear] - self.date.fyear) / r)
+                    hl[t > self.date.fyear] = np.log(1. + (t[t > self.date.fyear] - self.date.fyear) / r)
                     # apply the amplitudes
                     amp = self.log_amplitude[j][i]
                     model[i] += amp * hl
@@ -1299,7 +1299,7 @@ class CoSeisJump(Jump):
         hl = np.zeros((t.shape[0], self.nr))
 
         for i, T in enumerate(self.p.relaxation):
-            hl[t > self.date.fyear, i] = np.log10(1. + (t[t > self.date.fyear] - self.date.fyear) / T)
+            hl[t > self.date.fyear, i] = np.log(1. + (t[t > self.date.fyear] - self.date.fyear) / T)
 
         # if it's both jump and decay, return ht + hl
 
@@ -2101,7 +2101,7 @@ class ETM:
                 # for each relaxation, evaluate the model to subtract it from self.l
                 hl = np.zeros((t.shape[0],))
                 pmodel = np.zeros((3, t.shape[0]))
-                hl[t > date.fyear] = np.log10(1. + (t[t > date.fyear] - date.fyear) / r)
+                hl[t > date.fyear] = np.log(1. + (t[t > date.fyear] - date.fyear) / r)
                 # apply the amplitudes
                 for j in range(3):
                     amp = event['amplitude'][i][j]

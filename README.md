@@ -37,7 +37,7 @@ Ensure the following dependencies are installed and available in your PATH:
 - **rnx2crx/crx2rnx** - https://terras.gsi.go.jp/ja/crx2rnx.html
 - **GPSPACE** - https://github.com/demiangomez/GPSPACE
 - **PostgreSQL** (server)
-- **Python 3.10**
+- **Python 3.11**
 
 ### Database Setup
 
@@ -162,4 +162,4 @@ BSD 3-Clause License
 
 ## Support
 
-For questions, issues, or contributions, please open an issue on the [GitHub repository](https://github.com/demiangomez/Parallel.GAMIT).
+For questions, issues, or contributions, please open an issue on the [GitHub repository](https://github.com/demiangomez/geode).

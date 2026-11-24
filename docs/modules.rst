@@ -1,5 +1,5 @@
-Parallel.GAMIT
-==============
+GeoDE
+=====
 
 .. toctree::
    :maxdepth: 4

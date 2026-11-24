@@ -314,7 +314,9 @@ def test_summary(case):
         assert [p['period_d'] for p in nm['periodic']] == pytest.approx(list(1 / r.final.f))
         assert [p['snr'] for p in nm['periodic']] == pytest.approx(list(r.detection.snr))
         if r.detection.method == 'joint':
-            assert len(diag['spec_f_cpy']) == len(diag['spec_r_reference']) == r.detection.band.size
+            # the diagnostic figure's spectrum spans the whole frequency range (DC excluded), not just the
+            # searched band -- see NoiseModelResult.summary() and JointDetection.spec_r_wide
+            assert len(diag['spec_f_cpy']) == len(diag['spec_r_reference']) == r.detection.spec_f.size - 1
             assert len(nm['candidates']) == len(r.detection.candidates)
             assert [p['final_check'] == 'added' for p in nm['periodic']] == list(np.isin(r.final.f,
                                                                                       r.detection.check_added))
@@ -350,6 +352,7 @@ def test_noise_model_figure(case, tmp_path):
         config.plotting_config.filename = str(tmp_path) + os.sep
         nm = r.summary()
         plot_data = NoiseModelPlotData(station_id='TST.CASE', solution_type='ppp', stack_name='ppp',
-                                       completion=100., latitude=0., longitude=0., noise_models=[nm, {}, nm])
+                                       completion=100., span_completion=100., latitude=0., longitude=0.,
+                                       noise_models=[nm, {}, nm])
         EtmPlotter(config).plot_noise_model(plot_data)
-        assert (tmp_path / (config.build_filename() + '_noise.png')).is_file()
+        assert (tmp_path / (config.build_filename() + '_covariance.png')).is_file()

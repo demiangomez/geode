@@ -5,7 +5,7 @@ Author: Demian D. Gomez
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from scipy.optimize import curve_fit
 from scipy.signal import lombscargle
@@ -26,6 +26,7 @@ from ..core.data_classes import AdjustmentResults
 from ..data.solution_data import SolutionData
 from ..least_squares.ls_collocation import gaussian_func
 from ..least_squares.noise_covariance import estimate_noise_model, NoiseCovarianceSettings, DETECTION_METHODS
+from ..least_squares import cross_covariance as xcov
 
 
 class AdjustmentStrategyException(Exception):
@@ -632,6 +633,11 @@ class LeastSquaresCollocation(AdjustmentStrategy):
             omega += vp.T @ p[i] @ vp
             s = e
 
+        # LeastSquaresCollocation has a single correlated kernel (css/csz above) plus a purely
+        # diagonal (white) crr -- there is no further colored band below it to call "noise" without
+        # it being white noise, which is deliberately excluded (see NoiseCovarianceGLS.adjust())
+        results.stochastic_noise = np.zeros_like(time_vector_cont_mjd, dtype=float)
+
         # wrms of the database
         self.so = np.sqrt(np.sum(omega) / self.dof)
         # results.wrms = np.sqrt((results.residuals.T @ results.residuals) / self.dof) * self.so
@@ -648,7 +654,8 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
     with projected kernels, plus automatically detected periodic terms. RobustLeastSquares flags the
     outliers first; outliers are excluded from the noise model and the GLS (treated as missing days).
     The stochastic signal is the collocation prediction of the detected periodic terms plus the power laws with
-    alpha >= 1 (flicker and steeper); flatter power laws and the white noise stay in the residuals.
+    alpha >= lsq.noise_signal_alpha_min (default 1.0: flicker and steeper); flatter power laws and the white
+    noise stay in the residuals.
     """
     # GeoDE works in meters, the noise model in mm (the units of the method's spec)
     scale = 1000.
@@ -662,12 +669,23 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         # the noise model works in mm: the minimum white variance is the floor squared [mm^2]
         self.settings = NoiseCovarianceSettings(variance_factors=lsq.noise_variance_factors,
                                                 white_min=lsq.noise_white_floor_mm ** 2,
-                                                detection=lsq.noise_detection)
+                                                detection=lsq.noise_detection,
+                                                signal_alpha_min=lsq.noise_signal_alpha_min,
+                                                compute_estimator=lsq.noise_cross_covariance,
+                                                jhf_taper_alpha=lsq.noise_taper_alpha)
         if lsq.noise_snr_min is not None:
             if lsq.noise_snr_min <= 0:
                 raise ValueError(f'NoiseCovarianceGLS: the SNR threshold must be positive ({lsq.noise_snr_min})')
             # only the threshold of the detection in use matters
             self.settings.jhf_snr_min = self.settings.sgs_snr_min = float(lsq.noise_snr_min)
+        if lsq.noise_p_min_days is not None:
+            if lsq.noise_p_min_days <= 0:
+                raise ValueError(f'NoiseCovarianceGLS: p_min must be positive days ({lsq.noise_p_min_days})')
+            self.settings.jhf_p_min = float(lsq.noise_p_min_days)
+        # one NoiseModelResult per component (N, E, U), kept by EtmFit.process_cross_covariance after
+        # all three have been fit; None where the noise model could not be estimated (robust-fit fallback)
+        self.noise_models: List[object] = [None, None, None]
+        self.noise_model_mjd0: List[int] = [None, None, None]
 
     def adjust(self, design_matrix: DesignMatrix, observations: np.ndarray,
                weights: WeightBuilder,
@@ -695,6 +713,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             logger.warning('NoiseCovarianceGLS: not enough inliers to estimate the noise model, '
                            'keeping the robust fit')
             rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
+            rls.stochastic_noise = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         mjd = np.rint(time_vector_mjd).astype(int)
@@ -703,6 +722,7 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             logger.warning('NoiseCovarianceGLS: epochs are not unique days in increasing order, '
                            'keeping the robust fit')
             rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
+            rls.stochastic_noise = np.zeros(time_vector_cont_mjd.shape)
             return rls
 
         has_constraints = bool(np.any(n_neq_left))
@@ -718,7 +738,15 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             logger.warning(f'NoiseCovarianceGLS: could not estimate the noise model ({e}), '
                            f'keeping the robust fit')
             rls.stochastic_signal = np.zeros(time_vector_cont_mjd.shape)
+            rls.stochastic_noise = np.zeros(time_vector_cont_mjd.shape)
             return rls
+
+        comp_idx = kwargs.get('component')
+        if comp_idx is not None:
+            # kept for the cross-component covariance step (EtmFit.process_cross_covariance), run once
+            # all three components are done; never read back into this component's own result
+            self.noise_models[comp_idx] = nm
+            self.noise_model_mjd0[comp_idx] = int(mjd0)
 
         gls = nm.gls
         results = AdjustmentResults()
@@ -736,6 +764,11 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
         results.stochastic_signal = self._signal_at(nm.signal, np.rint(time_vector_cont_mjd).astype(int) - mjd0) / s
         signal_obs = self._signal_at(nm.signal, mjd - mjd0) / s
         results.residuals = observations - a @ results.parameters - signal_obs
+        # noise: collocation prediction of the power laws below signal_alpha_min only (no periodic
+        # terms, no white noise/nugget -- see noise_covariance.estimate_noise_model). Dense like the
+        # signal, not the raw residuals: this deliberately excludes the white/near-white measurement
+        # noise, which has no meaningful predictor away from the data it was observed at
+        results.stochastic_noise = self._signal_at(nm.noise, np.rint(time_vector_cont_mjd).astype(int) - mjd0) / s
 
         results.wrms = rls.wrms * self.so
         results.outlier_flags = inliers
@@ -898,14 +931,30 @@ class NoiseCovarianceGLS(AdjustmentStrategy):
             if kind != 'final_snr':
                 logger.info(f'{tag}: flag: {flag}')
 
-        def alpha(ea) -> str:
-            # band as periods [d], longest first (ea.f_low, ea.f_high in cycles/yr)
-            if ea.band_empty:
-                # the steep part never dominates the floor: alpha is the local slope at 1/N
-                return f'{ea.alpha:.2f} (local at {365.25 / ea.f_low:.0f} d)'
-            return f'{ea.alpha:.2f} ({365.25 / ea.f_low:.0f}-{365.25 / ea.f_high:.0f} d)'
+        # weight (variance) of each power-law-noise (PLN) basis function, reference (no periodic terms)
+        # vs. final (with periodic terms): what the effective alpha right below is computed from. White
+        # noise is not part of this basis (it's the separate "white" value in the colored/white line above)
+        logger.info(f'{tag}: {"PLN basis weight [mm^2]":<44} {"reference":>14} {"final":>14}')
+        for alpha_i, w_ref, w_fin in zip(nm.settings.alphas, ref.w, fin.w):
+            logger.info(f'{tag}:   {f"alpha = {alpha_i:.2f}":<42} {w_ref:14.3f} {w_fin:14.3f}')
 
-        logger.info(f'{tag}: effective alpha {alpha(a_ref)} -> {alpha(a_fin)} with periodic terms')
+        def alpha(ea) -> str:
+            # the period band the slope was fit over, longest period first (ea.f_low, ea.f_high are in
+            # cycles/yr, so period = 365.25 / f); see noise_covariance.effective_alpha
+            if ea.band_empty:
+                # the steep (colored) part of the spectrum never rises above the floor (white noise +
+                # the flattest PLN component) anywhere in the data span, so there's no band where it
+                # dominates: alpha falls back to the local slope at the longest period (1/N, the span)
+                return f'{ea.alpha:.2f} (local slope at {365.25 / ea.f_low:.0f} d, steep part never dominates)'
+            return f'{ea.alpha:.2f} (period band {365.25 / ea.f_low:.0f}-{365.25 / ea.f_high:.0f} d)'
+
+        # mean log-slope of the power spectrum (see noise_covariance.effective_alpha, Section 10), before
+        # vs. after the detected periodic terms are subtracted -- not the PLN alphas above, which are a
+        # fixed basis (0.5..1.5); this is a single number summarizing their weighted mix over the band
+        # where the colored noise actually dominates white noise (the band itself can also shift slightly
+        # once periodic power is no longer being absorbed into the power-law fit)
+        logger.info(f'{tag}: effective spectral index {alpha(a_ref)} before periodic terms -> '
+                    f'{alpha(a_fin)} after')
         if np.isfinite(gls.factors[0]):
             # variance factors per part of the noise model, if requested (the white factor is undefined
             # without white noise)
@@ -924,6 +973,8 @@ class EtmFit:
         self.results: List[AdjustmentResults] = [AdjustmentResults(), AdjustmentResults(), AdjustmentResults()]
         self.design_matrix = design_matrix
         self.covar = np.array([])
+        self.cross_covariance: dict = {}
+        self._adjustment_strategy: Optional[AdjustmentStrategy] = None
         # validate design matrix now to catch any changes in jumps (before loading from the db)
         # self._validate_function_design_matrix()
         # store solution hash to compare hash value in database save process
@@ -975,6 +1026,7 @@ class EtmFit:
         neu = solution_data.transform_to_local()
 
         lsq = AdjustmentStrategy.create_instance(self.config)
+        self._adjustment_strategy = lsq
 
         try:
             while True:
@@ -1033,10 +1085,11 @@ class EtmFit:
     def load_results_to_functions(self):
         """load the results to the design matrix functions"""
 
-        # insert stochastic signal if it was estimates
+        # insert stochastic signal/noise if it was estimated
         for f in self.design_matrix.functions:
             if f.p.object == 'stochastic':
-                f.p.params = [rs.stochastic_signal for rs in self.results]
+                f.set_params([rs.stochastic_signal for rs in self.results],
+                            [rs.stochastic_noise for rs in self.results])
 
         # populate results onto etm_function
         for func in self.design_matrix.functions:
@@ -1049,6 +1102,7 @@ class EtmFit:
                                      self.results[2].outlier_flags), axis=0)
 
         self.process_covariance()
+        self.process_cross_covariance()
 
     def _validate_function_design_matrix(self):
 
@@ -1171,6 +1225,130 @@ class EtmFit:
 
         if not self._is_pd(self.covar):
             self.covar = self._nearest_pd(self.covar)
+
+    def process_cross_covariance(self):
+        """
+        Cross-component parameter covariance (cross_covariance.py): Cov(x_i, x_j) = K_i C_ij K_j' for
+        each component pair (N-E, N-U, E-U), reported per ETM parameter (every function's own
+        cross_covar block, EtmFunction.set_cross_covariance) and as a station-level summary
+        (self.cross_covariance). Uses the power-law cross-spectrum model when every component was fit
+        with NOISE_COVARIANCE_GLS and least_squares_strategy.noise_cross_covariance is set; otherwise,
+        or whenever that model can't be fit for a given pair, falls back to the borrowed-residual-
+        correlation approximation (Section 10.2) that process_covariance already uses for its single
+        overall number, generalized here to an arbitrary parameter block. Whichever one actually ran is
+        "the" cross-covariance for that pair -- cross_covar[pair] and the summary's own top-level fields
+        describe only that one method (see summary['method']); there is no second, always-present
+        fallback value to reconcile. Runs unconditionally (every pair always gets a block),
+        independently of process_covariance's own 3x3 residual-based matrix.
+
+        No separate "what would the borrowed model have given" field is reported alongside a power-law
+        result: 'daily_residual_correlation' (already part of every summary, power-law or not) *is* that
+        number -- the borrowed model is Cov(x_i, x_j) = r * sigma_i * sigma_j for every parameter pair
+        alike, with r the correlation of the same step-1 residuals 'daily_residual_correlation' is
+        computed from either way (same common-epoch mask, same v0 arrays), so a second field would only
+        ever repeat it. 'rate_correlation' is only ever populated for the power-law model, where it's a
+        genuinely new number (the fitted cross-spectrum matrix isn't rank-1, so it differs from
+        'daily_residual_correlation'); for the fallback it's always None rather than re-deriving the
+        same r from the borrowed matrix under a different name.
+        """
+        strategy = self._adjustment_strategy
+        scale = getattr(strategy, 'scale', 1.)
+        noise_models = getattr(strategy, 'noise_models', [None, None, None])
+        mjd0s = getattr(strategy, 'noise_model_mjd0', [None, None, None])
+        use_power_law = isinstance(strategy, NoiseCovarianceGLS) and strategy.settings.compute_estimator
+        irate = NoiseCovarianceGLS._rate_column(self.design_matrix)
+
+        def rate_correlation(matrix, i, j):
+            if irate is None:
+                return None
+            var_i = self.results[i].covariance_matrix[irate, irate]
+            var_j = self.results[j].covariance_matrix[irate, irate]
+            return float(matrix[irate, irate] / np.sqrt(var_i * var_j)) if var_i > 0 and var_j > 0 else None
+
+        def borrowed(i, j):
+            """the borrowed-residual-correlation matrix and r for this pair: step-1 (pre-GLS) residuals
+            at the common epochs when a noise model is available for both components (matching the
+            power-law path's own daily_residual_correlation and the spec's definition, Section 11 -- a
+            shared periodic/colored signal the GLS would otherwise explain is still present in v0,
+            unlike in the final-fit residuals), else the final-fit residuals (today's process_covariance
+            convention), used only when there's no noise model to draw v0 from at all"""
+            f = self.outlier_flags
+            if noise_models[i] is not None and noise_models[j] is not None:
+                res_i = noise_models[i].v0[f[self.results[i].outlier_flags]]
+                res_j = noise_models[j].v0[f[self.results[j].outlier_flags]]
+            else:
+                res_i, res_j = self.results[i].residuals[f], self.results[j].residuals[f]
+            return xcov.borrowed_residual_correlation(
+                res_i, res_j, self.results[i].parameter_sigmas, self.results[j].parameter_sigmas)
+
+        labels = 'NEU'
+        self.cross_covariance = {}
+        for i, j in ((0, 1), (0, 2), (1, 2)):
+            pair = f'{labels[i]}{labels[j]}'
+            f = self.outlier_flags
+            matrix, summary = None, None
+
+            if use_power_law and noise_models[i] is not None and noise_models[j] is not None:
+                ctx_i = xcov.ComponentCrossInput(label=labels[i], nm=noise_models[i], mjd0=mjd0s[i],
+                                                 pw=f[self.results[i].outlier_flags],
+                                                 k_estimator=noise_models[i].gls.k_estimator)
+                ctx_j = xcov.ComponentCrossInput(label=labels[j], nm=noise_models[j], mjd0=mjd0s[j],
+                                                 pw=f[self.results[j].outlier_flags],
+                                                 k_estimator=noise_models[j].gls.k_estimator)
+                result = xcov.fit_pair(ctx_i, ctx_j)
+                if result.method == 'power_law_cross_spectrum':
+                    # result.matrix (and theta_w/w_x inside result.summary()) are already in mm^2 --
+                    # ctx_i/ctx_j's NoiseModelResult was built from mm-scaled observations
+                    # (NoiseCovarianceGLS.scale). Convert only the matrix to GeoDE's native m^2
+                    # (matching .covar); the diagnostic summary stays in mm, same convention as the
+                    # single-component noise_model report (nm.summary(), called with no scale either)
+                    matrix = result.matrix / scale ** 2
+                    summary = result.summary()
+                    summary['rate_correlation'] = rate_correlation(matrix, i, j)
+
+            if summary is None:
+                # power-law unavailable (switch off, missing noise model, or that pair's fit fell back
+                # internally, e.g. too few common epochs or Sigma not PD)
+                matrix, r = borrowed(i, j)
+                # rate_correlation is intentionally None here, not computed from matrix: the borrowed
+                # model is Cov = r * sigma_i * sigma_j for every parameter pair alike, so re-deriving a
+                # "rate correlation" from this matrix would always just reproduce the same r already in
+                # daily_residual_correlation above -- a repeated number, not a new one (unlike the
+                # power-law branch, where the fitted matrix isn't rank-1 and rate_correlation is real)
+                summary = {'pair': pair, 'method': 'borrowed_residual_correlation',
+                          'daily_residual_correlation': float(r) if np.isfinite(r) else None,
+                          'n_common_epochs': int(f.sum()), 'flags': [],
+                          'alpha_x': None, 'theta_w': None, 'w_x': None, 'periodic': [], 'residual_norm_grid': [],
+                          'diagnostics': {}, 'rate_correlation': None,
+                          'units': {'matrix': 'parameter units squared (e.g. m^2, m^2/yr for a rate-offset term)'}}
+
+            self.cross_covariance[pair] = summary
+            self._log_cross_covariance_summary(pair, summary)
+            for func in self.design_matrix.functions:
+                if func.fit and func.param_count > 0:
+                    func.set_cross_covariance(pair, matrix, summary['method'])
+
+    @staticmethod
+    def _log_cross_covariance_summary(pair: str, summary: dict) -> None:
+        """screen output of the cross-component covariance of one pair, mirroring
+        NoiseCovarianceGLS._log_summary's style"""
+        tag = f'cross-covariance [{pair}]'
+
+        def fmt(x, spec='.3f'):
+            return 'n/a' if x is None else format(x, spec)
+
+        if summary['method'] == 'power_law_cross_spectrum':
+            periods = ', '.join(f"{p['period_d']:.1f} d" for p in summary['periodic']) or 'none'
+            logger.info(f"{tag}: power-law cross-spectrum alpha_x={fmt(summary['alpha_x'], '.3f')} "
+                        f"theta_w={fmt(summary['theta_w'])} w_x={fmt(summary['w_x'])} mm^2, "
+                        f"daily residual r={fmt(summary['daily_residual_correlation'])}, "
+                        f"periods matched: {periods}")
+        else:
+            reason = f" ({summary['flags'][0]})" if summary['flags'] else ''
+            logger.info(f"{tag}: borrowed residual correlation r="
+                        f"{fmt(summary['daily_residual_correlation'])}{reason}")
+        if summary.get('rate_correlation') is not None:
+            logger.info(f"{tag}: rate correlation {summary['rate_correlation']:.3f}")
 
     def _nearest_pd(self, a):
         """Find the nearest positive-definite matrix to input
