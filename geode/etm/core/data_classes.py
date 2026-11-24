@@ -267,6 +267,33 @@ class ModelingParameters(BaseDataClass):
     # how far back from the first observation M>=7 earthquakes are still fit as postseismic transients: a number
     # of days (default 5 years) or a Date. This is the default for every caller (PlotETM, web, scripts)
     post_seismic_back_lim: Union[int, Date] = 365 * 5
+    # Second, independent filter on the same pre-first-observation earthquakes
+    # post_seismic_back_lim admits -- and ONLY on those. An event inside the observation
+    # window is never touched by this: the station recorded the transient, separating it
+    # from the station's velocity is precisely what a joint fit (and, in the stacker, the
+    # shared postseismic field) is for, and dropping the column would throw that away.
+    #
+    # For an event the station missed entirely, the question is different. Its
+    # log10(1 + dt/tau) column over the station's own span may carry no information the
+    # constant and velocity terms do not already carry, in which case fitting it does not
+    # recover any postseismic signal -- it only hands an arbitrary share of the velocity
+    # to a parameter that cannot be determined, and (in the stacker) keeps the station
+    # out of the interseismic field entirely, since etm_builder.create_station reads
+    # is_interseismic off the first geophysical jump.
+    #
+    # This is the minimum fraction of such a column's own variance that must SURVIVE
+    # projecting out a constant and a linear trend in t over that station's epochs --
+    # i.e. how much of it is not already a straight line. Below this, the term is dropped
+    # from the jump table (JumpManager._load_earthquake_jumps).
+    #
+    # Measured as separability rather than as elapsed time because the decay is
+    # logarithmic and so never saturates: how long ago the event was does not decide
+    # this, the ratio of the span's end to its start (both measured from the event) does.
+    # A station that came online 3 years after an event and then ran for 10 retains real
+    # curvature; one that came online 4 years after an event and ran for 2.6 does not,
+    # even though the elapsed times are nearly the same. 0 disables the filter, fitting
+    # every event back to the post_seismic_back_lim window however flat its column.
+    postseismic_min_separability: float = 0.01
 
     # General status of the fit process
     status: FitStatus = FitStatus.PREFIT

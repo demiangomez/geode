@@ -44,8 +44,10 @@ def _stacker_signature(config: EtmStackerConfig) -> dict:
     Snapshot of every EtmStackerConfig field that determines which earthquakes end up
     in a station's jump list (and, via relaxation, the shape of its postseismic
     columns): earthquake_magnitude_limit and post_seismic_back_lim decide the s-score
-    scan in prepare_earthquake_list; relaxation decides the decay columns every jump
-    gets; earthquakes_cherry_picked is that scan's resolved output (already final by
+    scan in prepare_earthquake_list; postseismic_min_separability drops the ones the
+    station missed whose decay column is flat over its span; relaxation decides the decay
+    columns every surviving jump gets, and therefore also what that test is applied to;
+    earthquakes_cherry_picked is that scan's resolved output (already final by
     the time a station is built, since prepare_earthquake_list runs first). A JSON
     cached under different values of any of these no longer matches what this run would
     build from the database.
@@ -59,6 +61,7 @@ def _stacker_signature(config: EtmStackerConfig) -> dict:
     return {
         'earthquake_magnitude_limit': float(config.earthquake_magnitude_limit),
         'post_seismic_back_lim': back_lim_sig,
+        'postseismic_min_separability': float(config.postseismic_min_separability),
         'relaxation': sorted(float(r) for r in config.relaxation),
         'earthquakes_cherry_picked': sorted(str(e) for e in config.earthquakes_cherry_picked),
     }
@@ -76,6 +79,9 @@ def _signatures_equal(a: dict, b: dict) -> bool:
         return False
     if len(a['relaxation']) != len(b['relaxation']) or not all(
             math.isclose(x, y, rel_tol=1e-9) for x, y in zip(a['relaxation'], b['relaxation'])):
+        return False
+    if not math.isclose(a['postseismic_min_separability'], b['postseismic_min_separability'],
+                        rel_tol=1e-9):
         return False
     if a['earthquakes_cherry_picked'] != b['earthquakes_cherry_picked']:
         return False
@@ -130,6 +136,7 @@ def apply_config(config: EtmStackerConfig, network_code: str, station_code: str,
     etm_config.validation.max_condition_number = config.max_condition_number
     etm_config.modeling.check_jump_collisions = False  # turn off jump collision check. Add all jumps.
     etm_config.modeling.relaxation = config.relaxation
+    etm_config.modeling.postseismic_min_separability = config.postseismic_min_separability
     etm_config.plotting_config.plot_show_outliers = True
     if config.gls_for_all_stations:
         etm_config.modeling.least_squares_strategy.adjustment_model = AdjustmentModels.NOISE_COVARIANCE_GLS
@@ -245,6 +252,8 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         try:
             unconstrained_config = EtmConfig(network_code, station_code, cnn=cnn)
             unconstrained_config.modeling.relaxation = np.array([np.max(config.relaxation)])
+            unconstrained_config.modeling.postseismic_min_separability = \
+                config.postseismic_min_separability
             if config.gls_for_all_stations:
                 unconstrained_config.modeling.least_squares_strategy.adjustment_model = \
                     AdjustmentModels.NOISE_COVARIANCE_GLS
@@ -458,7 +467,8 @@ def build_station_job(job: Tuple[EtmStackerConfig, str, str, Optional[str], Opti
 
 
 def build_free_fit(cnn: Cnn, network_code: str, station_code: str,
-                   data_model_window: Optional[List[List[float]]] = None) -> Optional[EtmEngine]:
+                   data_model_window: Optional[List[List[float]]] = None,
+                   postseismic_min_separability: Optional[float] = None) -> Optional[EtmEngine]:
     """
     Compute the same "Step 1" unconstrained ETM fit (polynomial + periodic + whatever
     mechanical/default-detected jumps it finds on its own, no cherry-picked earthquakes)
@@ -487,6 +497,8 @@ def build_free_fit(cnn: Cnn, network_code: str, station_code: str,
         unconstrained_config = EtmConfig(network_code, station_code, cnn=cnn)
         unconstrained_config.modeling.least_squares_strategy.adjustment_model = \
             AdjustmentModels.NOISE_COVARIANCE_GLS
+        if postseismic_min_separability is not None:
+            unconstrained_config.modeling.postseismic_min_separability = postseismic_min_separability
         if data_model_window is not None:
             unconstrained_config.modeling.data_model_window = data_model_window
             # EtmConfig.__init__ may have already loaded a station-specific
@@ -508,7 +520,7 @@ def build_free_fit(cnn: Cnn, network_code: str, station_code: str,
         return None
 
 
-def build_free_fit_job(job: Tuple[str, str, Optional[List[List[float]]]]
+def build_free_fit_job(job: Tuple[str, str, Optional[List[List[float]]], Optional[float]]
                        ) -> Tuple[str, str, Optional[EtmEngine], Optional[str]]:
     """
     multiprocessing worker for constraints.sparse.build_sparse_free_fits -- same
@@ -516,15 +528,16 @@ def build_free_fit_job(job: Tuple[str, str, Optional[List[List[float]]]]
     for why), reused here because a sparse station's free fit is exactly the same kind
     of slow, independent-per-station unit of work (always NOISE_COVARIANCE_GLS -- see
     build_free_fit) that motivated parallelizing the full-station build loop in the
-    first place. job is (network_code, station_code, data_model_window), matching
-    build_free_fit's own arguments bundled into one tuple.
+    first place. job is (network_code, station_code, data_model_window,
+    postseismic_min_separability), matching build_free_fit's own arguments bundled into
+    one tuple.
 
     Returns (network_code, station_code, etm, error), same convention as
     build_station_job: etm is None both for build_free_fit's own ordinary None return
     and for an exception it doesn't itself handle, in which case error carries the
     traceback.
     """
-    network_code, station_code, data_model_window = job
+    network_code, station_code, data_model_window, postseismic_min_separability = job
 
     import matplotlib
     matplotlib.use('Agg', force=True)
@@ -533,7 +546,9 @@ def build_free_fit_job(job: Tuple[str, str, Optional[List[List[float]]]]
     try:
         with threadpool_limits(limits=1):
             cnn = Cnn('gnss_data.cfg')
-            etm = build_free_fit(cnn, network_code, station_code, data_model_window=data_model_window)
+            etm = build_free_fit(cnn, network_code, station_code,
+                                 data_model_window=data_model_window,
+                                 postseismic_min_separability=postseismic_min_separability)
     except Exception:
         import traceback
         return network_code, station_code, None, traceback.format_exc()

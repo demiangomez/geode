@@ -1020,6 +1020,21 @@ def main():
     parser.add_argument('-s_score', '--s_score_mag_limit', type=float, default=6.0, metavar='magnitude',
                         help="Limit the s-score search to earthquakes with magnitude >= {magnitude}. Default is 6.0")
 
+    parser.add_argument('-ps_separability', '--postseismic_min_separability', type=float,
+                        default=def_config.postseismic_min_separability, metavar='fraction',
+                        help="Drop an earthquake's postseismic term from a station's ETM when the "
+                             "station has no data from before that event AND less than this "
+                             "fraction of the decay column's variance survives removing a constant "
+                             "and a trend over the station's own span -- i.e. the column is "
+                             "effectively a straight line, so fitting it recovers no postseismic "
+                             "signal while taking an arbitrary share of the velocity, and it "
+                             "keeps the station out of the interseismic field. An event the "
+                             "station actually observed is never dropped, however collinear: "
+                             "separating that from velocity is what the stacker is for. "
+                             f"Default {def_config.postseismic_min_separability:g}; 0 disables the "
+                             "filter and fits every event back to the post_seismic_back_lim "
+                             "window however flat its column.")
+
     parser.add_argument('-sparse', '--sparse_constraints', action='store_true',
                         default=def_config.sparse_constraints_enabled,
                         help="Let sparse stations (those failing -sc/-ts) feed back into the shared "
@@ -1175,6 +1190,7 @@ def main():
             tension=args.tension,
             min_span_completion=args.min_span_completion,
             min_time_span=args.min_time_span,
+            postseismic_min_separability=args.postseismic_min_separability,
             sparse_constraints_enabled=args.sparse_constraints,
             sparse_validity_override=(process_date_str(args.sparse_validity_date).fyear
                                       if args.sparse_validity_date else None),

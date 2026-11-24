@@ -86,9 +86,14 @@ class JumpManager:
                    f"catalog earthquake(s)")
 
         added = 0
+        inseparable = []
         for eq in self.config.modeling.earthquake_jumps:
             if (self.date_min <= eq.date <= self.date_max or (sdate <= eq.date <= self.date_max
                     and eq.magnitude >= 7)):
+
+                if not self._postseismic_is_separable(eq.date, time_vector):
+                    inseparable.append(eq)
+                    continue
 
                 jump = JumpFunction(
                     config=self.config,
@@ -105,8 +110,59 @@ class JumpManager:
                 self.add_jump(jump, self.config.modeling.check_jump_collisions)
                 added += 1
 
+        if inseparable:
+            logger.info(
+                f"Skipped {len(inseparable)} pre-observation earthquake(s) whose decay column is "
+                f"indistinguishable from a trend over this station's span: "
+                + ', '.join(f'{eq.date.yyyyddd()} ({self.date_min.fyear - eq.date.fyear:.1f} yr '
+                            f'before first obs)' for eq in inseparable))
+
         logger.info(f"Added {added} of {len(self.config.modeling.earthquake_jumps)} "
                    f"catalog earthquake(s) to the jump table")
+
+    def _postseismic_is_separable(self, eq_date: Date, time_vector: np.ndarray) -> bool:
+        """
+        Whether this earthquake's postseismic decay column carries anything the station's
+        own constant and velocity terms do not already carry, measured as the fraction of
+        the column's variance that survives projecting out a constant and a linear trend
+        in t over the station's own epochs, against
+        ModelingParameters.postseismic_min_separability.
+
+        Always True for an event inside the observation window, whatever that fraction
+        is: the station recorded the transient, and telling it apart from the velocity is
+        the job of the joint fit (and of the stacker's shared postseismic field across
+        stations), not a reason to delete the column. The test applies only to an event
+        the station missed entirely -- the same ones _validate_jump_configuration would
+        demote to POSTSEISMIC_ONLY -- which is why the cutoff below is time_vector.min(),
+        matching that function's own test rather than approximating it.
+
+        A jump carrying several relaxation terms is kept whenever its most separable one
+        clears the threshold; it is dropped only if every one of its columns is flat.
+        """
+        tolerance = self.config.modeling.postseismic_min_separability
+        if not tolerance or eq_date.fyear >= time_vector.min():
+            return True
+
+        relaxation = np.atleast_1d(self.config.modeling.relaxation)
+        if relaxation.size == 0 or time_vector.size < 3:
+            return True
+
+        # orthonormal basis for span(1, t); projecting onto it is the same "remove a
+        # straight line" the velocity term would do inside the fit itself
+        q, _ = np.linalg.qr(np.column_stack([np.ones(time_vector.size),
+                                             time_vector - time_vector.min()]))
+
+        for tau in relaxation:
+            column = np.log10(1.0 + (time_vector - eq_date.fyear) / tau)
+            centered = column - column.mean()
+            total = float(centered @ centered)
+            if total <= 0.:
+                continue
+            residual = column - q @ (q.T @ column)
+            if float(residual @ residual) / total >= tolerance:
+                return True
+
+        return False
 
     def _load_mechanical_jumps(self, time_vector: np.ndarray) -> None:
         """Load mechanical user_jumps from station metadata and database"""

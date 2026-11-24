@@ -27,6 +27,14 @@ class EtmStackerConfig(BaseDataClass):
     max_condition_number: float = 15
     earthquake_magnitude_limit: float = 8.0
     post_seismic_back_lim: Union[float, Date] = field(default_factory=lambda: Date(year=1990, doy=1))
+    # Passed straight through to ModelingParameters.postseismic_min_separability on
+    # every station this stacker builds (etm_builder.apply_config) -- see that field for
+    # what it measures. It matters more here than for a standalone ETM: a flat
+    # pre-installation decay term also keeps a station out of the interseismic field
+    # (etm_builder.create_station), and with post_seismic_back_lim reaching back to 1990
+    # that was enough to leave an 11-degree-wide stack with three constraining
+    # interseismic stations.
+    postseismic_min_separability: float = 0.01
     relaxation: np.ndarray = field(default_factory=lambda: np.array([0.05, 1.0]))
     earthquakes_cherry_picked: list = field(default_factory=list)
     earthquakes_to_remove: list = field(default_factory=list)

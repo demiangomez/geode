@@ -635,8 +635,9 @@ def build_sparse_free_fits(stacker, cnn: Cnn) -> None:
 
     if stacker.config.parallel_workers <= 1 or len(stacker.sparse_stations) <= 1:
         for stn in stacker.sparse_stations:
-            stn.free_fit = etm_builder.build_free_fit(cnn, stn.network_code, stn.station_code,
-                                                      data_model_window=window)
+            stn.free_fit = etm_builder.build_free_fit(
+                cnn, stn.network_code, stn.station_code, data_model_window=window,
+                postseismic_min_separability=stacker.config.postseismic_min_separability)
         return
 
     # Same local-cores-only multiprocessing as EtmStacker.add_stations_parallel, and for
@@ -645,7 +646,9 @@ def build_sparse_free_fits(stacker, cnn: Cnn) -> None:
     # unlike add_stations_parallel's per-station config.
     import multiprocessing as mp
 
-    jobs = [(stn.network_code, stn.station_code, window) for stn in stacker.sparse_stations]
+    jobs = [(stn.network_code, stn.station_code, window,
+             stacker.config.postseismic_min_separability)
+            for stn in stacker.sparse_stations]
 
     tqdm.write(f' -- Building {len(jobs)} sparse-station free fit(s) across '
               f'{stacker.config.parallel_workers} worker processes')
