@@ -7,7 +7,7 @@ from typing import List, Tuple, TYPE_CHECKING
 import numpy as np
 from tqdm import tqdm
 
-from ....Utils import stationID, azimuthal_equidistant
+from ....Utils import stationID, azimuthal_equidistant, print_yellow
 from ....elasticity.elastic_interpolation import get_qpw, get_radius
 from ...core.data_classes import Earthquake
 
@@ -286,7 +286,7 @@ class FaultGeometry:
 
             # Full solve for table printout
             n_mat = a.T @ a + p
-            x = np.linalg.solve(n_mat, a.T @ obs)
+            x = self._solve_sw_okada(n_mat, a.T @ obs, f'{self.event.id} plane {i}, all stations')
             fitted = a @ x
             v = obs - fitted
 
@@ -295,7 +295,8 @@ class FaultGeometry:
                 grid, sites_lon_filt, sites_lat_filt, strike, dip, mask, spline_tension
             )
             n_mat_filt = a_filt.T @ a_filt + p_filt
-            x_filt = np.linalg.solve(n_mat_filt, a_filt.T @ obs_filt)
+            x_filt = self._solve_sw_okada(n_mat_filt, a_filt.T @ obs_filt,
+                                          f'{self.event.id} plane {i}, plane-determination subset')
             rms_h = rms_horizontal(obs_filt - a_filt @ x_filt, N_filt)
 
             a_list.append(a)
@@ -343,6 +344,37 @@ class FaultGeometry:
                    f'dip={self.event.dip[self.plane]:.1f}')
 
         return a_list[self.plane], p_list[self.plane]
+
+    @staticmethod
+    def _solve_sw_okada(n_mat: np.ndarray, rhs: np.ndarray, label: str) -> np.ndarray:
+        """
+        Solve the SW-Okada normal system (a.T @ a + p) in the least-squares sense, the
+        same way SWOkada._compute_interpolation_coefficients solves the identical matrix
+        and for the same reason: it is genuinely rank-deficient for some station
+        geometries, and np.linalg.solve raises LinAlgError rather than coping.
+
+        The deficiency lives in the vertical sub-block. Neither term that regularizes it
+        necessarily spans the direction the spline responses leave weak: Poz is an
+        annihilator of the vertical Okada column space, so its rank is only N minus the
+        number of vertical patches, and the force-balance tie (C_z) adds a single rank-1
+        direction on top. With few stations those do not between them cover the null
+        space -- us20005j32 with four stations gives a 12x12 normal matrix of rank 11,
+        the missing direction entirely inside the 4x4 vertical block.
+
+        A minimum-norm solution is the right answer here rather than a fallback. The
+        result is used only for the residuals that pick between the two nodal planes and
+        for the diagnostic table; a direction neither the data nor the regularization
+        constrains contributes nothing to those residuals, so setting it to zero is
+        exactly what is wanted. For a full-rank system this is identical to solve.
+        """
+        x, _, rank, _ = np.linalg.lstsq(n_mat, rhs, rcond=None)
+
+        if rank < n_mat.shape[0]:
+            tqdm.write(print_yellow(
+                f'  SW-Okada normal matrix for {label} is rank {rank} of {n_mat.shape[0]}; '
+                f'solved in the least-squares sense'))
+
+        return x
 
     def _compute_sw_okada_system(self, grid: 'GridSystem',
                                   stnlon: np.ndarray, stnlat: np.ndarray,
