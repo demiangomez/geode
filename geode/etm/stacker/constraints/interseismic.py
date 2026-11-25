@@ -115,7 +115,7 @@ class InterseismicConstraint(BaseConstraint):
         return target_idx, idx
 
     def short_description(self):
-        return f"InterseismicConstraint()"
+        return "InterseismicConstraint()"
 
     def __str__(self) -> str:
         """String representation for debugging."""

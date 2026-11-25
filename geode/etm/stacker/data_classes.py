@@ -3,7 +3,7 @@ ETM Stacker data classes.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Union, TYPE_CHECKING
+from typing import List, Tuple, Union, TYPE_CHECKING
 import numpy as np
 
 from ..core.type_declarations import JumpType
@@ -37,7 +37,6 @@ class EtmStackerConfig(BaseDataClass):
     postseismic_min_separability: float = 0.01
     relaxation: np.ndarray = field(default_factory=lambda: np.array([0.05, 1.0]))
     earthquakes_cherry_picked: list = field(default_factory=list)
-    earthquakes_to_remove: list = field(default_factory=list)
     station_weight_scale: float = 1.0
     interseismic_h_sigma: float = 0.0005
     interseismic_v_sigma: float = 0.001
@@ -79,29 +78,6 @@ class EtmStackerConfig(BaseDataClass):
     # data strength -- see constraints/sparse._collapse_to_tempered_constraint. False
     # (default) keeps the original direct-injection behavior.
     sparse_constraint_mode: bool = False
-    # Temporary A/B switch for three corrections to the sparse-station injection
-    # (constraints/sparse.py), all of which were measured to be necessary before a
-    # sparse station helps rather than hurts the shared solution:
-    #
-    #   1. The per-field injection weight in _collapse_to_tempered_constraint is the
-    #      field tolerance combined WITH the station's own estimated covariance
-    #      (pinv(cov_theta + diag(sigma**2))) rather than a flat 1/sigma**2. The flat
-    #      form discards the cross-field correlations the joint pseudo-inverse was
-    #      computed to preserve, and claims full field-tolerance precision along
-    #      directions this station's own data barely determines.
-    #   2. The local reduction carries its own intercept column, reduced out by Schur
-    #      complement before injection. Without one, the difference between the free
-    #      fit's anchor epoch (the validity date -- see etm_builder.build_free_fit) and
-    #      the constrained ETM's own reference epoch (which supplies the basis columns)
-    #      has nowhere to go but the velocity and decay amplitudes.
-    #   3. clean_station_data does not subtract a free-fit mechanical jump that the
-    #      constrained ETM already removed from the data as a prefit model.
-    #
-    # True (default) applies all three. False restores the behavior that existed before
-    # them, for side-by-side comparison only -- see the interactive sparse_fixes
-    # command. This switch (and the False path) is meant to be deleted once the
-    # comparison is settled, rather than kept as a reachable route back to the bug.
-    sparse_injection_fixes: bool = True
     # On by default: tightens (never loosens) the mutual-constraint weight on a full
     # station's own velocity/postseismic-decay ties when that station's own
     # normal-equation diagonal implies far more confidence than its external tie, which
@@ -250,14 +226,6 @@ class Station:
         polynomial = self.etm.design_matrix.get_polynomial()
         return polynomial.column_index[1] + self.normal_equations.parameter_start_idx
 
-    def get_periodic_column(self, frequency: float):
-        """By default returns the index of sin."""
-        periodic = self.etm.design_matrix.get_periodic()
-        if periodic is not None:
-            return np.array(periodic.get_periodic_cols(frequency)) + self.normal_equations.parameter_start_idx
-        else:
-            return None
-
     def get_coseismic_column(self, jump_or_id: Union[Earthquake, str]):
         """Get the column of a given earthquake or earthquake id."""
         if isinstance(jump_or_id, Earthquake):
@@ -293,12 +261,6 @@ class Station:
     def get_constrained_velocity(self, solution, covariance):
         """Return the velocity and sigma."""
         idx = self.get_velocity_column()
-        tp = solution.shape[1]
-        return solution[:, idx], np.sqrt(np.diag(covariance)[[idx, idx + tp, idx + 2 * tp]])
-
-    def get_constrained_periodic(self, frequency: float, solution, covariance):
-        """Return the periodic and sigma."""
-        idx = self.get_periodic_column(frequency)
         tp = solution.shape[1]
         return solution[:, idx], np.sqrt(np.diag(covariance)[[idx, idx + tp, idx + 2 * tp]])
 

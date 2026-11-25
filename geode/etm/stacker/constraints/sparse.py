@@ -48,9 +48,14 @@ component, inside reduce_local_system -- never injected.
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+import logging
+
 import numpy as np
 from tqdm import tqdm
 
+logger = logging.getLogger(__name__)
+
+from .. import console
 from .. import etm_builder
 from ..data_classes import Station
 from ...core.type_declarations import JumpType
@@ -88,8 +93,8 @@ def dedup_colocated_stations(stations: List[Station],
                 dropped.add(int(j))
 
     if len(keep) < len(stations):
-        tqdm.write(f' -- Dropped {len(stations) - len(keep)} co-located station(s) from '
-                   f'interpolation sources (< {threshold_km * 1000:.0f} m apart)')
+        logger.info(f'Dropped {len(stations) - len(keep)} co-located station(s) from '
+                    f'interpolation sources (< {threshold_km * 1000:.0f} m apart)')
 
     return keep
 
@@ -201,7 +206,7 @@ def overall_validity_date(stacker) -> Optional[float]:
     return first_obs[n - 1]
 
 
-def clean_station_data(stn: Station, skip_prefit_jumps: bool = True
+def clean_station_data(stn: Station
                        ) -> Tuple[np.ndarray, np.ndarray, List[np.ndarray], List[np.ndarray], List[np.ndarray]]:
     """
     Return (time_vector_fyear, time_vector_mjd, cleaned[3], inlier_mask[3], noise_lag[3])
@@ -225,15 +230,13 @@ def clean_station_data(stn: Station, skip_prefit_jumps: bool = True
     Empty when stn.free_fit's adjustment model wasn't NoiseCovarianceGLS or it fell back
     to the plain robust fit -- the caller treats that as "no noise model available".
 
-    skip_prefit_jumps (EtmStackerConfig.sparse_injection_fixes) leaves out any free-fit
-    mechanical jump whose epoch already appears in stn.etm's own prefit_models. For a
-    station built from the database, etm_builder.build_etm installs the mechanical jumps
+    A free-fit mechanical jump whose epoch already appears in stn.etm's own
+    prefit_models is NOT subtracted: etm_builder.build_etm installs the mechanical jumps
     it detected as prefit models and deactivates their design columns, so
-    transform_to_local above has ALREADY removed them from l -- subtracting the free
-    fit's own independent estimate of the same jump on top of that leaves a spurious
-    step in the cleaned series, which the fields can't model and the local reduction
-    therefore absorbs into the velocity/decay amplitudes. Pass False only to reproduce
-    the behavior that preceded this correction.
+    transform_to_local above has already removed them from l. Subtracting the free fit's
+    own independent estimate of the same jump on top of that would leave a spurious step
+    in the cleaned series, which the fields cannot model and the local reduction
+    therefore absorbs into the velocity/decay amplitudes.
     """
     etm = stn.etm
     free = stn.free_fit
@@ -248,11 +251,8 @@ def clean_station_data(stn: Station, skip_prefit_jumps: bool = True
     free_periodic = free.design_matrix.get_periodic()
 
     # Epochs (MJD) of mechanical jumps stn.etm already removed from l as prefit models.
-    prefit_mjd = set()
-    if skip_prefit_jumps:
-        for model in etm.config.modeling.prefit_models:
-            if getattr(model.p, 'object', None) == 'jump':
-                prefit_mjd.add(model.date.mjd)
+    prefit_mjd = {model.date.mjd for model in etm.config.modeling.prefit_models
+                  if getattr(model.p, 'object', None) == 'jump'}
 
     # NEU (fit/solution_data component order) -> ENU (the rest of the system's order),
     # matching the convention _create_normal_equations already uses.
@@ -301,24 +301,21 @@ def compute_sparse_system_contribution(stacker, stn: Station
     neq_contrib/ceq_contrib, or the variance-of-unit-weight bookkeeping goes wrong.
     """
     if stn.free_fit is None:
-        tqdm.write(f' -- Sparse station {stationID(stn)} has no free fit; skipping sparse contribution')
+        logger.info(f'Sparse station {stationID(stn)} has no free fit; skipping')
         return None
 
     fields = build_fields(stacker, stn)
     if not fields:
-        tqdm.write(f' -- Sparse station {stationID(stn)}: no interpolated field reaches it; skipping')
+        logger.info(f'Sparse station {stationID(stn)}: no interpolated field reaches it')
         return None
 
-    fixes = stacker.config.sparse_injection_fixes
-
     validity = overall_validity_date(stacker)
-    time_vector, time_vector_mjd, cleaned, inlier_masks, noise_lags = clean_station_data(
-        stn, skip_prefit_jumps=fixes)
+    time_vector, time_vector_mjd, cleaned, inlier_masks, noise_lags = clean_station_data(stn)
     if validity is not None:
         valid_epoch = time_vector >= validity
         n_dropped = int(np.sum(inlier_masks[0] & ~valid_epoch))
         if n_dropped:
-            tqdm.write(f' -- Sparse station {stationID(stn)}: dropping {n_dropped} epoch(s) before '
+            logger.info(f'Sparse station {stationID(stn)}: dropping {n_dropped} epoch(s) before '
                        f'{validity:.3f} (model validity: fewer than '
                        f'{stacker.config.sparse_validity_min_stations} full stations with data before then)')
         inlier_masks = [m & valid_epoch for m in inlier_masks]
@@ -353,7 +350,7 @@ def compute_sparse_system_contribution(stacker, stn: Station
             lpl += obs_contrib
             n_equations += n_obs
 
-    tqdm.write(f' -- Sparse station {stationID(stn)}: {len(fields)} field(s) '
+    logger.info(f'Sparse station {stationID(stn)}: {len(fields)} field(s) '
                f'({", ".join(f.label for f in fields)}), '
                f'{int(np.sum(inlier_masks[0]))}/{int(np.sum(inlier_masks[1]))}/'
                f'{int(np.sum(inlier_masks[2]))} inlier epochs (E/N/U)')
@@ -370,10 +367,9 @@ def reduce_local_system(stacker, stn: Station, fields: List[SparseField], cleane
     side over this sparse station's own epochs, plus (lpl, n_equations) for the
     variance-of-unit-weight bookkeeping. None when the component has no usable weight.
 
-    With EtmStackerConfig.sparse_injection_fixes (the default) the local design carries
-    an extra intercept column, which is then reduced out by Schur complement so the
-    returned system is still (n_fields, n_fields) and the caller is unchanged. That
-    intercept is not a cosmetic nuisance term: clean_station_data subtracts the free
+    The local design carries an extra intercept column, reduced out by Schur complement
+    so the returned system is still (n_fields, n_fields). That intercept is not a
+    cosmetic nuisance term: clean_station_data subtracts the free
     fit's CONSTANT, and build_free_fit anchors that constant at the network validity
     date, while SparseField.basis comes from the constrained ETM's own design matrix and
     is therefore anchored at that ETM's own reference epoch. The two differ by as much
@@ -391,11 +387,7 @@ def reduce_local_system(stacker, stn: Station, fields: List[SparseField], cleane
     estimated and discarded locally. n_equations drops by one accordingly, since one
     local parameter was spent on it.
     """
-    fixes = stacker.config.sparse_injection_fixes
-
-    phi = np.column_stack([f.basis[mask] for f in fields])
-    if fixes:
-        phi = np.column_stack([phi, np.ones(phi.shape[0])])
+    phi = np.column_stack([f.basis[mask] for f in fields] + [np.ones(int(np.sum(mask)))])
     obs = cleaned[mask]
 
     n_local, c_local, obs_contrib = _whiten_and_weight(
@@ -405,9 +397,6 @@ def reduce_local_system(stacker, stn: Station, fields: List[SparseField], cleane
         return None
 
     n_obs = int(np.sum(mask))
-    if not fixes:
-        return n_local, c_local, obs_contrib, n_obs
-
     k = len(fields)
     n_ff, n_fi, n_ii = n_local[:k, :k], n_local[:k, k:], n_local[k:, k:]
     c_f, c_i = c_local[:k], c_local[k:]
@@ -468,12 +457,10 @@ def _collapse_to_tempered_constraint(stacker, fields: List[SparseField], n_local
     shared system without first solving for a point estimate), but how much influence the
     result is allowed to have afterward.
 
-    How that weight is formed is what EtmStackerConfig.sparse_injection_fixes switches
-    (see _tempered_weight): the default combines the field tolerance with this station's
-    own estimated covariance, so the injected weight is never larger than either allows;
-    the legacy path used a flat per-field 1/sigma**2, which is not a cap at all -- it
-    overrides whatever the data said, in every direction, including ones this station's
-    own span barely determines.
+    The weight is the field tolerance combined with this station's own estimated
+    covariance (_tempered_weight), never the tolerance alone: a flat per-field
+    1/sigma**2 is not a cap, it overrides whatever the data said in every direction,
+    including ones this station's own span barely determines.
     """
     theta_hat, _, _, _ = np.linalg.lstsq(n_local, c_local, rcond=_SPARSE_CONSTRAINT_RCOND)
 
@@ -486,16 +473,6 @@ def _collapse_to_tempered_constraint(stacker, fields: List[SparseField], n_local
     keep = np.where(sigmas > 0)[0]
     if keep.size == 0:
         return neq_contrib, ceq_contrib, 0.0, 0
-
-    if not stacker.config.sparse_injection_fixes:
-        lpl = 0.0
-        for k in keep:
-            row = fields[k].row(component)
-            w = 1.0 / sigmas[k] ** 2
-            neq_contrib += w * np.outer(row, row)
-            ceq_contrib += w * row * theta_hat[k]
-            lpl += w * theta_hat[k] ** 2
-        return neq_contrib, ceq_contrib, lpl, int(keep.size)
 
     theta = theta_hat[keep]
     weight = _tempered_weight(n_local[np.ix_(keep, keep)], sigmas[keep])
@@ -589,7 +566,7 @@ def _whiten_and_weight(stn: Station, label: str, phi: np.ndarray, obs: np.ndarra
             return cholesky_whiten_design(
                 phi, obs, c_mat, f'{stationID(stn)} {label} sparse-station noise covariance')
         except np.linalg.LinAlgError as e:
-            tqdm.write(print_yellow(f' -- Sparse station {stationID(stn)} {label}: {e}; skipping component'))
+            tqdm.write(print_yellow(f'   ! Sparse station {stationID(stn)} {label}: {e}; skipping component'))
             return None, None, 0.
 
     # No GLS noise model for this component (not enough inliers, non-unique days, or the
@@ -629,7 +606,7 @@ def build_sparse_free_fits(stacker, cnn: Cnn) -> None:
     validity = overall_validity_date(stacker)
     window = [[validity, 9999.]] if validity is not None else None
     if window is not None:
-        tqdm.write(f' -- Sparse stations: free fits windowed to {validity:.3f} onward '
+        console.info(f'Free fits windowed to {validity:.3f} onward '
                    f'(model validity: fewer than {stacker.config.sparse_validity_min_stations} '
                    f'full stations with data before then)')
 
@@ -650,8 +627,8 @@ def build_sparse_free_fits(stacker, cnn: Cnn) -> None:
              stacker.config.postseismic_min_separability)
             for stn in stacker.sparse_stations]
 
-    tqdm.write(f' -- Building {len(jobs)} sparse-station free fit(s) across '
-              f'{stacker.config.parallel_workers} worker processes')
+    console.info(f'Building {len(jobs)} free fit(s) on '
+                 f'{stacker.config.parallel_workers} process(es)')
 
     results = {}
     ctx = mp.get_context('fork')
@@ -697,17 +674,15 @@ def sparse_misfit(stacker) -> List[dict]:
     same run (whether a change made the shared model predict these stations better or
     worse).
 
-    Both residuals allow the station's own constant offset (when
-    EtmStackerConfig.sparse_injection_fixes is on, which is also what reduce_local_system
-    estimates out before injecting), so the comparison is of shape, not of anchoring --
-    without that, every posterior would be dominated by the free fit's anchor epoch and
-    none of them would be comparable to each other.
+    Both residuals allow the station's own constant offset -- the same one
+    reduce_local_system estimates out before injecting -- so the comparison is of shape,
+    not of anchoring. Without that, every posterior would be dominated by the free fit's
+    anchor epoch and none of them would be comparable to each other.
     """
     if not stacker.sparse_stations or stacker.solution.size == 0:
         return []
 
     x_global = stacker.solution.ravel()
-    fixes = stacker.config.sparse_injection_fixes
     validity = overall_validity_date(stacker)
     rows: List[dict] = []
 
@@ -718,8 +693,7 @@ def sparse_misfit(stacker) -> List[dict]:
         if not fields:
             continue
 
-        time_vector, _, cleaned, inlier_masks, noise_lags = clean_station_data(
-            stn, skip_prefit_jumps=fixes)
+        time_vector, _, cleaned, inlier_masks, noise_lags = clean_station_data(stn)
         if validity is not None:
             inlier_masks = [m & (time_vector >= validity) for m in inlier_masks]
 
@@ -733,16 +707,15 @@ def sparse_misfit(stacker) -> List[dict]:
             basis = np.column_stack([f.basis[mask] for f in fields])
             obs = cleaned[c][mask]
 
-            design = np.column_stack([basis, np.ones(basis.shape[0])]) if fixes else basis
+            design = np.column_stack([basis, np.ones(basis.shape[0])])
             v_prior = obs - design @ np.linalg.lstsq(design, obs, rcond=None)[0]
 
             v_post = obs - basis @ np.array([f.row(c) @ x_global for f in fields])
-            if fixes:
-                v_post = v_post - np.mean(v_post)
+            v_post = v_post - np.mean(v_post)
 
             n = int(np.sum(mask))
             dof_prior = max(n - design.shape[1], 1)
-            dof_post = max(n - (1 if fixes else 0), 1)
+            dof_post = max(n - 1, 1)
 
             prior = float(np.sqrt(v_prior @ v_prior / dof_prior))
             posterior = float(np.sqrt(v_post @ v_post / dof_post))
@@ -759,24 +732,23 @@ def report_sparse_misfit(stacker) -> None:
     if not rows:
         return
 
-    tqdm.write('Sparse-station misfit (RMS in mm of this station\'s own best fit of the '
-               'shared fields vs. the shared model\'s prediction at it; these are '
-               'out-of-sample residuals, so the increment does not share a scale with '
-               'the full-station WRMS increments above):')
-    tqdm.write(f'{"station":14s} {"":>6s} ' +
-               ' '.join(f'{c:>24s}' for c in ('E  prior/post (incr)',
-                                               'N  prior/post (incr)',
-                                               'U  prior/post (incr)')))
-    for row in sorted(rows, key=lambda r: -_mean_increment(r)):
-        cells = []
-        for item in row['enu']:
-            if item is None:
-                cells.append(f'{"--":>24s}')
-            else:
-                prior, posterior, incr, _ = item
-                cells.append(f'{prior * 1000.:8.2f}/{posterior * 1000.:7.2f} ({incr:5.2f})')
-        n = max((item[3] for item in row['enu'] if item is not None), default=0)
-        tqdm.write(f'{row["station"]:14s} {n:6d} ' + ' '.join(cells))
+    console.step("sparse-station misfit (RMS mm: station's own best fit / shared model's "
+                 "prediction)")
+    console.info('Out-of-sample residuals -- the increment does not share a scale with '
+                 'the full-station WRMS increments above.')
+
+    def cell(item):
+        if item is None:
+            return '--'
+        prior, posterior, incr, _ = item
+        return f'{prior * 1000.:.2f}/{posterior * 1000.:.2f} ({incr:.1f})'
+
+    console.table(
+        ['station', 'nobs', 'E', 'N', 'U'],
+        [[row['station'],
+          f'{max((i[3] for i in row["enu"] if i is not None), default=0)}',
+          cell(row['enu'][0]), cell(row['enu'][1]), cell(row['enu'][2])]
+         for row in sorted(rows, key=lambda r: -_mean_increment(r))])
 
 
 def _mean_increment(row: dict) -> float:
@@ -796,7 +768,8 @@ def add_sparse_contributions(stacker, system_neq: np.ndarray, system_ceq: np.nda
     if not stacker.config.sparse_constraints_enabled or not stacker.sparse_stations:
         return 0., 0
 
-    tqdm.write(f'Adding sparse-station contributions ({len(stacker.sparse_stations)} station(s))...')
+    logger.info(f'Adding sparse-station contributions '
+                f'({len(stacker.sparse_stations)} station(s))')
     total_lpl = 0.
     total_equations = 0
     for stn in stacker.sparse_stations:

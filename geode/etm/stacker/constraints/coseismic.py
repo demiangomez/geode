@@ -7,19 +7,17 @@ Uses SW-Okada methodology for interpolating coseismic displacement fields:
 - Okada dislocation model as physics-based regularization
 """
 
-from typing import List, Tuple, Dict, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING
 import numpy as np
 from tqdm import tqdm
 
-from .base import BaseConstraint
 from .fault_geometry import FaultGeometry
 from .sw_okada import SWOkada
 from ..data_classes import Station
 from ..types import ConstraintType
 from ...core.data_classes import Earthquake
 from ...core.type_declarations import JumpType
-from ....Utils import stationID, azimuthal_equidistant
-from ....elasticity.elastic_interpolation import get_qpw, get_radius, spline2dgreen
+from ....Utils import stationID
 
 if TYPE_CHECKING:
     from ..grid_system import GridSystem

@@ -8,7 +8,7 @@ Uses SW-Okada methodology for interpolating postseismic relaxation amplitude fie
 """
 
 from datetime import datetime as _dt
-from typing import List, Tuple, Dict, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING
 import numpy as np
 from tqdm import tqdm
 
@@ -105,38 +105,20 @@ class PostseismicConstraint(SWOkada):
         if self.is_collision:
             return [], constraining + to_constrain
 
-        # REMOVED (kept for reference in case this needs revisiting): this used to
-        # gate on whether at least one constraining station had all three jump-offset
-        # component sigmas < 1mm, on the theory that otherwise FaultGeometry.
-        # determine_plane would be anchoring on noisy data. When no station cleared
-        # that bar, it returned ([], constraining + to_constrain), which routes
-        # through BaseConstraint.collect_constraints' "no constraining stations"
-        # branch -- that branch hardcodes constraint_sigma = [1e-6, 1e-6, 1e-6] (a
-        # ONE-MICROMETER zero-tie), completely bypassing h_sigma/v_sigma,
-        # adaptive_weight, sparse settings, and update_constraint -- nothing could
-        # reach it. Under gls_for_all_stations, GLS honestly inflates parameter
-        # sigmas (an honestly-deflated normal-equation diagonal means an inflated
-        # covariance), which pushed essentially every station's jump-offset sigma
-        # over the 1mm bar for essentially every event -- i.e. this fired for the
-        # whole network simultaneously, hard-zeroing every postseismic decay
-        # parameter network-wide regardless of any weighting. Confirmed as the
-        # actual root cause of the field collapsing to ~1e-5m with GLS on (2026-11).
-        #
-        # sigma_threshold = 0.001
-        # for stn in constraining:
-        #     jump = stn.etm.jump_manager.get_geophysical_jump(self.event.id)
-        #     if jump is None:
-        #         continue
-        #     s_n = jump.p.sigmas[0][0] if len(jump.p.sigmas[0]) > 0 else np.inf
-        #     s_e = jump.p.sigmas[1][0] if len(jump.p.sigmas[1]) > 0 else np.inf
-        #     s_u = jump.p.sigmas[2][0] if len(jump.p.sigmas[2]) > 0 else np.inf
-        #     if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
-        #         return constraining, to_constrain
-        # tqdm.write(f'PostseismicConstraint({self.event.id} {self.relaxation:.3f}): '
-        #            f'no station with all component sigmas < {sigma_threshold * 1000:.0f} mm '
-        #            f'and no coseismic plane available; zero-tying all parameters')
-        # return [], constraining + to_constrain
-
+        # There is deliberately no further eligibility gate here. One used to exist --
+        # requiring at least one constraining station with all three jump-offset sigmas
+        # below 1 mm, on the theory that otherwise FaultGeometry.determine_plane would
+        # anchor on noisy data. It was removed because when no station cleared that bar
+        # it returned ([], constraining + to_constrain), which routes through
+        # BaseConstraint.collect_constraints' "no constraining stations" branch, and
+        # that branch hardcodes constraint_sigma = [1e-6, 1e-6, 1e-6] -- a one-micrometre
+        # zero-tie that bypasses h_sigma/v_sigma, adaptive_weight, the sparse settings
+        # and update_constraint alike, so nothing could reach it. Under
+        # gls_for_all_stations, GLS honestly inflates parameter sigmas, which pushed
+        # essentially every station over the 1 mm bar for essentially every event: the
+        # gate fired network-wide at once and hard-zeroed every postseismic decay
+        # parameter. That was the root cause of the field collapsing to ~1e-5 m with GLS
+        # on. Re-introducing any gate here needs that zero-tie branch fixed first.
         return constraining, to_constrain
 
     def get_parameters_and_covariance(self, solution: np.ndarray, covariance: np.ndarray):

@@ -4,6 +4,8 @@ ETM Stacker grid system for spatial interpolation.
 
 from dataclasses import dataclass, field
 from typing import List, Tuple, Dict, Union, TYPE_CHECKING
+import logging
+
 import numpy as np
 
 import matplotlib
@@ -14,6 +16,8 @@ from matplotlib.path import Path
 from scipy.spatial import ConvexHull
 from scipy.interpolate import griddata
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 from shapely.geometry import Polygon
 
 from ..core.data_classes import Earthquake
@@ -246,8 +250,8 @@ class GridSystem:
         lat = np.array([stn.lat for stn in stations])
         lon = np.array([stn.lon for stn in stations])
 
-        tqdm.write(f'Creating interpolation grids, station count {len(lat)}')
-        tqdm.write(f'lon {np.array(lon).min()} {np.array(lon).max()} '
+        logger.info(f'Creating interpolation grids, station count {len(lat)}')
+        logger.info(f'lon {np.array(lon).min()} {np.array(lon).max()} '
                    f'lat {np.array(lat).min()} {np.array(lat).max()}')
 
         # find an origin for the grid system
@@ -266,7 +270,7 @@ class GridSystem:
         np.fill_diagonal(r, np.inf)
         nn_dist = r.min(axis=1)
 
-        tqdm.write(f'Station spacing statistics -> mean NN: {np.mean(nn_dist):.1f} km, '
+        logger.info(f'Station spacing statistics -> mean NN: {np.mean(nn_dist):.1f} km, '
                    f'median NN: {np.median(nn_dist):.1f} km')
         offset = max(8.0, float(np.median(nn_dist)) * 0.5)
 
@@ -317,7 +321,7 @@ class GridSystem:
             )
         elif method == 'spline2d':
 
-            tqdm.write(f'Computing spline grid response for interpolation '
+            logger.info(f'Computing spline grid response for interpolation '
                        f'grid (total points {grid_x.shape[0]})')
 
             grid_vertical_response, stations_vertical_response = cls._compute_spline_responses(
@@ -340,7 +344,13 @@ class GridSystem:
         instance = GridSystem(grids_origin, interpolation_grid, interpolation_geographic,
                               grid_vertical_response, points, offset)
 
-        tqdm.write(f'Created interpolation grids with size {grid_x.shape}')
+        from . import console
+        console.result('Interpolation grid points', f'{grid_x.shape[0]}')
+        console.result('Station spacing, mean / median NN [km]',
+                       f'{np.mean(nn_dist):.1f} / {np.median(nn_dist):.1f}')
+        console.result('Extent lon / lat',
+                       f'{np.min(lon):.2f}..{np.max(lon):.2f} / '
+                       f'{np.min(lat):.2f}..{np.max(lat):.2f}')
 
         return instance
 
@@ -349,7 +359,7 @@ class GridSystem:
                                     disk_grid_x: np.ndarray, disk_grid_y: np.ndarray, disk_grid_spacing: float,
                                     interpolation_grid: np.ndarray):
 
-        tqdm.write(f'Computing rectangular load grid response for interpolation '
+        logger.info(f'Computing rectangular load grid response for interpolation '
                    f'grid (total points {interpolation_grid[0].shape[0]})')
 
         # average earth crust
@@ -377,7 +387,7 @@ class GridSystem:
                                     np.vstack((disk_grid_y - disk_grid_spacing, disk_grid_y + disk_grid_spacing)).T,
                                     lmb, mu)
 
-        tqdm.write(f'disk count: {disk_grid_x.shape} '
+        logger.info(f'disk count: {disk_grid_x.shape} '
                    f'interpolation grid count: {interpolation_grid[0].shape} '
                    f'size of response matrix: {a.shape}')
 
@@ -418,37 +428,13 @@ class GridSystem:
         return grid_vertical_response, stations_vertical_response
 
     @staticmethod
-    def compute_spline_greens(stations_projected: np.ndarray, tension=0.10) -> np.ndarray:
-        """compute spline greens functions using projected coordinates"""
-
-        # Extract coordinates
-        x, y = stations_projected
-
-        length_scale = np.abs(np.max(x.flatten()) - np.min(x.flatten()) +
-                              1j * (np.max(y.flatten()) - np.min(y.flatten()))) / 50
-
-        p = np.sqrt(tension / (1 - tension))
-        p = p / length_scale
-
-        # Compute all pairwise distances at once using broadcasting
-        # Create n×n matrices of coordinate differences
-        dx = x[:, np.newaxis] - x[np.newaxis, :]  # or: x[:, None] - x
-        dy = y[:, np.newaxis] - y[np.newaxis, :]
-
-        # Compute complex distances and take absolute value
-        r = np.abs(dx + 1j * dy)
-
-        # Apply spline2dgreen to entire distance matrix at once
-        return spline2dgreen(r, p)
-
-    @staticmethod
     def _compute_disk_responses(stations, disk_grid_x, disk_grid_y, disk_radius,
                                 interpolation_grid, nmax_max=2500):
         # read love numbers now to accelerate the process later
         h_love, l_love, k_love = load_love_numbers()
 
         grid_vertical_response = []
-        tqdm.write(f'Computing disk grid response for interpolation '
+        logger.info(f'Computing disk grid response for interpolation '
                    f'grid (total points {interpolation_grid[0].shape[0]})')
 
         bar = tqdm(total=interpolation_grid[0].shape[0], ncols=120)
@@ -468,7 +454,7 @@ class GridSystem:
         grid_vertical_response = np.array(grid_vertical_response)
 
         # compute the response for each station
-        tqdm.write(f'Computing disk grid response for {len(stations)} stations')
+        logger.info(f'Computing disk grid response for {len(stations)} stations')
         bar = tqdm(total=len(stations), ncols=120)
 
         for i, stn in enumerate(stations):
@@ -485,7 +471,7 @@ class GridSystem:
             bar.update()
 
         bar.close()
-        tqdm.write(f'disk count: {disk_grid_x.shape} '
+        logger.info(f'disk count: {disk_grid_x.shape} '
                    f'interpolation grid count: {interpolation_grid[0].shape} '
                    f'size of response matrix: {grid_vertical_response.shape}')
 
@@ -571,18 +557,6 @@ class GridSystem:
 
         return np.block([[q, w], [w, p]])  # type: ignore[arg-type]
 
-    def compute_sw_forward_matrix(self,
-                                  source_x: np.ndarray,
-                                  source_y: np.ndarray,
-                                  mask: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-
-        q, p, w = get_qpw(np.column_stack([source_x, source_y]),
-                          np.column_stack([self.interpolation_grid[0][mask],
-                                           self.interpolation_grid[1][mask]]),
-                          self.offset, self.poisson_ratio)
-
-        return np.hstack((q, w)), np.hstack((w, p))
-
     @staticmethod
     def compute_vertical_interpolant_at_point(target_response: np.ndarray,
                                               source_responses: List[np.ndarray]) -> np.ndarray:
@@ -655,7 +629,7 @@ class GridSystem:
         diag = np.diag(predict_cova)
         negative = diag < 0
         if np.any(negative):
-            tqdm.write(f'WARNING: {source}: clipping {np.sum(negative)}/{diag.size} negative variance '
+            tqdm.write(f'   ! {source}: clipping {np.sum(negative)}/{diag.size} negative variance '
                        f'entries to zero (min={diag[negative].min():.3e}); likely a near-singular '
                        f'dislocation model for this event/station set.')
             diag = np.where(negative, 0., diag)
@@ -686,8 +660,6 @@ class GridSystem:
             p_mask = np.array([True] * self.points)
             active_points = self.points
 
-        grid_vertical_response = self.grid_vertical_response[p_mask, :]
-        stations_vertical_response = [stn.vertical_response for stn in stations]
         xg, yg = self.interpolation_grid[0][p_mask], self.interpolation_grid[1][p_mask]
 
         # compute the grid velocities
@@ -726,7 +698,7 @@ class GridSystem:
                           constraint: Union['CoseismicConstraint',
                           'PostseismicConstraint']) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Output enu_cov is en, eu, nu."""
-        tqdm.write(f'Predicting from {constraint.constraint_type} for event {event.id} {event.date.yyyyddd()}')
+        logger.info(f'Predicting from {constraint.constraint_type} for event {event.id} {event.date.yyyyddd()}')
 
         sites = np.isin([stationID(s) for s in constraint.station_list],
                         [stationID(stn) for stn in stations])

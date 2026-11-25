@@ -3,17 +3,21 @@ The linear solve itself: assembling constraints onto the base normal equations,
 solving, variance-of-unit-weight bookkeeping, and extracting/reporting results.
 """
 
+import logging
 from operator import itemgetter
 from typing import List, Tuple
 
 import numpy as np
 from tqdm import tqdm
 
+from . import console
 from .constraints import adaptive_weight
 from .constraints import sparse as sparse_constraint
 from .data_classes import EtmStackerField
 from .types import ConstraintType
 from ...Utils import stationID
+
+logger = logging.getLogger(__name__)
 
 
 class SolverMixin:
@@ -54,7 +58,7 @@ class SolverMixin:
             system_neq, self.total_parameters
         )
 
-        tqdm.write('Solving system...')
+        console.phase('solve')
 
         x = np.linalg.solve(system_neq, system_ceq)
         self.solution = np.reshape(x, (3, self.total_parameters))
@@ -107,30 +111,34 @@ class SolverMixin:
 
             increment.append([stationID(stn), np.mean(wrms_increment), wrms_increment])
 
-        tqdm.write('WRMS increment for each station:')
+        # The full per-station list goes to the log; only the tail of the distribution
+        # is worth reading on screen, and that is what you look at anyway.
         for stn, wrmsi, wrms in increment:
-            tqdm.write(f'{stn} WRMS increment: (total={wrmsi:.2f}) {wrms[0]:.2f} {wrms[1]:.2f} {wrms[2]:.2f}')
+            logger.info(f'{stn} WRMS increment: (total={wrmsi:.2f}) '
+                        f'{wrms[0]:.2f} {wrms[1]:.2f} {wrms[2]:.2f}')
 
-        tqdm.write('First five largest WRMS increments:')
-        c = 0
-        for stn, wrmsi, wrms in sorted(increment, key=itemgetter(1), reverse=True):
-            if c == 6:
-                break
-            tqdm.write(f'{stn} WRMS increment: (total={wrmsi:.2f}) {wrms[0]:.2f} {wrms[1]:.2f} {wrms[2]:.2f}')
-            c += 1
+        console.step('full-station WRMS increment (10 largest; 1.0 = unchanged by stacking)')
+        worst = sorted(increment, key=itemgetter(1), reverse=True)[:10]
+        console.table(['station', 'total', 'E', 'N', 'U'],
+                      [[stn, f'{m:.2f}', f'{w[0]:.2f}', f'{w[1]:.2f}', f'{w[2]:.2f}']
+                       for stn, m, w in worst])
+        all_inc = np.array([m for _, m, _ in increment])
+        console.info(f'median {np.median(all_inc):.2f}   '
+                     f'90th pct {np.percentile(all_inc, 90):.2f}   '
+                     f'max {all_inc.max():.2f}   ({len(increment)} stations, full list in the log)')
 
         # Sparse stations never appear in the table above: it reads each station's own
         # normal equations, and a sparse station owns none. This is their counterpart.
         sparse_constraint.report_sparse_misfit(self)
 
-        tqdm.write(f'Equations: {self.total_equations * 3}')
-        tqdm.write(f'Constraints: {self.total_constraints}')
-        tqdm.write(f'Parameters: {self.total_parameters * 3}')
-        tqdm.write(f'Sum of squared residuals (obs): {o_vpv:.3f}')
-        tqdm.write(f'Sum of squared residuals (con): {c_vpv:.3f}')
-        tqdm.write(f'Model redundancy: {dof}')
-        tqdm.write(f'SQRT(var) for the stacked system: {np.sqrt(self.variance):.3f} ')
-        tqdm.write(f'1/var for the stacked system: {1/self.variance:.4f} ')
+        console.step('solution')
+        console.result('Observation equations', f'{self.total_equations * 3}')
+        console.result('Constraint equations', f'{self.total_constraints}')
+        console.result('Parameters', f'{self.total_parameters * 3}')
+        console.result('Model redundancy', f'{dof}')
+        console.result('Sum of squared residuals, observations', f'{o_vpv:.3f}')
+        console.result('Sum of squared residuals, constraints', f'{c_vpv:.3f}')
+        console.result('SQRT(variance of unit weight)', f'{np.sqrt(self.variance):.3f}')
 
         self.solved = True
 

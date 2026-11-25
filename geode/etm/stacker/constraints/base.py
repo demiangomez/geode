@@ -4,13 +4,17 @@ Base constraint class for ETM Stacker.
 
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Union, TYPE_CHECKING
+import logging
+
 import numpy as np
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from ..data_classes import Station, ConstraintEquation
 from ..types import ConstraintType
 from ...core.data_classes import Earthquake
-from ....Utils import stationID
+from ....Utils import stationID, print_yellow
 from ....elasticity.elastic_interpolation import get_radius
 
 if TYPE_CHECKING:
@@ -59,7 +63,8 @@ class BaseConstraint(ABC):
         constraining, to_constrain = self.select_stations(all_stations, **kwargs)
 
         if len(constraining) > 1:
-            for station in tqdm(to_constrain, ncols=120, desc=f'Collecting {self.short_description()}'):
+            for station in tqdm(to_constrain, ncols=120, disable=None,
+                                desc=f'Collecting {self.short_description()}'):
                 constraint_params = ConstraintEquation(
                     station=station,
                     constraint_design=self._build_k_matrix(station, constraining, grids, total_parameters),
@@ -71,13 +76,15 @@ class BaseConstraint(ABC):
             # couple parameters of nearby stations (d < 5 km)
             self.constrain_nearby_stations(all_stations, total_parameters)
         else:
-            tqdm.write(f'Constraint {self.short_description()} has a single o no constraining stations. '
-                       f'Consider removing it to avoid biases in station velocities')
+            tqdm.write(print_yellow(
+                f'   ! {self.short_description()} has one or no constraining station; '
+                f'consider removing it to avoid biasing station velocities'))
 
             if len(to_constrain) > 0:
-                tqdm.write(f'Adding zero-tie to avoid parameter excursion')
+                tqdm.write(print_yellow('     zero-tying its parameters to avoid excursion'))
                 # add a zero with a lot of weight
-                for station in tqdm(to_constrain, ncols=120, desc=f'Collecting {self.short_description()}'):
+                for station in tqdm(to_constrain, ncols=120, disable=None,
+                                    desc=f'Collecting {self.short_description()}'):
                     ke = np.zeros((1, total_parameters * 3))
                     kn = np.zeros((1, total_parameters * 3))
                     ku = np.zeros((1, total_parameters * 3))
@@ -112,9 +119,10 @@ class BaseConstraint(ABC):
             target_idx, idx = self._get_target_cols(all_stations[idx_i], [all_stations[idx_j]])
 
             if target_idx is not None and idx[0] is not None:
-                tqdm.write(f"Stations {stationID(all_stations[idx_i])} and "
-                           f"{stationID(all_stations[idx_j])} are only {r[idx_i, idx_j]:.3f} km from one another: "
-                           f"linking their {self.short_description()} parameters")
+                logger.info(f'Stations {stationID(all_stations[idx_i])} and '
+                            f'{stationID(all_stations[idx_j])} are only '
+                            f'{r[idx_i, idx_j]:.3f} km apart: linking their '
+                            f'{self.short_description()} parameters')
 
                 ke = np.zeros((1, total_parameters * 3))
                 kn = np.zeros((1, total_parameters * 3))

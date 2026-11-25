@@ -4,11 +4,14 @@ jumps/masks they contribute, and registering the coseismic/postseismic constrain
 that follow from them.
 """
 
+import logging
 import math
 from datetime import datetime as _dt
 
 import numpy as np
 from tqdm import tqdm
+
+from . import console
 
 from . import etm_builder
 from .constraints import InterseismicConstraint, CoseismicConstraint, PostseismicConstraint
@@ -20,6 +23,8 @@ from ...dbConnection import Cnn
 from ...pyDate import Date
 from ...pyOkada import Mask
 from ...Utils import stationID
+
+logger = logging.getLogger(__name__)
 
 
 class EarthquakeCatalogMixin:
@@ -52,8 +57,9 @@ class EarthquakeCatalogMixin:
             sdate = Date(year=1975, doy=1)
         edate = Date(datetime=_dt.utcnow())
 
-        tqdm.write(f'Pre-computing earthquake list for {len(stnlist)} stations '
-                   f'(mag >= {self.config.earthquake_magnitude_limit})...')
+        console.phase('earthquake catalogue')
+        console.info(f'Scanning {len(stnlist)} station(s) for events with '
+                     f'mag >= {self.config.earthquake_magnitude_limit}')
 
         # Batch every station's coordinates into one query instead of one round-trip
         # per station -- with 70+ stations this was a meaningful fraction of this
@@ -79,7 +85,7 @@ class EarthquakeCatalogMixin:
         for stn in stnlist:
             net, code = stn['NetworkCode'], stn['StationCode']
             if (net, code) not in coords:
-                tqdm.write(f'  WARNING: Could not get coordinates for {net}.{code}, skipping')
+                console.warn(f'no coordinates for {net}.{code}, skipping')
                 continue
             lat, lon = coords[(net, code)]
             scan_stations.append((net, code, lat, lon))
@@ -88,7 +94,7 @@ class EarthquakeCatalogMixin:
             cnn, scan_stations, sdate, edate, self.config.earthquake_magnitude_limit)
         seen_ids = {eq.id for eq in candidate_events}
 
-        tqdm.write(f'  s-score scan: {len(candidate_events)} unique events from '
+        console.result('Events passing the s-score scan', f'{len(candidate_events)} from '
                    f'{len(stnlist)} stations')
 
         # merge force (cherry-picked) events on top
@@ -100,7 +106,7 @@ class EarthquakeCatalogMixin:
                     f"SELECT * FROM earthquakes WHERE id = '{eid}'", as_dict=True
                 )
                 if not rows:
-                    tqdm.write(f'  WARNING: Cherry-picked event {eid} not found in database')
+                    console.warn(f'cherry-picked event {eid} not found in the database')
                     continue
                 j = rows[0]
                 has_fm = not math.isnan(float(j['strike1']))
@@ -118,18 +124,18 @@ class EarthquakeCatalogMixin:
                     jump_type=JumpType.COSEISMIC_JUMP_DECAY
                 ))
                 seen_ids.add(eid)
-                tqdm.write(f'  Added cherry-picked event {eid}')
+                console.info(f'added cherry-picked event {eid}')
 
         candidate_events.sort()
 
         # Exclude events with no focal mechanism — SW-Okada requires strike/dip/rake
         no_fm = [e for e in candidate_events if not e.strike]
         if no_fm:
-            tqdm.write(f'  Excluding {len(no_fm)} event(s) with no focal mechanism: '
+            console.result('Excluded, no focal mechanism', f'{len(no_fm)}: '
                        + ', '.join(e.id for e in no_fm))
             candidate_events = [e for e in candidate_events if e.strike]
 
-        tqdm.write(f'  Total: {len(candidate_events)} candidate events')
+        console.result('Candidate events', f'{len(candidate_events)}')
 
         # collision detection: exclude the smaller event whenever two events are
         # within 15 days of each other, regardless of ordering.
@@ -170,13 +176,13 @@ class EarthquakeCatalogMixin:
                         self.collided_earthquakes.add(loser.id)
 
         if self.collided_earthquakes:
-            tqdm.write(f'  Collisions: {len(self.collided_earthquakes)} event(s) excluded: '
+            console.result('Excluded, collisions', f'{len(self.collided_earthquakes)}: '
                        + ', '.join(sorted(self.collided_earthquakes)))
 
         # publish results — collision losers are excluded entirely, not zero-tied
         kept = [e.id for e in candidate_events if e.id not in self.collided_earthquakes]
         self.config.earthquakes_cherry_picked = kept
-        tqdm.write(f'Earthquake list ready: {len(kept)} events '
+        console.result('Events to be modelled', f'{len(kept)} '
                    f'({len(self.collided_earthquakes)} excluded due to collisions)')
 
     def _record_earthquakes(self):
@@ -194,7 +200,7 @@ class EarthquakeCatalogMixin:
                     continue
 
                 if jump.earthquake not in self.earthquakes:
-                    tqdm.write('Recording event ' + repr(jump))
+                    logger.info('Recording event ' + repr(jump))
                     self.earthquakes.append(jump.earthquake)
                     self.earthquakes.sort()
 
@@ -204,7 +210,6 @@ class EarthquakeCatalogMixin:
                     mask = Mask(cnn, jump.earthquake.id)
                     s_score, p_score = mask.score(lat, lon)
 
-                    # tqdm.write(f'Getting mask for event {jump.earthquake.id}')
                     s_score = s_score > 0
                     p_score = p_score > 0
                     # save the actual object to query it
@@ -231,7 +236,7 @@ class EarthquakeCatalogMixin:
         for event in self.earthquakes:
             # Skip collided earthquakes - they will be constrained to zero
             if event.id in self.collided_earthquakes:
-                tqdm.write(f'Setting number of stations for collided earthquake {event.id} to zero.')
+                logger.info(f'Collided earthquake {event.id}: station count set to zero')
 
             # coseismic stations
             stations = [stn for stn in self.stations if stn.get_coseismic_column(event.id) is not None]
@@ -247,8 +252,8 @@ class EarthquakeCatalogMixin:
                 )
                 self.constraint_registry.add_constraint(coseis)
             else:
-                tqdm.write(f'No stations observed coseismic event {event.id}. '
-                           f'A coseismic constraint for this event will not be added.')
+                console.warn(f'no station observed coseismic event {event.id}; '
+                             f'no coseismic constraint added')
 
             # Postseismic for each relaxation
             for relax in self.config.relaxation:
@@ -352,8 +357,8 @@ class EarthquakeCatalogMixin:
             )
             self.constraint_registry.add_constraint(coseis)
         else:
-            tqdm.write(f'No stations observed coseismic event {event.id}. '
-                       f'A coseismic constraint for this event will not be added.')
+            console.warn(f'no station observed coseismic event {event.id}; '
+                         f'no coseismic constraint added')
 
         # Postseismic for each relaxation
         for relax in self.config.relaxation:

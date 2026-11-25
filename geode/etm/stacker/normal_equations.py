@@ -4,12 +4,16 @@ Per-station normal equations and their assembly into the stacker's system.
 
 from typing import Tuple
 
+import logging
+
 import numpy as np
 from tqdm import tqdm
 
 from .data_classes import NormalEquations, Station
 from ..least_squares.noise_covariance import build_toeplitz_covariance, cholesky_whiten_design
 from ...Utils import stationID
+
+logger = logging.getLogger(__name__)
 
 # NEU (fit.results/l index) -> ENU label, matching the [1, 0, 2] iteration order below.
 _NEU_TO_ENU_LABEL = {1: 'E', 0: 'N', 2: 'U'}
@@ -30,7 +34,7 @@ class NormalEquationsMixin:
         c = []
 
         if station.etm.solution_data.solutions < 100:
-            tqdm.write(f' -- Upweighting {stationID(station)} because observations count is < 100')
+            logger.info(f'Upweighting {stationID(station)}: fewer than 100 observations')
             weight_scale = self.config.station_weight_scale * 100.
         else:
             weight_scale = self.config.station_weight_scale
@@ -95,7 +99,7 @@ class NormalEquationsMixin:
     def _build_base_normal_equations(self) -> Tuple[np.ndarray, np.ndarray]:
         """Build the base NEQ from individual stations."""
 
-        tqdm.write('Building station system of normal equations')
+        logger.info('Building station system of normal equations')
 
         tp = self.total_parameters
 

@@ -1,10 +1,12 @@
+import logging
 """
 Constraint registry for ETM Stacker.
 """
 
 from typing import List, Dict, Union, TYPE_CHECKING
 import numpy as np
-from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from .base import BaseConstraint
 from .interseismic import InterseismicConstraint
@@ -41,7 +43,7 @@ class ConstraintRegistry:
                                 total_parameters: int, grids: 'GridSystem', **kwargs):
         """Collect all registered constraints."""
         for constraint_type in self._application_order:
-            tqdm.write(f"Collecting {constraint_type} constraints")
+            logger.info(f'Collecting {constraint_type} constraints')
             for constraint in self.constraints[constraint_type]:
                 # Reset equations and SW-Okada coefficient cache so that any change
                 # to regularisation parameters takes effect on every solve() call,
@@ -58,7 +60,7 @@ class ConstraintRegistry:
         total_constraints = 0
         for constraint_type in self._application_order:
             for constraint in self.constraints[constraint_type]:
-                tqdm.write(f'Adding {repr(constraint)} to the system')
+                logger.info(f'Adding {repr(constraint)} to the system')
                 neq += constraint.apply_to_normal_equations(total_parameters)
                 # count how many constraints per equation
                 total_constraints += sum(3 for const in constraint.equations if const.is_active)

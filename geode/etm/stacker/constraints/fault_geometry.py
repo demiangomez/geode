@@ -4,8 +4,12 @@ Fault geometry and Okada dislocation model for coseismic constraints.
 
 from dataclasses import dataclass
 from typing import List, Tuple, TYPE_CHECKING
+import logging
+
 import numpy as np
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from ....Utils import stationID, azimuthal_equidistant, print_yellow
 from ....elasticity.elastic_interpolation import get_qpw, get_radius
@@ -75,8 +79,8 @@ class FaultGeometry:
             # In both cases default to plane 0 and skip the solve.
             msg = ('No stations have' if not self.station_list
                    else 'Only 1 station has')
-            tqdm.write(f'  WARNING: {msg} a jump for {self.event.id}; '
-                       f'cannot determine plane — defaulting to plane 0')
+            tqdm.write(print_yellow(f'   ! {msg} a jump for {self.event.id}; '
+                                    f'cannot determine plane, defaulting to plane 0'))
             self.plane = 0
             self._compute_patch_grids(len(self.station_list) if self.station_list else 1)
             self.station_list = [stationID(stn) for stn in self.station_list]
@@ -107,9 +111,10 @@ class FaultGeometry:
         # Vertical: 1 observation per station
         n_patches_v = max(1, int(np.floor(n_stations / 4)))
 
-        tqdm.write(f'Event {self.event.id} {self.event.date.yyyyddd()}: {n_stations} stations -> '
+        tqdm.write(f'   {self.event.id} {self.event.date.yyyyddd()}: {n_stations} station(s) -> '
                    f'{n_patches_h} horizontal patches, {n_patches_v} vertical patches')
-        tqdm.write(f'  Fault dimensions: AS={self.along_strike:.1f} km, DD={self.down_dip:.1f} km')
+        logger.info(f'Fault dimensions: AS={self.along_strike:.1f} km, '
+                    f'DD={self.down_dip:.1f} km')
 
         self.patches_h = self._build_patch_grid(n_patches_h)
         self.patches_v = self._build_patch_grid(n_patches_v)
@@ -157,7 +162,7 @@ class FaultGeometry:
         radius_W = (W2 - W1) / (2 * ps)   # half-width down dip
 
         if verbose:
-            tqdm.write(f'    Rectangular patch grid: {ps}×{ps} = {actual_patches} patches '
+            logger.info(f'Rectangular patch grid: {ps}×{ps} = {actual_patches} patches '
                        f'(ΔL={2*radius_L:.1f} km, ΔW={2*radius_W:.1f} km)')
 
         # Compute depths for each possible dip angle
@@ -170,7 +175,6 @@ class FaultGeometry:
                 min_dep = fault_dep.min()
                 adjustment = min_dep - radius_W * sind(dip) - 1.
                 fault_dep = fault_dep - adjustment
-                # tqdm.write(f'    Adjusted depths for dip={dip}: shift={-adjustment:.1f} km')
 
             grid_dep.append(fault_dep)
 
@@ -206,7 +210,6 @@ class FaultGeometry:
         Tuple[np.ndarray, np.ndarray]
             Design matrix (a) and regularization matrix (p) for selected plane
         """
-        from scipy.linalg import block_diag
 
         def rms_horizontal(residuals: np.ndarray, n_stations: int) -> float:
             """Compute RMS of horizontal (east + north) residuals only."""
@@ -225,38 +228,19 @@ class FaultGeometry:
         # REMOVED (kept for reference in case this needs revisiting): this used to
         # pre-filter stations for plane determination to only those with all three
         # jump-offset component sigmas < 1mm, same sigma_threshold=0.001 as the
-        # postseismic eligibility gate removed from constraints/postseismic.py (see
-        # that file for the full explanation). Here the consequence was benign --
-        # len(keep_idx) < 2 already had a graceful fallback to "use all stations" --
-        # but under gls_for_all_stations essentially no station ever clears 1mm (GLS
-        # honestly inflates parameter sigmas), so this filter was already permanently
-        # falling through to that fallback. Removed as dead code rather than kept
-        # as a no-op filter. (2026-11)
-        #
-        # sigma_threshold = 0.001
-        # keep_idx = []
-        # filtered_sites = []
-        # for idx, j in enumerate(jumps):
-        #     s_n = j.p.sigmas[0][0] if len(j.p.sigmas[0]) > 0 else np.inf
-        #     s_e = j.p.sigmas[1][0] if len(j.p.sigmas[1]) > 0 else np.inf
-        #     s_u = j.p.sigmas[2][0] if len(j.p.sigmas[2]) > 0 else np.inf
-        #     if s_n < sigma_threshold and s_e < sigma_threshold and s_u < sigma_threshold:
-        #         keep_idx.append(idx)
-        #     else:
-        #         filtered_sites.append(sites_nam[idx])
-        # if filtered_sites:
-        #     tqdm.write(f'  Stations excluded from plane determination '
-        #                f'(sigma >= {sigma_threshold:.3f} m in >= 1 component): '
-        #                + ', '.join(filtered_sites))
-
+        # Every station with a fitted jump is used; the per-station sigma gate that
+        # used to filter this list was removed along with its counterpart in
+        # constraints/postseismic.py (see that file for why). Here it had already
+        # become a no-op -- under gls_for_all_stations no station cleared the 1 mm bar,
+        # so it always fell through to the "use all stations" fallback below.
         keep_idx = list(range(N))
         if len(keep_idx) < 2:
             # A single station produces a 1×1 NN-distance matrix whose diagonal
             # is forced to inf, making local_reg = inf and get_qpw return NaN.
             # At least 2 stations are needed for a finite nearest-neighbour offset
             # and a meaningful plane RMS comparison.
-            tqdm.write(f'  WARNING: Only {len(keep_idx)} station available '
-                       f'(minimum 2 required) for plane determination')
+            tqdm.write(print_yellow(f'   ! only {len(keep_idx)} station available '
+                                    f'(2 required) for plane determination'))
 
         keep_idx = np.array(keep_idx)
         N_filt = len(keep_idx)
@@ -264,8 +248,8 @@ class FaultGeometry:
         sites_lat_filt = sites_lat[keep_idx]
         obs_filt = np.concatenate([le[keep_idx], ln[keep_idx], lu[keep_idx]])
 
-        tqdm.write(f'Testing fault planes for {self.event.id} with {N} stations '
-                   f'({N_filt} used for plane determination)')
+        logger.info(f'Testing fault planes for {self.event.id} with {N} stations '
+                    f'({N_filt} used for plane determination)')
 
         a_list = []
         p_list = []
@@ -276,7 +260,7 @@ class FaultGeometry:
         # Test both fault planes
         for i in range(2):
             strike, dip = self.event.strike[i], self.event.dip[i]
-            tqdm.write(f'  Plane {i}: strike={strike:.1f}, dip={dip:.1f}')
+            logger.info(f'Plane {i}: strike={strike:.1f}, dip={dip:.1f}')
 
             # Full system for all stations: used for table printout and return value
             # call with default Okada weight to ensure compliance with Okada
@@ -321,8 +305,8 @@ class FaultGeometry:
                 f'  {"Res E":>{col_w}} {"Res N":>{col_w}} {"Res U":>{col_w}} '
                 f'| {"Mod E":>{col_w}} {"Mod N":>{col_w}} {"Mod U":>{col_w}} '
                 f'  {"Res E":>{col_w}} {"Res N":>{col_w}} {"Res U":>{col_w}}')
-        tqdm.write(hdr1)
-        tqdm.write(hdr2)
+        logger.info(hdr1)
+        logger.info(hdr2)
 
         for i in range(N):
             obs_s = ' '.join([f'{obs_mat[j, i] * 1000.:>{col_w}.1f}' for j in range(3)])
@@ -333,15 +317,17 @@ class FaultGeometry:
                 mod_s = ' '.join([f'{m_mat[j, i] * 1000.:>{col_w}.1f}' for j in range(3)])
                 res_s = ' '.join([f'{v_mat[j, i] * 1000.:>{col_w}.1f}' for j in range(3)])
                 plane_parts.append(f'{mod_s}   {res_s}')
-            tqdm.write(f'  {sites_nam[i]:<12} | {obs_s} | {plane_parts[0]} | {plane_parts[1]}')
+            logger.info(f'{sites_nam[i]:<12} | {obs_s} | {plane_parts[0]} | {plane_parts[1]}')
 
         # Select plane with lower horizontal RMS
         self.plane = int(np.argmin(rms_list))
         self.station_list = sites_nam
 
-        tqdm.write(f'Horizontal RMS: plane0={rms_list[0]*1000:.2f}mm, plane1={rms_list[1]*1000:.2f}mm')
-        tqdm.write(f'Selected plane {self.plane}: strike={self.event.strike[self.plane]:.1f}, '
-                   f'dip={self.event.dip[self.plane]:.1f}')
+        tqdm.write(f'      plane {self.plane} selected: '
+                   f'strike={self.event.strike[self.plane]:.1f} '
+                   f'dip={self.event.dip[self.plane]:.1f}  '
+                   f'(horizontal RMS {rms_list[0] * 1000:.2f} vs '
+                   f'{rms_list[1] * 1000:.2f} mm)')
 
         return a_list[self.plane], p_list[self.plane]
 
@@ -409,7 +395,6 @@ class FaultGeometry:
         Tuple[np.ndarray, np.ndarray]
             Design matrix (a) and regularization matrix (p)
         """
-        from geode.pyOkada import okada
         from scipy.linalg import block_diag
 
         sind = lambda x: np.sin(np.deg2rad(x))
@@ -438,7 +423,6 @@ class FaultGeometry:
             local_reg = max(8.0, float(np.median(r_ev.min(axis=1))) * 0.5)
         else:
             local_reg = 8.0
-        # tqdm.write(f'  SW local regularization: {local_reg:.1f} km  (global grid offset: {grid.offset:.1f} km)')
 
         q, p, w = get_qpw(np.column_stack([x, y]), np.column_stack([x, y]), local_reg, grid.poisson_ratio)
         ah = np.block([[q, w], [w, p]])

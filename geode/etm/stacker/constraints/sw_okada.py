@@ -2,12 +2,10 @@
 SW-Okada leave-one-out interpolation mixin for coseismic and postseismic constraints.
 """
 
-from abc import ABC, abstractmethod
 from typing import List, Tuple, TYPE_CHECKING, Dict
 import numpy as np
 from tqdm import tqdm
 
-from . import fault_geometry
 from ..data_classes import Station
 from ...core.data_classes import Earthquake
 from .fault_geometry import FaultGeometry
@@ -99,7 +97,7 @@ class SWOkada(BaseConstraint):
         # total parameters
         tp = solution.shape[1]
 
-        return_fields, idx = [], []
+        idx = []
         seismic = {}
 
         # find stations affected by event

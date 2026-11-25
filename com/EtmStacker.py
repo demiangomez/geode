@@ -52,7 +52,6 @@ from geode.dbConnection import Cnn
 from geode.Utils import add_version_argument, station_list_help, SmartHelpFormatter
 from geode.Utils import stationID, process_stnlist, process_date_str
 from geode.pyDate import Date
-from geode.etm.data.solution_data import SolutionData
 
 # Map verbosity to logging levels
 VERBOSITY_MAP = {
@@ -91,9 +90,9 @@ class EtmStackerShell(cmd.Cmd):
         """Restore readline history from EtmStacker instance"""
         if hasattr(self.etm_stacker, 'command_history'):
             readline.clear_history()
-            for cmd in self.etm_stacker.command_history:
-                if cmd.strip():  # Don't add empty commands
-                    readline.add_history(cmd.strip())
+            for entry in self.etm_stacker.command_history:
+                if entry.strip():  # Don't add empty commands
+                    readline.add_history(entry.strip())
 
     def precmd(self, line):
         """Called before each command - log it here"""
@@ -121,8 +120,8 @@ class EtmStackerShell(cmd.Cmd):
         """
         Print the command history for this EtmStacker
         """
-        for cmd in self.etm_stacker.command_history:
-            print(cmd)
+        for entry in self.etm_stacker.command_history:
+            print(entry)
 
     def do_remove_station(self, arg: str):
         self.etm_stacker.remove_station(arg)
@@ -205,30 +204,6 @@ class EtmStackerShell(cmd.Cmd):
 
         print(f'Sparse-station constraints: {"ON" if new_state else "OFF"}. Invoke solve again when ready.')
 
-    def do_sparse_fixes(self, arg):
-        """
-        Turn the three sparse-injection corrections on/off without restarting the CLI,
-        so the same session can be re-solved both ways -- see -no_sparse_fixes and
-        EtmStackerConfig.sparse_injection_fixes. Only changes the config; invoke solve
-        again to see its effect.
-        syntax: sparse_fixes [on|off]  (no argument prints the current setting)
-        """
-        arg = arg.strip().lower()
-        config = self.etm_stacker.config
-        if arg == '':
-            print(f'Sparse-injection fixes: {"ON" if config.sparse_injection_fixes else "OFF"}')
-            return
-        if arg in ('on', 'true', '1'):
-            config.sparse_injection_fixes = True
-        elif arg in ('off', 'false', '0'):
-            config.sparse_injection_fixes = False
-        else:
-            print('Usage: sparse_fixes [on|off]')
-            return
-
-        print(f'Sparse-injection fixes: {"ON" if config.sparse_injection_fixes else "OFF"}. '
-              f'Invoke solve again when ready.')
-
     def do_adaptive_ratio(self, arg):
         """
         Set the adaptive per-station constraint target ratio, or turn the mechanism on/
@@ -263,7 +238,7 @@ class EtmStackerShell(cmd.Cmd):
     def do_vce(self, arg):
         # Run VCE
         vce = EtmStackerVCEEnhanced(self.etm_stacker, max_iterations=20, tolerance=1)
-        results = vce.run_vce_with_observation_scaling()
+        vce.run_vce_with_observation_scaling()
 
         # Review results
         vce.print_summary()
@@ -328,9 +303,9 @@ class EtmStackerShell(cmd.Cmd):
         """
         if self.etm_stacker.solved:
             if arg == 'field' or arg == '':
-                fig = self.etm_stacker.plot_grid_result()
+                self.etm_stacker.plot_grid_result()
             elif arg == 'sigmas':
-                fig = self.etm_stacker.plot_grid_result(sigmas=True)
+                self.etm_stacker.plot_grid_result(sigmas=True)
             else:
                 print('unknown argument')
         else:
@@ -652,13 +627,6 @@ class EtmStackerShell(cmd.Cmd):
                     etm = EtmEngine(config, self.cnn, silent=True)
                     etm.run_adjustment(try_loading_db=False, try_save_to_db=False)
 
-                    # config = EtmConfig(net, stnm, cnn=self.cnn)
-                    # config.solution.solution_type = SolutionType.PPP
-                    # config.plotting_config.interactive = True
-                    # config = self.etm_stacker._apply_config(config, self.cnn)
-
-                    #solution_data = SolutionData.create_instance(config)
-                    #solution_data.load_data(cnn=self.cnn)
                     etm.fit.outlier_flags[etm.solution_data.time_vector < 1995.] = False
 
                     neu = np.array(etm.solution_data.transform_to_local())
@@ -743,12 +711,6 @@ class EtmStackerShell(cmd.Cmd):
                 config.solution.solution_type = SolutionType.PPP
                 etm = EtmEngine(config, self.cnn, silent=True)
                 etm.run_adjustment(try_loading_db=False, try_save_to_db=False)
-                #config = EtmConfig(net, stnm, cnn=self.cnn)
-                #config.solution.solution_type = SolutionType.PPP
-                #config.plotting_config.interactive = True
-                #config = self.etm_stacker._apply_config(config, self.cnn)
-                #solution_data = SolutionData.create_instance(config)
-                #solution_data.load_data(cnn=self.cnn)
 
                 etm.fit.outlier_flags[etm.solution_data.time_vector < 1995.] = False
 
@@ -945,19 +907,6 @@ class EtmStackerShell(cmd.Cmd):
         toc = time.time()
         print(f'Solved in {(toc - tic):.1f} sec')
 
-            #for stn in postseismic:
-            #    name = stn['station']
-            #    event_id = stn['event_id']
-            #    relax = stn['relax']
-            #    vc = stn['constrained']
-            #    vp = stn['a_priori']
-            #    lon = stn['lon']
-            #    lat = stn['lat']
-            #
-            #    print(f'{name} {lon:15.8f} {lat:15.8f} {event_id:32s}'
-            #            f'{relax:6.3f} {vc[0] * 1000.:10.2f} {vc[1] * 1000.:10.2f} {vc[2] * 1000.:10.2f} '
-            #            f'{vp[0] * 1000.:10.2f} {vp[1] * 1000.:10.2f} {vp[2] * 1000.:10.2f}')
-
 def main():
 
     def_config = EtmStackerConfig()
@@ -1056,17 +1005,6 @@ def main():
                              "at full data strength. Validated to resolve cross-station distortion that "
                              "the default (data-strength) injection can produce; still off by default "
                              "pending cleanup of the two paths. Recommended when using -sparse.")
-
-    parser.add_argument('-no_sparse_fixes', '--no_sparse_injection_fixes', action='store_true',
-                        default=not def_config.sparse_injection_fixes,
-                        help="With -sparse: disable the three corrections to the sparse-station "
-                             "injection (on by default) and restore the behavior that preceded "
-                             "them -- a flat per-field 1/sigma**2 injection weight, no intercept "
-                             "in the local reduction, and a free-fit mechanical jump subtracted on "
-                             "top of the prefit that already removed it. Present only so the two "
-                             "can be compared side by side (see also the interactive sparse_fixes "
-                             "command); the old path is measurably worse than not using -sparse at "
-                             "all and is meant to be deleted, not chosen.")
 
     parser.add_argument('-no_adaptive_weighting', '--no_adaptive_weighting', action='store_true',
                         default=not def_config.adaptive_constraint_weighting_enabled,
@@ -1195,7 +1133,6 @@ def main():
             sparse_validity_override=(process_date_str(args.sparse_validity_date).fyear
                                       if args.sparse_validity_date else None),
             sparse_constraint_mode=args.sparse_constraint_mode,
-            sparse_injection_fixes=not args.no_sparse_injection_fixes,
             adaptive_constraint_weighting_enabled=not args.no_adaptive_weighting,
             adaptive_constraint_target_ratio=args.adaptive_constraint_target_ratio,
             gls_for_all_stations=args.gls_for_all_stations,
@@ -1218,8 +1155,6 @@ def main():
 
         datestr = datetime.now().strftime('%Y%m%d_%H%M%S')
         etm_stacker.filename = f'etm_stacker_session_{datestr}'
-        #with open(f'etm_stacker_session_{datestr}.pkl', 'wb') as f:
-        #    pickle.dump(etm_stacker, f, protocol=pickle.HIGHEST_PROTOCOL)
 
         etm_stacker.solve()
     else:

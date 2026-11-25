@@ -2,10 +2,12 @@
 ETM Stacker main class.
 """
 
+import logging
 from typing import List, Dict, Set
 import numpy as np
 from tqdm import tqdm
 
+from . import console
 from . import etm_builder
 from .data_classes import (
     EtmStackerConfig, NormalEquations, Station, EtmStackerField
@@ -22,6 +24,8 @@ from ..core.etm_engine import EtmEngine
 from ..core.data_classes import Earthquake
 from ...dbConnection import Cnn
 from ...Utils import stationID, print_yellow
+
+logger = logging.getLogger(__name__)
 
 
 class EtmStackerException(Exception):
@@ -87,47 +91,70 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         self.print_config()
 
     def print_config(self):
-        sr = ','.join(['%.3f' % r for r in self.config.relaxation])
-        cp = ','.join(['%s' % r for r in self.config.earthquakes_cherry_picked])
-        tqdm.write(f' -- Initialized EtmStacker with max cond number: {self.config.max_condition_number}; '
-                   f'relaxations: {sr}')
-        tqdm.write(f' -- Earthquake mag limit: {self.config.earthquake_magnitude_limit}; '
-                   f'Cherry picked earthquakes: {cp};')
+        """Report the settings this run will use, as the run's opening phase."""
         from ...pyDate import Date
+
+        console.phase('configuration')
+        if self.filename:
+            console.result('Session', self.filename)
+        console.result('Earthquake magnitude limit', f'{self.config.earthquake_magnitude_limit}')
         if isinstance(self.config.post_seismic_back_lim, Date):
-            tqdm.write(f' -- Considering events starting from {self.config.post_seismic_back_lim.yyyyddd()}')
+            console.result('Postseismic events considered from',
+                           self.config.post_seismic_back_lim.yyyyddd())
         else:
-            tqdm.write(f' -- Considering events up to {self.config.post_seismic_back_lim / 365} '
-                       f'years back from station start')
+            console.result('Postseismic events considered back',
+                           f'{self.config.post_seismic_back_lim / 365:.1f} yr from station start')
+        console.result('Postseismic separability limit',
+                       f'{self.config.postseismic_min_separability:g}')
+        console.result('Relaxation constants [yr]',
+                       ', '.join(f'{r:.3f}' for r in self.config.relaxation))
+        if self.config.earthquakes_cherry_picked:
+            console.result('Cherry-picked events',
+                           f'{len(self.config.earthquakes_cherry_picked)}')
+        console.result('Max condition number [log10]', f'{self.config.max_condition_number}')
 
-        tqdm.write(f" -- Interseismic sigmas: {self.config.interseismic_h_sigma * 1000.} mm/yr "
-                   f"{self.config.interseismic_v_sigma * 1000.} mm/yr")
-        tqdm.write(f" -- Coseismic sigmas: {self.config.coseismic_h_sigma * 1000.} mm "
-                   f"{self.config.coseismic_v_sigma * 1000.} mm")
-        tqdm.write(f" -- Postseismic sigmas: {self.config.postseismic_h_sigma * 1000.} mm "
-                   f"{self.config.postseismic_v_sigma * 1000.} mm")
-        tqdm.write(f" -- Station weight scale factor: {self.config.station_weight_scale}")
-        tqdm.write(f" -- Vertical interpolation method: {self.config.vertical_method}")
-        if self.config.vertical_method != 'spline2d':
-            tqdm.write(f" -- Vertical load radius (for diskload or rectload): {self.config.vertical_load_radius} km")
+        console.result('Interseismic sigmas h/v [mm/yr]',
+                       f'{self.config.interseismic_h_sigma * 1000.:g} / '
+                       f'{self.config.interseismic_v_sigma * 1000.:g}')
+        console.result('Coseismic sigmas h/v [mm]',
+                       f'{self.config.coseismic_h_sigma * 1000.:g} / '
+                       f'{self.config.coseismic_v_sigma * 1000.:g}')
+        console.result('Postseismic sigmas h/v [mm]',
+                       f'{self.config.postseismic_h_sigma * 1000.:g} / '
+                       f'{self.config.postseismic_v_sigma * 1000.:g}')
+        console.result('Station weight scale', f'{self.config.station_weight_scale:g}')
+
+        console.result('Vertical interpolation', self.config.vertical_method)
+        if self.config.vertical_method == 'spline2d':
+            console.result('Spline2d tension', f'{self.config.tension:g}')
         else:
-            tqdm.write(f" -- Spline2d tension: {self.config.tension}")
+            console.result('Vertical load radius [km]', f'{self.config.vertical_load_radius:g}')
 
-        tqdm.write(f" -- ETM stacker model filename: {self.filename}")
+        console.result('Station inclusion',
+                       f'>= {self.config.min_time_span:g} yr span, '
+                       f'>= {self.config.min_span_completion:g}% complete')
+        console.result('Sparse-station constraints',
+                       'on' if self.config.sparse_constraints_enabled else 'off')
+        console.result('Adaptive constraint weighting',
+                       f'on, target ratio {self.config.adaptive_constraint_target_ratio:g}'
+                       if self.config.adaptive_constraint_weighting_enabled else 'off')
+        console.result('GLS for every station',
+                       'on' if self.config.gls_for_all_stations else 'off')
+        console.result('Parallel workers', f'{self.config.parallel_workers}')
 
     def add_station(self, cnn: Cnn, network_code: str, station_code: str,
                     json_folder: str = None,
                     save_json_folder: str = None):
         """Add a station to the stack."""
         # Build ETM
-        result = etm_builder.build_etm(self.config, cnn, network_code, station_code,
-                                       json_folder, save_json_folder)
-        if result is None:
-            return
         # unconstrained_etm (Step 1's own fit, robust-least-squares) isn't used here: a
         # sparse station gets its own dedicated, GLS-fit free fit instead -- see below.
-        etm, _ = result
-        self._add_built_station(etm, network_code, station_code)
+        etm, _, reason = etm_builder.build_etm(self.config, cnn, network_code, station_code,
+                                               json_folder, save_json_folder)
+        if etm is None:
+            return {'station': f'{network_code}.{station_code}', 'role': 'dropped',
+                    'reason': reason, 'span': 0., 'completion': 0., 'nobs': 0}
+        return self._add_built_station(etm, network_code, station_code)
 
     def add_stations_parallel(self, cnn: Cnn, stnlist: List[dict],
                               json_folder: str = None, save_json_folder: str = None):
@@ -153,10 +180,19 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         fresh connection (see etm_builder.build_station_job) since a connection opened
         here, before forking, must never be reused by a worker process.
         """
+        console.phase('station ETMs')
+        console.info(f'Building {len(stnlist)} station ETM(s) on '
+                     f'{max(1, self.config.parallel_workers)} process(es). '
+                     f'Per-station detail: -etm_verbosity info')
+
+        records = []
+
         if self.config.parallel_workers <= 1:
-            for stn in stnlist:
-                self.add_station(cnn, stn['NetworkCode'], stn['StationCode'],
-                                 json_folder, save_json_folder)
+            for stn in tqdm(stnlist, ncols=console.WIDTH, desc='   building', unit='stn',
+                            disable=None):
+                records.append(self.add_station(cnn, stn['NetworkCode'], stn['StationCode'],
+                                                json_folder, save_json_folder))
+            self._report_station_builds(records)
             return
 
         import multiprocessing as mp
@@ -164,44 +200,83 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         jobs = [(self.config, stn['NetworkCode'], stn['StationCode'], json_folder, save_json_folder)
                 for stn in stnlist]
 
-        tqdm.write(f' -- Building {len(jobs)} station(s) across '
-                  f'{self.config.parallel_workers} worker processes')
-
         ctx = mp.get_context('fork')
         with ctx.Pool(processes=self.config.parallel_workers) as pool:
-            for network_code, station_code, etm, error in pool.imap(etm_builder.build_station_job, jobs):
+            for network_code, station_code, etm, error, reason in tqdm(
+                    pool.imap(etm_builder.build_station_job, jobs), total=len(jobs),
+                    ncols=console.WIDTH, desc='   building', unit='stn', disable=None):
+                name = f'{network_code}.{station_code}'
                 if error is not None:
-                    tqdm.write(print_yellow(
-                        f' -- Worker exception building {network_code}.{station_code}, skipping:\n{error}'))
-                    continue
+                    tqdm.write(print_yellow(f'   ! worker exception building {name}:\n{error}'))
                 if etm is None:
-                    # build_etm/add_station's own skip conditions already explained
-                    # themselves via tqdm.write from inside the worker process
+                    records.append({'station': name, 'role': 'dropped', 'reason': reason,
+                                    'span': 0., 'completion': 0., 'nobs': 0})
                     continue
-                self._add_built_station(etm, network_code, station_code)
+                records.append(self._add_built_station(etm, network_code, station_code))
 
-    def _add_built_station(self, etm: EtmEngine, network_code: str, station_code: str):
+        self._report_station_builds(records)
+
+    def _report_station_builds(self, records: List[dict]) -> None:
+        """Summarise a whole build phase in one place.
+
+        Only stations that did something other than join the stack as an ordinary full
+        station get a row: being included is the default and needs no line, while being
+        set aside as sparse, dropped for a short span, or failing outright is the part
+        worth reading. The counts above the table are what you actually check.
+        """
+        records = [r for r in records if r]
+        roles = [r['role'] for r in records]
+        interseismic = sum(1 for r in records
+                           if r['role'] == 'full' and r.get('interseismic'))
+
+        console.result('Full stations',
+                       f'{roles.count("full")}  ({interseismic} constrain the '
+                       f'interseismic field)')
+        console.result('Sparse stations', f'{roles.count("sparse")}')
+        console.result('Dropped', f'{roles.count("dropped") + roles.count("skipped")}')
+
+        notable = [r for r in records if r['role'] != 'full']
+        for r in notable:
+            if r['role'] == 'skipped':
+                r['role'] = 'dropped'
+        if notable:
+            console.step('stations not entering the stack as full')
+            console.table(
+                ['station', 'outcome', 'span[yr]', 'compl[%]', 'nobs', 'reason'],
+                [[r['station'], r['role'], f'{r["span"]:.1f}', f'{r["completion"]:.0f}',
+                  f'{r["nobs"]}', r['reason']] for r in notable],
+                align='llrrrl')
+
+    def _add_built_station(self, etm: EtmEngine, network_code: str, station_code: str) -> dict:
         """Fold an already-built ETM (etm_builder.build_etm's result) into the stack:
         the min_time_span/sparse checks, Station creation, and (for a full station) its
         normal equations -- shared by add_station (serial) and add_stations_parallel.
+
+        Returns a record of what happened to this station rather than printing it. With
+        eight workers running, one line per station per decision produced an interleaved
+        stream nobody could read; the caller collects these and reports them as one
+        table once the phase is done.
         """
-        if (etm.solution_data.time_vector[-1] -
-                etm.solution_data.time_vector[0]) < self.config.min_time_span:
-            tqdm.write(print_yellow(
-                f' -- Station {network_code}.{station_code} has less than '
-                f'{self.config.min_time_span} years of data, skipping'))
-            return
+        span = float(etm.solution_data.time_vector[-1] - etm.solution_data.time_vector[0])
+        completion = float(etm.solution_data.span_completion)
+        record = {'station': f'{network_code}.{station_code}', 'span': span,
+                  'completion': completion, 'nobs': int(etm.solution_data.solutions),
+                  'role': 'full', 'reason': ''}
 
-        is_sparse = etm.solution_data.span_completion < self.config.min_span_completion
+        if span < self.config.min_time_span:
+            record['role'] = 'skipped'
+            record['reason'] = f'span {span:.1f} yr < {self.config.min_time_span:g} yr'
+            return record
 
+        is_sparse = completion < self.config.min_span_completion
         if is_sparse:
-            tqdm.write(print_yellow(
-                f' -- Station {network_code}.{station_code} span completion '
-                f'{etm.solution_data.span_completion:.1f}% < {self.config.min_span_completion:.1f}%, '
-                f'adding as sparse station'))
+            record['role'] = 'sparse'
+            record['reason'] = (f'completion {completion:.1f}% '
+                                f'< {self.config.min_span_completion:g}%')
 
         # Create station
         station = etm_builder.create_station(etm)
+        record['interseismic'] = station.is_interseismic
 
         if is_sparse:
             # station.free_fit is NOT built here, even when sparse_constraints_enabled:
@@ -210,7 +285,7 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
             # true yet at this point in the add_station loop. build_system() builds it
             # once that's available.
             self.sparse_stations.append(station)
-            return
+            return record
 
         # Create normal equations
         neq = self._create_normal_equations(station)
@@ -219,13 +294,15 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         self.stations.append(station)
         self.normal_equations.append(neq)
 
+        return record
+
     def remove_station(self, station_id: str):
         # sparse stations are observation-only (no owned parameters), so removal
         # is immediate -- no normal_equations/parameter_range renumbering needed
         for i, station in enumerate(self.sparse_stations):
             if stationID(station) == station_id:
                 self.sparse_stations.pop(i)
-                tqdm.write(f' -- Removed sparse station {station_id}')
+                tqdm.write(f'   Removed sparse station {station_id}')
                 self.solved = False
                 return
 
@@ -256,7 +333,9 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         happen now (once constraints are registered below) -- see
         constraints.sparse.build_sparse_free_fits.
         """
-        # 1. Create grids
+        console.phase('shared system')
+
+        console.step('interpolation grids')
         self.grids = GridSystem.create_from_stations(self.stations,
                                                      grid_spacing=self.config.grid_spacing,
                                                      grid_load_radius=self.config.vertical_load_radius,
@@ -264,7 +343,7 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                                                      tension=self.config.tension,
                                                      extent_stations=self.sparse_stations)
 
-        # 3. Register all constraints
+        console.step('constraints')
         self._register_constraints()
 
         # 3b. Apply any non-default Okada regularization weight to every constraint just
@@ -284,9 +363,10 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                                       self.config.postseismic_sw_okada_v_weight,
                                       constraint_type='postseismic')
 
-        # 4. Sparse stations' validity-windowed free fits (needs station_list, populated
+        # Sparse stations' validity-windowed free fits (needs station_list, populated
         # by _register_constraints above)
         if self.config.sparse_constraints_enabled:
+            console.step('sparse-station free fits')
             if cnn is None:
                 raise EtmStackerException(
                     'build_system: sparse_constraints_enabled is True but no cnn was given '
@@ -393,18 +473,20 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
             apply_to.append(constraint)
 
         for constraint in apply_to:
-            tqdm.write(f'Updating Okada weights for {constraint.short_description()}: '
-                       f'h={constraint.sw_okada_h_weight}->{h_weight}  '
-                       f'v={constraint.sw_okada_v_weight}->{v_weight}')
+            logger.info(f'Okada weights for {constraint.short_description()}: '
+                        f'h={constraint.sw_okada_h_weight}->{h_weight}  '
+                        f'v={constraint.sw_okada_v_weight}->{v_weight}')
             constraint.sw_okada_h_weight = h_weight
             constraint.sw_okada_v_weight = v_weight
             constraint.dislocation_model = None
 
-        if not apply_to:
-            tqdm.write('update_okada_weights: no matching constraints found')
+        if apply_to:
+            console.info(f'Okada regularization h={h_weight:g} v={v_weight:g} applied to '
+                         f'{len(apply_to)} '
+                         f'{constraint_type or "co/postseismic"} constraint(s)')
+        else:
+            console.warn('update_okada_weights: no matching constraints found')
 
         self.solved = False
         return len(apply_to)
 
-    def get_trajectory_functions_at_point(self, lon: float, lat: float, etm: EtmEngine):
-        pass
