@@ -68,7 +68,11 @@ class ConstraintRegistry:
                 notes = []
                 if constraint.is_collision:
                     notes.append('collision')
-                if constraint.is_zero_tied:
+                # getattr, not attribute access: a session pickled before a flag
+                # existed unpickles without it (BaseConstraint sets these in __init__,
+                # which pickle does not call), and -load must keep working across a
+                # version bump rather than dying on a reporting detail.
+                if getattr(constraint, 'is_zero_tied', False):
                     notes.append('ZERO-TIED (1 or no constraining station)')
                 rows.append([
                     constraint_type,
