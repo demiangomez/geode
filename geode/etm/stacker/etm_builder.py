@@ -18,7 +18,6 @@ import math
 from typing import List, Optional, Tuple
 
 import numpy as np
-from tqdm import tqdm
 
 from .data_classes import EtmStackerConfig, Station
 from ..core.etm_engine import EtmEngine
@@ -29,7 +28,7 @@ from ..least_squares.design_matrix import DesignMatrixException
 from ..etm_functions.jumps import JumpFunction
 from ...dbConnection import Cnn
 from ...pyDate import Date
-from ...Utils import stationID, print_yellow
+from ...Utils import stationID
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +203,11 @@ def build_zero_tie_constraints(etm: EtmEngine) -> List[JumpFunction]:
     return constraints
 
 
+def _note(notes: List[str], reason: str) -> str:
+    """Join whatever happened on the way with why the station was finally dropped."""
+    return '; '.join(notes + [reason])
+
+
 def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_code: str,
              json_folder: str = None, save_json_folder: str = None
              ) -> Tuple[Optional[EtmEngine], Optional[EtmEngine], str]:
@@ -217,12 +221,18 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
     a free fit for a sparse station should reuse this object when present rather than
     calling build_free_fit again.
 
-    Returns (etm, unconstrained_etm, skip_reason). etm is None when the station cannot
-    be used at all, and skip_reason then says why in a few words -- returned rather than
-    printed because this runs in a worker process, where a printed line arrives
-    interleaved with seven others and detached from its station. The caller collects
-    these into one summary table (stacker._report_station_builds).
+    Returns (etm, unconstrained_etm, note). etm is None when the station cannot be used
+    at all, and note then says why in a few words; when the ETM was built but something
+    happened on the way (a rank-deficient first attempt, a zero-tie retry), note records
+    that instead.
+
+    Nothing in here prints. This runs in a worker process, and a worker cannot clear the
+    parent's progress bar -- tqdm.write only knows about bars in its own process -- so
+    anything written from here lands on top of the bar, detached from the seven other
+    stations building alongside it. The caller collects these notes into one summary
+    table (stacker._report_station_builds); detail goes to the logger.
     """
+    notes: List[str] = []
     loaded_from_json = False
     saved_obs_sigmas = None
     saved_noise_covariance_lag = None
@@ -274,7 +284,7 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
                 # of the two code paths (database vs. JSON) it came through.
                 logger.info(f'Station {network_code}.{station_code} has less than '
                             f'{config.min_time_span} years of data, skipping')
-                return None, None, f'span < {config.min_time_span:g} yr'
+                return None, None, _note(notes, f'span < {config.min_time_span:g} yr')
 
             etm_unconstrained.run_adjustment(try_loading_db=False, force_computation=True,
                                              try_save_to_db=False)
@@ -284,12 +294,13 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
             etm_unconstrained.plot()
         except SolutionDataException as e:
             logger.info(f'{network_code}.{station_code}: {e}')
-            return None, None, 'no usable solutions'
+            return None, None, _note(notes, 'no usable solutions')
 
         if etm_unconstrained.config.modeling.status == FitStatus.UNABLE_TO_FIT:
-            tqdm.write(print_yellow(f'   ! Unconstrained ETM for {network_code}.{station_code} '
-                                    f'could not fit; skipping obs_sigmas restoration and '
-                                    f'mechanical jump detection'))
+            logger.info(f'Unconstrained ETM for {network_code}.{station_code} could not '
+                        f'fit; skipping obs_sigmas restoration and mechanical jump '
+                        f'detection')
+            notes.append('step-1 fit failed')
         else:
             unconstrained_etm = etm_unconstrained
             saved_obs_sigmas = [r.obs_sigmas.copy() for r in etm_unconstrained.fit.results]
@@ -317,8 +328,9 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         etm.config.plotting_config.filename = f'./production/{network_code}.{station_code}_stacker'
         etm.plot()
     except (DesignMatrixException, np.linalg.LinAlgError):
-        tqdm.write(print_yellow(f'   ! Unable to fit {network_code}.{station_code} -> system is rank deficient. '
-                                f'Will redo ETM with only 10 years of postseismic events.'))
+        logger.info(f'{network_code}.{station_code} rank deficient; redoing ETM with '
+                    f'only 10 years of postseismic events')
+        notes.append('rank deficient, retried')
         etm_config.validation.max_condition_number = 3
         etm = EtmEngine(etm_config, cnn=cnn, silent=True)
         apply_prefit(etm, prefit)
@@ -326,14 +338,15 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
             etm.run_adjustment(cnn=cnn)
         except Exception:
             logger.info(f'Unable to fit {network_code}.{station_code}; station not added')
-            return None, None, 'rank deficient, retry failed'
+            return None, None, _note(notes, 'rank deficient, retry failed')
     except SolutionDataException as e:
         logger.info(f'{network_code}.{station_code}: {e}')
-        return None, None, 'no usable solutions'
+        return None, None, _note(notes, 'no usable solutions')
 
     if etm.config.modeling.status == etm.config.modeling.status.UNABLE_TO_FIT:
-        tqdm.write(print_yellow(f'   ! Unable to fit station {network_code}.{station_code}. '
-                                f'Retrying with zero-tied coseismic/postseismic constraints.'))
+        logger.info(f'Unable to fit {network_code}.{station_code}; retrying with '
+                    f'zero-tied coseismic/postseismic constraints')
+        notes.append('zero-tied retry')
         # UNABLE_TO_FIT deactivates all design matrix functions (fit=False), so we inspect
         # jump_manager directly (ignoring fit state) to build the constraint list, then
         # recreate a fresh EtmEngine so the design matrix is rebuilt with everything active.
@@ -341,7 +354,7 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         if not zero_constraints:
             logger.info(f'No geophysical jumps to constrain for '
                         f'{network_code}.{station_code}; station not added')
-            return None, None, 'no jumps to zero-tie'
+            return None, None, _note(notes, 'no jumps to zero-tie')
         etm.config.modeling.least_squares_strategy.constraints = zero_constraints
         etm = EtmEngine(etm.config, cnn=cnn, silent=True)
         # prefit status and models are already carried in etm.config; only need to
@@ -355,16 +368,16 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
         except Exception:
             logger.info(f'Still unable to fit {network_code}.{station_code} with '
                         f'constraints; station not added')
-            return None, None, 'unfittable with zero ties'
+            return None, None, _note(notes, 'unfittable with zero ties')
         if etm.config.modeling.status == etm.config.modeling.status.UNABLE_TO_FIT:
             logger.info(f'Still unable to fit {network_code}.{station_code} after '
                         f'constraints; station not added')
-            return None, None, 'unfittable with zero ties'
+            return None, None, _note(notes, 'unfittable with zero ties')
 
     if np.any([np.isnan(r.parameters) for r in etm.fit.results]):
         logger.info(f'Station {network_code}.{station_code} combined with the list of '
                     f'earthquakes yielded a singular solution; station not added')
-        return None, None, 'singular solution'
+        return None, None, _note(notes, 'singular solution')
 
     # STEP 3: Restore obs_sigmas (and, when gls_for_all_stations fit both runs with
     # NoiseCovarianceGLS, noise_covariance_lag too) from the unconstrained run, when
@@ -410,7 +423,7 @@ def build_etm(config: EtmStackerConfig, cnn: Cnn, network_code: str, station_cod
             with open(_signature_path(folder, network_code, station_code), 'w') as f:
                 json.dump(_stacker_signature(config), f, indent=2)
 
-    return etm, unconstrained_etm, ''
+    return etm, unconstrained_etm, '; '.join(notes)
 
 
 def build_station_job(job: Tuple[EtmStackerConfig, str, str, Optional[str], Optional[str]]
@@ -438,7 +451,7 @@ def build_station_job(job: Tuple[EtmStackerConfig, str, str, Optional[str], Opti
     child.
 
     Returns (network_code, station_code, etm, error). etm is None both for build_etm's
-    own ordinary None return (it already explained why via tqdm.write) and for an
+    own ordinary None return (its note says why) and for an
     exception build_etm doesn't itself handle, in which case error carries the
     traceback -- so one bad station can't take the whole pool down.
     """
@@ -509,8 +522,8 @@ def build_free_fit(cnn: Cnn, network_code: str, station_code: str,
                                          try_save_to_db=False)
         return etm_unconstrained
     except SolutionDataException as e:
-        tqdm.write(print_yellow(f'   ! Could not compute free fit for sparse station '
-                                f'{network_code}.{station_code}: {e}'))
+        logger.info(f'Could not compute free fit for sparse station '
+                    f'{network_code}.{station_code}: {e}')
         return None
 
 

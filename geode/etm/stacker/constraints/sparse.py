@@ -574,9 +574,8 @@ def _whiten_and_weight(stn: Station, label: str, phi: np.ndarray, obs: np.ndarra
     # fit): there's no principled per-epoch weight to fall back to here (a uniform one is
     # exactly the failure mode this module was built to avoid -- see module docstring),
     # so this component is dropped from the sparse contribution rather than guessed at.
-    tqdm.write(print_yellow(
-        f' -- Sparse station {stationID(stn)} {label}: no GLS noise covariance available; '
-        f'excluding this component from the sparse contribution'))
+    logger.info(f'Sparse station {stationID(stn)} {label}: no GLS noise covariance '
+                f'available; excluding this component from the sparse contribution')
     return None, None, 0.
 
 
@@ -772,6 +771,7 @@ def add_sparse_contributions(stacker, system_neq: np.ndarray, system_ceq: np.nda
                 f'({len(stacker.sparse_stations)} station(s))')
     total_lpl = 0.
     total_equations = 0
+    contributing = 0
     for stn in stacker.sparse_stations:
         result = compute_sparse_system_contribution(stacker, stn)
         if result is None:
@@ -781,5 +781,10 @@ def add_sparse_contributions(stacker, system_neq: np.ndarray, system_ceq: np.nda
         system_ceq += ceq_contrib
         total_lpl += lpl
         total_equations += n_equations
+        contributing += 1
+
+    console.info(f'{contributing} of {len(stacker.sparse_stations)} sparse station(s) '
+                 f'contributed {total_equations} equation(s); components with no GLS '
+                 f'noise model are excluded and show as -- in the misfit table')
 
     return total_lpl, total_equations

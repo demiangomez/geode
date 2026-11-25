@@ -3,8 +3,12 @@ SW-Okada leave-one-out interpolation mixin for coseismic and postseismic constra
 """
 
 from typing import List, Tuple, TYPE_CHECKING, Dict
+import logging
+
 import numpy as np
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from ..data_classes import Station
 from ...core.data_classes import Earthquake
@@ -131,7 +135,7 @@ class SWOkada(BaseConstraint):
         (_compute_interpolation_coefficients) build their own per-station
         systems and are not affected by this choice.
         """
-        tqdm.write(f'Initializing SW-Okada model for {self.event.id}')
+        logger.info(f'Initializing SW-Okada model for {self.event.id}')
 
         strike, dip = self.fault_geometry.get_strike_dip()
 
@@ -150,7 +154,7 @@ class SWOkada(BaseConstraint):
         # Compute grid prediction kernels using the same all-station set so that
         # ke/kn/ku dimensions are consistent with dislocation_model and
         # station_list (N_all × N_all matrices throughout).
-        tqdm.write('Computing earthquake response for the interpolation grid')
+        logger.info('Computing earthquake response for the interpolation grid')
         ke, kn, ku = self._compute_grid_prediction_kernels(all_stations, mask)
 
         self.grid_prediction_kernels = (ke, kn, ku)

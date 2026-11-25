@@ -27,6 +27,8 @@ class SolverMixin:
         """
         Solve the stacking system.
         """
+        console.phase('solve')
+
         # rebuild normal equations before solving
         system_neq, system_ceq = self._build_base_normal_equations()
 
@@ -57,8 +59,6 @@ class SolverMixin:
         self.total_constraints = self.constraint_registry.add_all_constraints(
             system_neq, self.total_parameters
         )
-
-        console.phase('solve')
 
         x = np.linalg.solve(system_neq, system_ceq)
         self.solution = np.reshape(x, (3, self.total_parameters))

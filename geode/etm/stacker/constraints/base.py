@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 from ..data_classes import Station, ConstraintEquation
 from ..types import ConstraintType
 from ...core.data_classes import Earthquake
-from ....Utils import stationID, print_yellow
+from ....Utils import stationID
 from ....elasticity.elastic_interpolation import get_radius
 
 if TYPE_CHECKING:
@@ -34,6 +34,11 @@ class BaseConstraint(ABC):
         self.equations: List[ConstraintEquation] = []
         self._is_collected = False
         self.is_collision = False
+        # Set by collect_constraints when this constraint had one or no constraining
+        # station and its parameters were hard zero-tied instead of spatially coupled.
+        # Reported by the registry's summary, where it is visible next to every other
+        # constraint rather than buried in the collection stream.
+        self.is_zero_tied = False
         self.relaxation: Union[float, None] = None
 
     @property
@@ -63,8 +68,7 @@ class BaseConstraint(ABC):
         constraining, to_constrain = self.select_stations(all_stations, **kwargs)
 
         if len(constraining) > 1:
-            for station in tqdm(to_constrain, ncols=120, disable=None,
-                                desc=f'Collecting {self.short_description()}'):
+            for station in to_constrain:
                 constraint_params = ConstraintEquation(
                     station=station,
                     constraint_design=self._build_k_matrix(station, constraining, grids, total_parameters),
@@ -76,15 +80,13 @@ class BaseConstraint(ABC):
             # couple parameters of nearby stations (d < 5 km)
             self.constrain_nearby_stations(all_stations, total_parameters)
         else:
-            tqdm.write(print_yellow(
-                f'   ! {self.short_description()} has one or no constraining station; '
-                f'consider removing it to avoid biasing station velocities'))
+            self.is_zero_tied = True
+            logger.info(f'{self.short_description()} has one or no constraining '
+                        f'station; zero-tying its parameters to avoid excursion')
 
             if len(to_constrain) > 0:
-                tqdm.write(print_yellow('     zero-tying its parameters to avoid excursion'))
                 # add a zero with a lot of weight
-                for station in tqdm(to_constrain, ncols=120, disable=None,
-                                    desc=f'Collecting {self.short_description()}'):
+                for station in to_constrain:
                     ke = np.zeros((1, total_parameters * 3))
                     kn = np.zeros((1, total_parameters * 3))
                     ku = np.zeros((1, total_parameters * 3))

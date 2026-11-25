@@ -212,7 +212,8 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                     records.append({'station': name, 'role': 'dropped', 'reason': reason,
                                     'span': 0., 'completion': 0., 'nobs': 0})
                     continue
-                records.append(self._add_built_station(etm, network_code, station_code))
+                records.append(self._add_built_station(etm, network_code, station_code,
+                                                      note=reason))
 
         self._report_station_builds(records)
 
@@ -235,19 +236,20 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         console.result('Sparse stations', f'{roles.count("sparse")}')
         console.result('Dropped', f'{roles.count("dropped") + roles.count("skipped")}')
 
-        notable = [r for r in records if r['role'] != 'full']
-        for r in notable:
-            if r['role'] == 'skipped':
-                r['role'] = 'dropped'
+        # A full station that still carries a note (a rank-deficient first attempt, a
+        # zero-tie retry) belongs here too: it did join the stack, but not cleanly, and
+        # that is exactly what gets lost when the only report is a count.
+        notable = [r for r in records if r['role'] != 'full' or r['reason']]
         if notable:
-            console.step('stations not entering the stack as full')
+            console.step('stations needing a second look')
             console.table(
                 ['station', 'outcome', 'span[yr]', 'compl[%]', 'nobs', 'reason'],
                 [[r['station'], r['role'], f'{r["span"]:.1f}', f'{r["completion"]:.0f}',
                   f'{r["nobs"]}', r['reason']] for r in notable],
                 align='llrrrl')
 
-    def _add_built_station(self, etm: EtmEngine, network_code: str, station_code: str) -> dict:
+    def _add_built_station(self, etm: EtmEngine, network_code: str, station_code: str,
+                           note: str = '') -> dict:
         """Fold an already-built ETM (etm_builder.build_etm's result) into the stack:
         the min_time_span/sparse checks, Station creation, and (for a full station) its
         normal equations -- shared by add_station (serial) and add_stations_parallel.
@@ -261,18 +263,21 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         completion = float(etm.solution_data.span_completion)
         record = {'station': f'{network_code}.{station_code}', 'span': span,
                   'completion': completion, 'nobs': int(etm.solution_data.solutions),
-                  'role': 'full', 'reason': ''}
+                  'role': 'full', 'reason': note}
+
+        def add_reason(text: str) -> None:
+            record['reason'] = f'{record["reason"]}; {text}' if record['reason'] else text
 
         if span < self.config.min_time_span:
-            record['role'] = 'skipped'
-            record['reason'] = f'span {span:.1f} yr < {self.config.min_time_span:g} yr'
+            record['role'] = 'dropped'
+            add_reason(f'span {span:.1f} yr < {self.config.min_time_span:g} yr')
             return record
 
-        is_sparse = completion < self.config.min_span_completion
-        if is_sparse:
+        if completion < self.config.min_span_completion:
             record['role'] = 'sparse'
-            record['reason'] = (f'completion {completion:.1f}% '
-                                f'< {self.config.min_span_completion:g}%')
+            add_reason(f'completion {completion:.1f}% '
+                       f'< {self.config.min_span_completion:g}%')
+        is_sparse = record['role'] == 'sparse'
 
         # Create station
         station = etm_builder.create_station(etm)

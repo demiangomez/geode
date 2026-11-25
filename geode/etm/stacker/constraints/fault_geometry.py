@@ -357,8 +357,8 @@ class FaultGeometry:
 
         if rank < n_mat.shape[0]:
             tqdm.write(print_yellow(
-                f'  SW-Okada normal matrix for {label} is rank {rank} of {n_mat.shape[0]}; '
-                f'solved in the least-squares sense'))
+                f'   ! SW-Okada normal matrix for {label} is rank {rank} of '
+                f'{n_mat.shape[0]}; solved in the least-squares sense'))
 
         return x
 

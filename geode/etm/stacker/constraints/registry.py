@@ -41,7 +41,18 @@ class ConstraintRegistry:
 
     def collect_all_constraints(self, stations: List['Station'],
                                 total_parameters: int, grids: 'GridSystem', **kwargs):
-        """Collect all registered constraints."""
+        """Collect all registered constraints and report them as one table.
+
+        Each constraint used to narrate its own collection -- a progress bar over one
+        to sixteen stations, plus the SW-Okada setup lines, plus any zero-tie notice,
+        interleaved per event. That is a lot of screen for a step whose whole result is
+        "how many equations did each constraint produce, and against how many
+        constraining stations". The mechanics are in the log; what comes out here is
+        that answer.
+        """
+        from .. import console
+
+        rows = []
         for constraint_type in self._application_order:
             logger.info(f'Collecting {constraint_type} constraints')
             for constraint in self.constraints[constraint_type]:
@@ -53,6 +64,29 @@ class ConstraintRegistry:
                 if hasattr(constraint, '_constraint_coefficients'):
                     constraint._constraint_coefficients = {}
                 constraint.collect_constraints(stations, total_parameters, grids, **kwargs)
+
+                notes = []
+                if constraint.is_collision:
+                    notes.append('collision')
+                if constraint.is_zero_tied:
+                    notes.append('ZERO-TIED (1 or no constraining station)')
+                rows.append([
+                    constraint_type,
+                    constraint.event.id if constraint.event is not None else '-',
+                    f'{constraint.relaxation:.3f}' if constraint.relaxation is not None else '-',
+                    f'{len(constraint.station_list)}',
+                    f'{len(constraint.equations) * 3}',
+                    f'{constraint.h_sigma * 1000.:g}/{constraint.v_sigma * 1000.:g}',
+                    ', '.join(notes)])
+
+        console.step('constraint equations')
+        console.table(['type', 'event', 'relax', 'constraining', 'equations',
+                       'h/v sigma', 'note'],
+                      rows, align='lllrrll')
+        zero_tied = [r[1] for r in rows if 'ZERO-TIED' in r[6]]
+        if zero_tied:
+            console.warn(f'{len(zero_tied)} constraint(s) zero-tied for want of a second '
+                         f'constraining station: {", ".join(zero_tied)}')
 
     def add_all_constraints(self, neq: np.ndarray,
                             total_parameters: int) -> int:

@@ -9,8 +9,11 @@ Uses SW-Okada methodology for interpolating postseismic relaxation amplitude fie
 
 from datetime import datetime as _dt
 from typing import List, Tuple, TYPE_CHECKING
+import logging
+
 import numpy as np
-from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 from .fault_geometry import FaultGeometry
 from .sw_okada import SWOkada
@@ -95,9 +98,10 @@ class PostseismicConstraint(SWOkada):
                     if event_is_recent or post_event_span_years >= MIN_CONSTRAINING_YEARS:
                         constraining.append(stn)
                     else:
-                        tqdm.write(f' -- {stn.network_code}.{stn.station_code}: moved to to_constrain '
-                                   f'for {self.event.id} (post-event span {post_event_span_years:.1f} yr '
-                                   f'< {MIN_CONSTRAINING_YEARS:.1f} yr)')
+                        logger.info(f'{stn.network_code}.{stn.station_code}: moved to '
+                                    f'to_constrain for {self.event.id} (post-event span '
+                                    f'{post_event_span_years:.1f} yr < '
+                                    f'{MIN_CONSTRAINING_YEARS:.1f} yr)')
                         to_constrain.append(stn)
                 else:
                     to_constrain.append(stn)
