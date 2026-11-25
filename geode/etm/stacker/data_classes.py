@@ -34,7 +34,7 @@ class EtmStackerConfig(BaseDataClass):
     # (etm_builder.create_station), and with post_seismic_back_lim reaching back to 1990
     # that was enough to leave an 11-degree-wide stack with three constraining
     # interseismic stations.
-    postseismic_min_separability: float = 0.01
+    postseismic_min_separability: float = 0.
     # Which stations may DEFINE the interseismic field, replacing
     # etm_builder.create_station's "does it have clean pre-event data" rule -- see
     # constraints/separability.py for why that proxy fails in both directions. This is

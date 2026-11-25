@@ -334,9 +334,19 @@ class ModelingParameters(BaseDataClass):
     # this, the ratio of the span's end to its start (both measured from the event) does.
     # A station that came online 3 years after an event and then ran for 10 retains real
     # curvature; one that came online 4 years after an event and ran for 2.6 does not,
-    # even though the elapsed times are nearly the same. 0 disables the filter, fitting
-    # every event back to the post_seismic_back_lim window however flat its column.
-    postseismic_min_separability: float = 0.01
+    # even though the elapsed times are nearly the same.
+    #
+    # 0 (the default) disables the filter: every event back to the post_seismic_back_lim
+    # window is fit, however flat its column. It defaults OFF because dropping a column
+    # does not drop the signal. A flat log(1 + dt/tau) column still has a gradient;
+    # deleting it moves that gradient into the velocity, which then reads as an
+    # interseismic rate it is not -- a bias with a tight formal sigma, which is worse
+    # than an honest large one. In a joint fit it is worse still: the station loses its
+    # postseismic parameter and with it membership of every postseismic constraint, so
+    # the shared field can no longer supply the amplitude that would have freed its
+    # velocity. Turn it on deliberately, for a standalone fit of a station no network can
+    # help, where an unresolvable column has nothing to gain and a lot to cost.
+    postseismic_min_separability: float = 0.
 
     # General status of the fit process
     status: FitStatus = FitStatus.PREFIT

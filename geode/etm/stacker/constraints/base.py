@@ -36,6 +36,10 @@ class BaseConstraint(ABC):
     # and the constraint raises instead.
     allow_zero_tie: bool = True
 
+    # Filled in by a subclass that sets allow_zero_tie False, so the exception raised on
+    # too few constraining stations can name what would have to change.
+    eligibility_rule_description: str = 'decided by the constraint type'
+
     def __init__(self, constraint_type: ConstraintType,
                  h_sigma: float = 0.001, v_sigma: float = 0.003):
         self.constraint_type = constraint_type
@@ -110,13 +114,9 @@ class BaseConstraint(ABC):
         elif not self.allow_zero_tie:
             raise EtmStackerException(
                 f'{self.short_description()} has {len(constraining)} constraining '
-                f'station(s); at least 2 are needed to interpolate between them. '
-                f'Falling back to a zero-tie here would pin every one of the '
-                f'{len(to_constrain)} target parameters to zero, which for this '
-                f'constraint means asserting the whole network is motionless. Either '
-                f'widen the set of constraining stations or remove this constraint '
-                f'deliberately -- see EtmStackerConfig.interseismic_max_inflation for '
-                f'what decides interseismic eligibility.')
+                f'station(s) and needs at least 2 to interpolate between them; this '
+                f'constraint type has no zero-tie fallback. Which stations qualify is '
+                f'{self.eligibility_rule_description}.')
         else:
             self.is_zero_tied = True
             logger.info(f'{self.short_description()} has one or no constraining '

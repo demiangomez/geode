@@ -23,6 +23,19 @@ class InterseismicConstraint(BaseConstraint):
     # zero -- see BaseConstraint.allow_zero_tie.
     allow_zero_tie = False
 
+    eligibility_rule_description = (
+        'set by EtmStackerConfig.interseismic_max_inflation (-is_inflation). At its '
+        'default of 0 a station qualifies only if it has data from before its first '
+        'geophysical jump (etm_builder.create_station), which in a network where every '
+        'station postdates some event admits nobody. Above 0 it qualifies instead when '
+        "its velocity uncertainty is inflated by no more than that factor by its own "
+        'unknown postseismic decay amplitudes -- so a station that came online after an '
+        'event can still qualify, once the shared postseismic field pins its decay '
+        'tightly enough to free its velocity (constraints/separability.py). Note the '
+        'two rules can disagree sharply, and that neither can manufacture information '
+        'the network does not have'
+    )
+
     def __init__(self, stations: List[Station], h_sigma: float = 0.0001, v_sigma: float = 0.0003):
         super().__init__(ConstraintType.INTERSEISMIC, h_sigma, v_sigma)
 
