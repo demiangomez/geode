@@ -334,19 +334,26 @@ class ModelingParameters(BaseDataClass):
     # this, the ratio of the span's end to its start (both measured from the event) does.
     # A station that came online 3 years after an event and then ran for 10 retains real
     # curvature; one that came online 4 years after an event and ran for 2.6 does not,
-    # even though the elapsed times are nearly the same.
+    # even though the elapsed times are nearly the same. 0 disables the filter, fitting
+    # every event back to the post_seismic_back_lim window however flat its column.
     #
-    # 0 (the default) disables the filter: every event back to the post_seismic_back_lim
-    # window is fit, however flat its column. It defaults OFF because dropping a column
-    # does not drop the signal. A flat log(1 + dt/tau) column still has a gradient;
-    # deleting it moves that gradient into the velocity, which then reads as an
-    # interseismic rate it is not -- a bias with a tight formal sigma, which is worse
-    # than an honest large one. In a joint fit it is worse still: the station loses its
-    # postseismic parameter and with it membership of every postseismic constraint, so
-    # the shared field can no longer supply the amplitude that would have freed its
-    # velocity. Turn it on deliberately, for a standalone fit of a station no network can
-    # help, where an unresolvable column has nothing to gain and a lot to cost.
-    postseismic_min_separability: float = 0.
+    # On by default because this governs a STANDALONE fit, where an unresolvable column
+    # has nothing to gain and a lot to cost: nothing outside this station can supply the
+    # amplitude, so the column only takes an arbitrary share of the velocity. Measured
+    # on real stations (-post_back 1990/01/01, -cond 8), it is a no-op wherever the
+    # column carries curvature and a large correction where it does not -- ecu.jnec
+    # 11.83/53.23/-15.33 -> 9.05/8.68/-3.81 mm/yr with its sigmas 8x better, while
+    # igs.qui4 and per.lb01 are untouched.
+    #
+    # The ETM stacker deliberately turns this OFF
+    # (EtmStackerConfig.postseismic_min_separability defaults to 0 and is pushed down
+    # here by etm_builder.apply_config). There the trade reverses: dropping a column
+    # does not drop its signal -- a flat log(1 + dt/tau) column still has a gradient,
+    # which moves into the velocity and reads as an interseismic rate it is not -- and
+    # it also strips the station of its postseismic parameter, and with it membership of
+    # every postseismic constraint, removing the one route by which the shared field
+    # could have supplied the amplitude and freed the velocity.
+    postseismic_min_separability: float = 0.01
 
     # General status of the fit process
     status: FitStatus = FitStatus.PREFIT

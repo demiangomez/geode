@@ -27,13 +27,21 @@ class EtmStackerConfig(BaseDataClass):
     max_condition_number: float = 15
     earthquake_magnitude_limit: float = 8.0
     post_seismic_back_lim: Union[float, Date] = field(default_factory=lambda: Date(year=1990, doy=1))
-    # Passed straight through to ModelingParameters.postseismic_min_separability on
-    # every station this stacker builds (etm_builder.apply_config) -- see that field for
-    # what it measures. It matters more here than for a standalone ETM: a flat
-    # pre-installation decay term also keeps a station out of the interseismic field
-    # (etm_builder.create_station), and with post_seismic_back_lim reaching back to 1990
-    # that was enough to leave an 11-degree-wide stack with three constraining
-    # interseismic stations.
+    # Pushed down to ModelingParameters.postseismic_min_separability on every station
+    # this stacker builds (etm_builder.apply_config, build_etm's step 1, and
+    # build_free_fit), overriding that field's own default -- see it for what the filter
+    # measures and why a standalone fit wants it on.
+    #
+    # Off here, deliberately. A stacker exists to resolve what one station cannot, so
+    # the trade that justifies the filter for a standalone fit runs the other way: the
+    # column is unresolvable from this station's data alone, but the shared postseismic
+    # field can supply its amplitude from the stations that do have early post-event
+    # data. Dropping it forfeits that -- the gradient of a flat log(1 + dt/tau) column
+    # moves into the velocity and reads as an interseismic rate it is not, and the
+    # station loses the postseismic parameter that was its membership of every
+    # postseismic constraint, so nothing can tell it otherwise. On the Ecuador stack at
+    # 0.01 that left 13 of the 17 interseismic-field-defining stations carrying a
+    # transient they were then used to define the field with.
     postseismic_min_separability: float = 0.
     # Which stations may DEFINE the interseismic field, replacing
     # etm_builder.create_station's "does it have clean pre-event data" rule -- see
