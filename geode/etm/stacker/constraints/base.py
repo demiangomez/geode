@@ -55,6 +55,12 @@ class BaseConstraint(ABC):
         # Reported by the registry's summary, where it is visible next to every other
         # constraint rather than buried in the collection stream.
         self.is_zero_tied = False
+        # Set by collect_constraints. Kept apart because they answer different
+        # questions: how many stations the field is interpolated FROM, and how many are
+        # tied TO it. _station_list is their union, so reporting its length as
+        # "constraining" made a zero-tie look like it had 23 constraining stations.
+        self.n_constraining = 0
+        self.n_to_constrain = 0
         self.relaxation: Union[float, None] = None
 
     @property
@@ -92,6 +98,9 @@ class BaseConstraint(ABC):
         # constraint returns the same list on both sides. Deduplicated by identity
         # rather than equality: Station is a dataclass with numpy-array fields, so its
         # generated __eq__ raises on an ambiguous array truth value.
+        self.n_constraining = len(constraining)
+        self.n_to_constrain = len(to_constrain)
+
         seen = set()
         self._station_list = []
         for station in list(constraining) + list(to_constrain):

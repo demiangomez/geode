@@ -218,7 +218,10 @@ class SolverMixin:
                 n = len(const.equations)
                 # compute the wrms residuals
                 if n > 0:
-                    wrms.append([const, n, np.sqrt((v.T @ v) / (n - 1)),
+                    # n - 1 would be zero for a single-equation constraint, which is
+                    # exactly the case a zero-tie produces; there is no redundancy to
+                    # divide by, so report the residual itself rather than inf.
+                    wrms.append([const, n, np.sqrt((v.T @ v) / max(n - 1, 1)),
                                  sorted(v_eq, key=itemgetter(2), reverse=True)])
 
         return sorted(wrms, key=itemgetter(2), reverse=True)

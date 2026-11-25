@@ -92,7 +92,8 @@ class ConstraintRegistry:
                     constraint_type,
                     constraint.event.id if constraint.event is not None else '-',
                     f'{constraint.relaxation:.3f}' if constraint.relaxation is not None else '-',
-                    f'{len(constraint.station_list)}',
+                    f'{constraint.n_constraining}',
+                    f'{constraint.n_to_constrain}',
                     f'{len(constraint.equations) * 3}',
                     f'{constraint.h_sigma * 1000.:g}/{constraint.v_sigma * 1000.:g}',
                     ', '.join(notes)])
@@ -101,9 +102,9 @@ class ConstraintRegistry:
             return
 
         console.step('constraint equations')
-        console.table(['type', 'event', 'relax', 'constraining', 'equations',
+        console.table(['type', 'event', 'relax', 'from', 'tied', 'equations',
                        'h/v sigma', 'note'],
-                      rows, align='lllrrll')
+                      rows, align='lllrrrll')
         zero_tied = [r[1] for r in rows if 'ZERO-TIED' in r[6]]
         if zero_tied:
             console.warn(f'{len(zero_tied)} constraint(s) zero-tied for want of a second '
