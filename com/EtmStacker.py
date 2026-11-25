@@ -1115,15 +1115,20 @@ def main():
                         help="Caps a flagged station's own-diagonal-to-external-tie-weight ratio at this "
                              f"value (see -no_adaptive_weighting). Default {def_config.adaptive_constraint_target_ratio}.")
 
-    parser.add_argument('-gls_for_all', '--gls_for_all_stations', action='store_true',
-                        default=def_config.gls_for_all_stations,
-                        help="Fit every full station's own ETM with NoiseCovarianceGLS instead of robust "
-                             "least squares, and use its full colored-noise covariance (not a diagonal "
-                             "weight) in that station's own contribution to the shared normal equations. "
-                             "Complements -no_adaptive_weighting's mechanism rather than replacing it: GLS "
-                             "corrects an overconfident own-diagonal, adaptive weighting corrects what's "
-                             "left once that diagonal is honest. Off by default -- considerably slower than "
-                             "robust least squares; see -parallel_workers to offset that cost.")
+    parser.add_argument('-no_gls', '--no_gls_for_all_stations', action='store_true',
+                        default=not def_config.gls_for_all_stations,
+                        help="Fit every station's own ETM with robust least squares instead of "
+                             "NoiseCovarianceGLS, and weight its contribution to the shared normal "
+                             "equations with a diagonal per-epoch sigma instead of its full colored-noise "
+                             "covariance. GLS is the default because the diagonal weight treats correlated "
+                             "daily epochs as independent observations: velocity sigmas come out 3-11x too "
+                             "small, and not by a uniform factor, so the RELATIVE weighting between "
+                             "stations is wrong too -- a 2.6-year record can end up weighted as more "
+                             "informative about velocity than a 21-year one. Complements "
+                             "-no_adaptive_weighting rather than replacing it: GLS makes a station's own "
+                             "diagonal honest, adaptive weighting corrects what is left afterwards. Use "
+                             "this only for a quick look or to reproduce an older run; the uncertainties "
+                             "it produces are not usable.")
 
     parser.add_argument('-parallel_workers', '--parallel_workers', type=int,
                         default=def_config.parallel_workers, metavar='n',
@@ -1234,7 +1239,7 @@ def main():
             sparse_constraint_mode=args.sparse_constraint_mode,
             adaptive_constraint_weighting_enabled=not args.no_adaptive_weighting,
             adaptive_constraint_target_ratio=args.adaptive_constraint_target_ratio,
-            gls_for_all_stations=args.gls_for_all_stations,
+            gls_for_all_stations=not args.no_gls_for_all_stations,
             parallel_workers=args.parallel_workers,
             coseismic_sw_okada_h_weight=args.coseismic_sw_okada_h_weight,
             coseismic_sw_okada_v_weight=args.coseismic_sw_okada_v_weight,

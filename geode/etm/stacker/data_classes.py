@@ -132,7 +132,26 @@ class EtmStackerConfig(BaseDataClass):
     # (the actual cause), the adaptive weight corrects the remaining imbalance once that
     # diagonal is honest. Off by default because full-network GLS is considerably
     # slower than robust least squares; use parallel_workers to offset that cost.
-    gls_for_all_stations: bool = False
+    # On by default. Robust least squares weights every daily epoch as an independent
+    # observation, which for a GNSS position series is simply false -- the noise is
+    # flicker-dominated and strongly correlated in time -- and the consequence is not a
+    # harmless constant factor. Measured against GLS on this network, velocity sigmas
+    # are optimistic by 3-11x (matching the published range for flicker), and not
+    # uniformly: North inflates 11x at ecu.laec and ecu.chec but 2.8x at col.psto, East
+    # 8.6x at ecu.coec. Since the stacker forms every field by weighting stations
+    # against each other, getting the ratios wrong is worse than getting the scale
+    # wrong.
+    #
+    # The clearest symptom under robust least squares was that ecu.chec (967 days) had
+    # the TIGHTEST velocity sigma in the network, better than igs.riop (7786 days) --
+    # sigma falling as 1/sqrt(N) over correlated daily epochs, so a short dense record
+    # outranks a two-decade one. GLS restores the physical ordering. That mis-weighting
+    # is independent of, and additional to, any eligibility rule: it is how a cohort of
+    # 2.6-year stations came to dominate a field built from 30-year records.
+    #
+    # Costs roughly 3 minutes for 68 stations across 8 workers (see -parallel_workers),
+    # against well under a minute for robust least squares.
+    gls_for_all_stations: bool = True
     # Number of worker processes used to build each station's own ETM (the unit of work
     # etm_builder.build_etm already does independently per station -- see its own module
     # docstring). 1 (default) runs serially, same as before this existed. Only affects
