@@ -14,6 +14,7 @@ from . import console
 from .constraints import adaptive_weight
 from .constraints import sparse as sparse_constraint
 from .data_classes import EtmStackerField
+from .exceptions import EtmStackerException
 from .types import ConstraintType
 from ...Utils import stationID
 
@@ -27,6 +28,12 @@ class SolverMixin:
         """
         Solve the stacking system.
         """
+        if getattr(self, 'system_stale', False):
+            raise EtmStackerException(
+                'the station set changed since build_system last ran, so the grids and '
+                'constraints no longer match it; call build_system(cnn) again before '
+                'solving (the station ETMs are kept, so this is quick)')
+
         console.phase('solve')
 
         # rebuild normal equations before solving

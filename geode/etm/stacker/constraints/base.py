@@ -67,6 +67,22 @@ class BaseConstraint(ABC):
 
         constraining, to_constrain = self.select_stations(all_stations, **kwargs)
 
+        # Refresh the station list from what was just selected rather than leaving the
+        # snapshot taken at construction. get_parameters_and_covariance and
+        # SWOkada._compute_dislocation_model both read it, and a station removed since
+        # construction still carries a parameter_start_idx from the old numbering -- so
+        # a stale entry does not merely add a dead site, it reads the solution vector at
+        # the wrong columns. Order is preserved and duplicates dropped, since a mutual
+        # constraint returns the same list on both sides. Deduplicated by identity
+        # rather than equality: Station is a dataclass with numpy-array fields, so its
+        # generated __eq__ raises on an ambiguous array truth value.
+        seen = set()
+        self._station_list = []
+        for station in list(constraining) + list(to_constrain):
+            if id(station) not in seen:
+                seen.add(id(station))
+                self._station_list.append(station)
+
         if len(constraining) > 1:
             for station in to_constrain:
                 constraint_params = ConstraintEquation(

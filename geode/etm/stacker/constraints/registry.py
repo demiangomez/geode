@@ -39,6 +39,17 @@ class ConstraintRegistry:
         key = constraint.constraint_type.value
         self.constraints[key].append(constraint)
 
+    def clear(self) -> None:
+        """Drop every registered constraint, keeping the type keys.
+
+        Needed because EtmStacker.build_system can be called more than once (after a
+        station is added or removed): _register_constraints builds a fresh constraint
+        object per type and per event every time, so without this they would accumulate
+        and every equation would be applied twice.
+        """
+        for constraint_type in self.constraints:
+            self.constraints[constraint_type] = []
+
     def collect_all_constraints(self, stations: List['Station'],
                                 total_parameters: int, grids: 'GridSystem', **kwargs):
         """Collect all registered constraints and report them as one table.

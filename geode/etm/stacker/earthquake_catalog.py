@@ -22,7 +22,7 @@ from ..core.type_declarations import JumpType
 from ...dbConnection import Cnn
 from ...pyDate import Date
 from ...pyOkada import Mask
-from ...Utils import stationID
+from ...Utils import stationID, print_yellow
 
 logger = logging.getLogger(__name__)
 
@@ -204,22 +204,33 @@ class EarthquakeCatalogMixin:
                     self.earthquakes.append(jump.earthquake)
                     self.earthquakes.sort()
 
+                # The mask is a property of the GRID, not of the event list, so it is
+                # keyed off whether this grid has it rather than off whether the event
+                # is new. build_system creates a fresh GridSystem every time it runs,
+                # so on a rebuild (a station added or removed) every event is already
+                # in self.earthquakes while the new grid has no masks at all -- tying
+                # the two together left FaultGeometry reading an empty dict.
+                if jump.earthquake.id not in self.grids.earthquake_masks:
                     lon, lat = self.grids.interpolation_geographic
 
-                    # save a mask for the event
                     mask = Mask(cnn, jump.earthquake.id)
                     s_score, p_score = mask.score(lat, lon)
 
-                    s_score = s_score > 0
-                    p_score = p_score > 0
                     # save the actual object to query it
-                    self.grids.earthquake_masks[jump.earthquake.id] = (s_score, p_score, mask)
+                    self.grids.earthquake_masks[jump.earthquake.id] = (s_score > 0,
+                                                                       p_score > 0, mask)
 
         # Collision detection was already performed in prepare_earthquake_list.
         # self.collided_earthquakes is pre-populated; no action needed here.
 
     def _register_constraints(self):
-        """Register all constraint types."""
+        """Register all constraint types, replacing any already registered.
+
+        Every constraint object is rebuilt from the current self.stations, so this is
+        also how a rebuild picks up an added or removed station.
+        """
+        self.constraint_registry.clear()
+
         # Interseismic
         self.constraint_registry.add_constraint(
             InterseismicConstraint(
@@ -290,7 +301,12 @@ class EarthquakeCatalogMixin:
                 # replace old etm
                 etm_result = etm_builder.build_etm(self.config, cnn, stn.network_code, stn.station_code,
                                                    json_folder, save_json_folder)
-                stn.etm = etm_result[0] if etm_result is not None else None
+                stn.etm = etm_result[0]
+                if stn.etm is None:
+                    tqdm.write(print_yellow(
+                        f'   ! could not rebuild ETM for {stationID(stn)}: '
+                        f'{etm_result[2]}'))
+                    continue
                 # get dimensions of neq
                 new_par_count = stn.etm.design_matrix.matrix.shape[1]
                 # assume number of unknowns will change, so update the rest of the stations down from current

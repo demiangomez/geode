@@ -13,6 +13,7 @@ from .data_classes import (
     EtmStackerConfig, NormalEquations, Station, EtmStackerField
 )
 from .earthquake_catalog import EarthquakeCatalogMixin
+from .exceptions import EtmStackerException
 from .normal_equations import NormalEquationsMixin
 from .solver import SolverMixin
 from .diagnostics import DiagnosticsMixin
@@ -26,11 +27,6 @@ from ...dbConnection import Cnn
 from ...Utils import stationID, print_yellow
 
 logger = logging.getLogger(__name__)
-
-
-class EtmStackerException(Exception):
-    """Exception raised for ETM Stacker errors."""
-    pass
 
 
 class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, DiagnosticsMixin):
@@ -77,6 +73,13 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
 
         # Results
         self.solved: bool = False
+        # True when the station set has changed since build_system last ran, so the
+        # grids and constraints no longer match self.stations. Every station's
+        # vertical_response is produced by one SVD over the whole station set, so a
+        # membership change invalidates all of them at once -- solving in that state
+        # fails inside the vertical interpolant with a shape mismatch rather than
+        # quietly carrying a dead site, which is why solve() refuses instead.
+        self.system_stale: bool = False
         self.solution: np.ndarray = np.array([])
         self.covariance: np.ndarray = np.array([])
 
@@ -145,7 +148,13 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
     def add_station(self, cnn: Cnn, network_code: str, station_code: str,
                     json_folder: str = None,
                     save_json_folder: str = None):
-        """Add a station to the stack."""
+        """Build one station's ETM and fold it into the stack.
+
+        Leaves the system stale: the new station has no vertical_response yet (that is
+        computed for the whole set at grid-build time) and no constraint references it.
+        Call build_system again before solving -- EtmStackerShell.do_add_station does
+        both.
+        """
         # Build ETM
         # unconstrained_etm (Step 1's own fit, robust-least-squares) isn't used here: a
         # sparse station gets its own dedicated, GLS-fit free fit instead -- see below.
@@ -154,7 +163,10 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         if etm is None:
             return {'station': f'{network_code}.{station_code}', 'role': 'dropped',
                     'reason': reason, 'span': 0., 'completion': 0., 'nobs': 0}
-        return self._add_built_station(etm, network_code, station_code)
+        record = self._add_built_station(etm, network_code, station_code)
+        self.system_stale = True
+        self.solved = False
+        return record
 
     def add_stations_parallel(self, cnn: Cnn, stnlist: List[dict],
                               json_folder: str = None, save_json_folder: str = None):
@@ -302,6 +314,14 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         return record
 
     def remove_station(self, station_id: str):
+        """Drop a station from the stack, leaving the system stale.
+
+        The parameter renumbering below is enough to make the normal equations
+        consistent again, but the grids are not: each station's vertical_response comes
+        from an SVD over the whole station set, so after a removal they are all the
+        wrong length and the vertical interpolant fails. build_system has to run again
+        before the next solve -- EtmStackerShell.do_remove_station does both.
+        """
         # sparse stations are observation-only (no owned parameters), so removal
         # is immediate -- no normal_equations/parameter_range renumbering needed
         for i, station in enumerate(self.sparse_stations):
@@ -309,6 +329,7 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                 self.sparse_stations.pop(i)
                 tqdm.write(f'   Removed sparse station {station_id}')
                 self.solved = False
+                self.system_stale = True
                 return
 
         for i, station in enumerate(self.stations):
@@ -326,12 +347,17 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                     station_after.normal_equations.parameter_start_idx -= removed_param_count
                 break
 
-        # no need to rebuild the registry or the grids
-        # they will contain a couple dead sites but they don't affect the calculations
         self.solved = False
+        self.system_stale = True
 
     def build_system(self, cnn: Cnn = None):
-        """Build the complete stacking system.
+        """Build (or rebuild) the shared system from the current station set.
+
+        Safe to call again after add_station or remove_station, and much cheaper than a
+        fresh run: the per-station ETMs are the expensive part and this does not touch
+        them. What it redoes is everything that depends on WHICH stations are in the
+        stack -- the interpolation grids and every station's vertical_response, the
+        constraint objects, and each event's fault geometry.
 
         cnn is only required when self.config.sparse_constraints_enabled: it's needed to
         build each sparse station's model-validity-windowed free fit, which can only
@@ -377,6 +403,8 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                     'build_system: sparse_constraints_enabled is True but no cnn was given '
                     '(needed to build each sparse station\'s free fit)')
             sparse_constraint.build_sparse_free_fits(self, cnn)
+
+        self.system_stale = False
 
     def get_constraint_summary(self) -> Dict:
         """Get summary of constraint system."""

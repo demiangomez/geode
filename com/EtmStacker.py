@@ -45,6 +45,7 @@ from geode.etm.core.data_classes import ModelingParameters, SolutionType
 from geode.etm.core.s_score import Earthquake
 from geode.etm.core.logging_config import setup_etm_logging
 from geode.etm.core.etm_stacker import EtmStacker, ConstraintType, EtmStackerConfig
+from geode.etm.stacker import console
 from geode.etm.stacker.constraints import sparse as sparse_constraint
 from geode.etm.core.etm_stacker_vce import EtmStackerVCEEnhanced
 from geode.etm.core.type_declarations import JumpType
@@ -123,9 +124,88 @@ class EtmStackerShell(cmd.Cmd):
         for entry in self.etm_stacker.command_history:
             print(entry)
 
+    def do_add_station(self, arg: str):
+        """
+        Build one or more stations' ETMs and fold them into the stack, then rebuild the
+        shared system so the new stations are actually usable.
+        syntax: add_station <net.stn> [<net.stn> ...] [json_folder]
+        The rebuild is not optional and not free, but it is far cheaper than a fresh
+        run: every station ETM already in the stack is kept, and only what depends on
+        WHICH stations are present is redone (the interpolation grids and every
+        station's vertical response, the constraints, each event's fault geometry).
+        Invoke solve afterwards.
+        """
+        parts = arg.split()
+        if not parts:
+            print('syntax: add_station <net.stn> [<net.stn> ...] [json_folder]')
+            return
+
+        json_folder = parts[-1] if os.path.isdir(parts[-1]) else None
+        names = parts[:-1] if json_folder else parts
+        if not names:
+            print('syntax: add_station <net.stn> [<net.stn> ...] [json_folder]')
+            return
+
+        try:
+            stnlist = process_stnlist(self.cnn, names)
+        except Exception as e:
+            print(f'Could not resolve station list: {e}')
+            return
+
+        existing = {stationID(s) for s in
+                    self.etm_stacker.stations + self.etm_stacker.sparse_stations}
+        tic = time.time()
+        for stn in stnlist:
+            name = f'{stn["NetworkCode"]}.{stn["StationCode"]}'
+            if name in existing:
+                print(f'{name}: already in the stack, skipping')
+                continue
+            record = self.etm_stacker.add_station(self.cnn, stn['NetworkCode'],
+                                                  stn['StationCode'], json_folder)
+            reason = f" ({record['reason']})" if record.get('reason') else ''
+            print(f'{name}: {record["role"]}{reason}')
+
+        self._rebuild('add_station')
+        print(f'Done in {(time.time() - tic):.1f}s. Invoke solve when ready.')
+
     def do_remove_station(self, arg: str):
-        self.etm_stacker.remove_station(arg)
-        print(f'Removed station {arg}, invoke solve again when ready')
+        """
+        Remove one or more stations from the stack and rebuild the shared system.
+        syntax: remove_station <net.stn> [<net.stn> ...]
+        The rebuild is required, not a convenience: every station's vertical response
+        comes from one decomposition over the whole station set, so after a removal
+        they are all the wrong length and a solve would fail inside the vertical
+        interpolant. See add_station for what the rebuild does and does not redo.
+        """
+        names = arg.split()
+        if not names:
+            print('syntax: remove_station <net.stn> [<net.stn> ...]')
+            return
+
+        known = {stationID(s) for s in
+                 self.etm_stacker.stations + self.etm_stacker.sparse_stations}
+        tic = time.time()
+        for name in names:
+            if name not in known:
+                print(f'{name}: not in the stack, skipping')
+                continue
+            self.etm_stacker.remove_station(name)
+            print(f'{name}: removed')
+
+        self._rebuild('remove_station')
+        print(f'Done in {(time.time() - tic):.1f}s. Invoke solve when ready.')
+
+    def _rebuild(self, caller: str):
+        """Rebuild the shared system after the station set changed, if it changed."""
+        if not self.etm_stacker.system_stale:
+            print(f'{caller}: nothing changed, system left as it was')
+            return
+        print('Rebuilding grids and constraints for the new station set...')
+        # Number this rebuild's phases from one. The counter is per-run, and an
+        # interactive session can rebuild many times -- "7. SHARED SYSTEM" reads like a
+        # seventh distinct step rather than the same one done again.
+        console.reset_phases()
+        self.etm_stacker.build_system(self.cnn)
 
     def do_reweight_station(self, arg: str):
         """
@@ -1100,6 +1180,8 @@ def main():
     args = parser.parse_args()
 
     cnn = Cnn('gnss_data.cfg', write_cfg_file=True)
+
+    console.reset_phases()
 
     setup_etm_logging(level=VERBOSITY_MAP[args.etm_verbosity])
 
