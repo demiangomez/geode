@@ -347,6 +347,12 @@ class EarthquakeCatalogMixin:
         # record all earthquakes that might affect the ETMs
         self._record_earthquakes()
 
+        # Must run here, not before _register_constraints: self.earthquakes is populated
+        # by _record_earthquakes just above, so calling it any earlier iterates an empty
+        # list and silently does nothing. It must still run before the loop below, which
+        # builds the constraints whose station sets it changes.
+        self.drop_unconstrainable_postseismic()
+
         # Coseismic and postseismic for each earthquake
         for event in self.earthquakes:
             # Skip collided earthquakes - they will be constrained to zero
