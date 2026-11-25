@@ -12,6 +12,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 from ..data_classes import Station, ConstraintEquation
+from ..exceptions import EtmStackerException
 from ..types import ConstraintType
 from ...core.data_classes import Earthquake
 from ....Utils import stationID
@@ -23,6 +24,17 @@ if TYPE_CHECKING:
 
 class BaseConstraint(ABC):
     """Base class for all constraint types."""
+
+    # Whether falling back to a zero-tie is defensible for this constraint type when
+    # fewer than two stations are available to interpolate between. For a co- or
+    # postseismic amplitude it can be: the parameter may be genuinely unobservable at
+    # some stations (no post-event data), and tying it to zero is a statement that the
+    # event did nothing measurable there, which is usually true and always checkable
+    # against the constraint's own residual. For the interseismic field it never is --
+    # that constraint reaches EVERY station, so the fallback silently asserts that the
+    # whole network is motionless. Subclasses for which that is the case set this False
+    # and the constraint raises instead.
+    allow_zero_tie: bool = True
 
     def __init__(self, constraint_type: ConstraintType,
                  h_sigma: float = 0.001, v_sigma: float = 0.003):
@@ -95,13 +107,27 @@ class BaseConstraint(ABC):
 
             # couple parameters of nearby stations (d < 5 km)
             self.constrain_nearby_stations(all_stations, total_parameters)
+        elif not self.allow_zero_tie:
+            raise EtmStackerException(
+                f'{self.short_description()} has {len(constraining)} constraining '
+                f'station(s); at least 2 are needed to interpolate between them. '
+                f'Falling back to a zero-tie here would pin every one of the '
+                f'{len(to_constrain)} target parameters to zero, which for this '
+                f'constraint means asserting the whole network is motionless. Either '
+                f'widen the set of constraining stations or remove this constraint '
+                f'deliberately -- see EtmStackerConfig.interseismic_max_inflation for '
+                f'what decides interseismic eligibility.')
         else:
             self.is_zero_tied = True
             logger.info(f'{self.short_description()} has one or no constraining '
-                        f'station; zero-tying its parameters to avoid excursion')
+                        f'station; zero-tying its parameters at its own h/v sigma')
 
             if len(to_constrain) > 0:
-                # add a zero with a lot of weight
+                # Tie to zero at this constraint's OWN sigma, not at a hardcoded 1e-6.
+                # The old value was a one-micrometre tie that no other mechanism could
+                # argue with -- it bypassed h_sigma/v_sigma, adaptive_weight, the sparse
+                # settings and update_constraint alike, so the one case where a
+                # constraint is weakest was also the one where it was applied hardest.
                 for station in to_constrain:
                     ke = np.zeros((1, total_parameters * 3))
                     kn = np.zeros((1, total_parameters * 3))
@@ -116,7 +142,8 @@ class BaseConstraint(ABC):
                     constraint_params = ConstraintEquation(
                         station=station,
                         constraint_design=(ke, kn, ku),
-                        constraint_sigma=np.array([1e-6, 1e-6, 1e-6])
+                        constraint_sigma=np.array([self.h_sigma, self.h_sigma,
+                                                   self.v_sigma])
                     )
 
                     self.equations.append(constraint_params)

@@ -1064,6 +1064,22 @@ def main():
                              "filter and fits every event back to the post_seismic_back_lim "
                              "window however flat its column.")
 
+    parser.add_argument('-is_inflation', '--interseismic_max_inflation', type=float,
+                        default=def_config.interseismic_max_inflation, metavar='ratio',
+                        help="Largest factor by which a station's velocity uncertainty may be "
+                             "inflated by not knowing its own postseismic decay amplitudes, for "
+                             "that station to be allowed to DEFINE the interseismic field. "
+                             "Measured on the system with the co/postseismic ties already "
+                             "applied, so a station that came online after an event still "
+                             "qualifies when the shared postseismic field pins its decay. "
+                             "Replaces the older rule of 'has clean pre-event data', which is "
+                             "too generous when a decay term was dropped from the fit (the "
+                             "velocity absorbs the transient) and collapses to zero eligible "
+                             "stations under a generous earthquake catalogue. 1 would demand "
+                             f"the velocity be determined as if the decays were known exactly; "
+                             f"default {def_config.interseismic_max_inflation:g} allows the "
+                             "entanglement to cost up to a factor of two. 0 restores the old rule.")
+
     parser.add_argument('-sparse', '--sparse_constraints', action='store_true',
                         default=def_config.sparse_constraints_enabled,
                         help="Let sparse stations (those failing -sc/-ts) feed back into the shared "
@@ -1211,6 +1227,7 @@ def main():
             min_span_completion=args.min_span_completion,
             min_time_span=args.min_time_span,
             postseismic_min_separability=args.postseismic_min_separability,
+            interseismic_max_inflation=args.interseismic_max_inflation,
             sparse_constraints_enabled=args.sparse_constraints,
             sparse_validity_override=(process_date_str(args.sparse_validity_date).fyear
                                       if args.sparse_validity_date else None),

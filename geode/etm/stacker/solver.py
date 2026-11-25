@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from . import console
 from .constraints import adaptive_weight
+from .constraints import separability
 from .constraints import sparse as sparse_constraint
 from .data_classes import EtmStackerField
 from .exceptions import EtmStackerException
@@ -38,6 +39,26 @@ class SolverMixin:
 
         # rebuild normal equations before solving
         system_neq, system_ceq = self._build_base_normal_equations()
+
+        # Decide which stations may define the interseismic field before collecting
+        # the constraint that depends on that decision. The probe below assembles the
+        # system with only the co/postseismic ties -- what the network knows about each
+        # station's decay amplitudes -- and asks how much of each velocity's
+        # uncertainty is still owed to not knowing them. See constraints/separability.py.
+        #
+        # Deliberately excludes the interseismic constraint itself: it is what is being
+        # decided, and including it would let a station's eligibility rest partly on
+        # the field it is about to help define.
+        if self.config.interseismic_max_inflation:
+            self.constraint_registry.collect_all_constraints(
+                self.stations, self.total_parameters, self.grids,
+                earthquakes=self.earthquakes, skip=('interseismic',), quiet=True
+            )
+            probe = system_neq.copy()
+            self.constraint_registry.add_all_constraints(
+                probe, self.total_parameters, skip=('interseismic',))
+            separability.apply_interseismic_eligibility(self, probe)
+            del probe
 
         # collect constraints. Weight changes take effect here
         self.constraint_registry.collect_all_constraints(

@@ -51,7 +51,8 @@ class ConstraintRegistry:
             self.constraints[constraint_type] = []
 
     def collect_all_constraints(self, stations: List['Station'],
-                                total_parameters: int, grids: 'GridSystem', **kwargs):
+                                total_parameters: int, grids: 'GridSystem',
+                                skip: tuple = (), quiet: bool = False, **kwargs):
         """Collect all registered constraints and report them as one table.
 
         Each constraint used to narrate its own collection -- a progress bar over one
@@ -65,6 +66,8 @@ class ConstraintRegistry:
 
         rows = []
         for constraint_type in self._application_order:
+            if constraint_type in skip:
+                continue
             logger.info(f'Collecting {constraint_type} constraints')
             for constraint in self.constraints[constraint_type]:
                 # Reset equations and SW-Okada coefficient cache so that any change
@@ -94,6 +97,9 @@ class ConstraintRegistry:
                     f'{constraint.h_sigma * 1000.:g}/{constraint.v_sigma * 1000.:g}',
                     ', '.join(notes)])
 
+        if quiet:
+            return
+
         console.step('constraint equations')
         console.table(['type', 'event', 'relax', 'constraining', 'equations',
                        'h/v sigma', 'note'],
@@ -104,10 +110,12 @@ class ConstraintRegistry:
                          f'constraining station: {", ".join(zero_tied)}')
 
     def add_all_constraints(self, neq: np.ndarray,
-                            total_parameters: int) -> int:
+                            total_parameters: int, skip: tuple = ()) -> int:
         """Add all constraints to normal equations."""
         total_constraints = 0
         for constraint_type in self._application_order:
+            if constraint_type in skip:
+                continue
             for constraint in self.constraints[constraint_type]:
                 logger.info(f'Adding {repr(constraint)} to the system')
                 neq += constraint.apply_to_normal_equations(total_parameters)

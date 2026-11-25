@@ -18,6 +18,11 @@ if TYPE_CHECKING:
 class InterseismicConstraint(BaseConstraint):
     """Constraints for interseismic velocities."""
 
+    # This constraint's to_constrain set is every station without its own interseismic
+    # velocity, so a zero-tie fallback would pin the entire network's velocities to
+    # zero -- see BaseConstraint.allow_zero_tie.
+    allow_zero_tie = False
+
     def __init__(self, stations: List[Station], h_sigma: float = 0.0001, v_sigma: float = 0.0003):
         super().__init__(ConstraintType.INTERSEISMIC, h_sigma, v_sigma)
 

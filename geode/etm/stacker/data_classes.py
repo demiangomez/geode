@@ -35,6 +35,23 @@ class EtmStackerConfig(BaseDataClass):
     # that was enough to leave an 11-degree-wide stack with three constraining
     # interseismic stations.
     postseismic_min_separability: float = 0.01
+    # Which stations may DEFINE the interseismic field, replacing
+    # etm_builder.create_station's "does it have clean pre-event data" rule -- see
+    # constraints/separability.py for why that proxy fails in both directions. This is
+    # the largest factor by which a station's velocity uncertainty may be inflated by
+    # not knowing its own postseismic decay amplitudes, measured on the system with the
+    # co/postseismic ties already applied. 1 would demand the velocity be determined as
+    # though the decays were known exactly; the default allows the entanglement to cost
+    # up to a factor of two in velocity precision. 0 disables the test and restores the
+    # pre-event-data rule, which is the default for now: measured on the Ecuador stack
+    # with every postseismic term present, R has no natural threshold (1 station at
+    # R<=2, 2 at R<=3, 15 at R<=5, 28 at R<=10 -- a smooth distribution with no gap),
+    # and it ranks the stations whose decays the postseismic field PINS above the ones
+    # with genuine pre-event data that help define it (col.psto 4.26, ecu.coec 15.93
+    # against a 2023 cohort at 3.0-4.5). Both are consequences of R being a posterior
+    # quantity: it credits a tight external tie without asking whether that tie is
+    # right. Off until that is resolved.
+    interseismic_max_inflation: float = 0.0
     relaxation: np.ndarray = field(default_factory=lambda: np.array([0.05, 1.0]))
     earthquakes_cherry_picked: list = field(default_factory=list)
     station_weight_scale: float = 1.0
