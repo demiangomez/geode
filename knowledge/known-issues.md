@@ -162,3 +162,31 @@ first.
   Currently harmless because `gamit_stats` is not in `station_merge.TIME_TABLES` and nothing
   `UPDATE`s its key columns in place. Revisit if `gamit_stats` ever becomes mutable by a
   merge-like code path.
+
+## ETM Stacker: interseismic field observability
+
+Confirmed 2026-11-25 on the Ecuador stack (branch `stacker_refactor`, 31 full stations,
+`-s_score 7.3`); see
+[checkpoints/2026-11-25-interseismic-observability.md](checkpoints/2026-11-25-interseismic-observability.md).
+
+- **Exactly one station (`ecu.qui2`) carries no postseismic term at all.** Every other
+  velocity in the network is entangled with a decay amplitude only the postseismic model
+  can supply, so the interseismic field is not observable independently of that model. This
+  is a property of the network and the earthquake catalogue, not of any one code path, and
+  it is not currently reflected anywhere in the reported covariance.
+- **`etm_builder.create_station`'s `is_interseismic` test is a data-availability proxy for a
+  model-adequacy question** ("does this station have clean pre-event data" standing in for
+  "is its velocity the interseismic rate"). It is too generous when a pre-onset decay column
+  has been dropped from the fit — the transient's gradient moves into the velocity and the
+  station is promoted anyway — and it saturates to zero eligible stations as the earthquake
+  catalogue gets more complete. Lowering `-s_score` from 7.3 to 7.0 takes the eligible set
+  from 3 to 0.
+- **`validation.max_condition_number` does not catch velocity/decay collinearity.**
+  `ecu.jnec` reached a design-matrix condition number of 7.0e6 against a threshold of 15 in
+  the stacker (8 on the standalone `PlotETM`/`PrintVelocities` path) without the check
+  firing, producing a velocity of -3507/+3946/+3672 mm/yr with postseismic amplitudes of
+  +576 m / -2071 m / +1656 m cancelling each other.
+- **Session pickles predating the 2026-11-24 `master` merge cannot be loaded.** `3aacd4b`
+  renamed `etm_functions/stochastic_signal.py`/`StochasticSignal` to
+  `stochastic.py`/`Stochastic`, and `Stochastic.p.params` changed shape, so a module alias
+  is not sufficient. Rebuild affected `.pkl` sessions rather than shimming them.
