@@ -37,6 +37,50 @@ MISSING_DAYS_TOLERANCE = 5
 MIN_CONSTRAINING_YEARS = 2.0
 
 
+def classify_station(stn: Station, event: Earthquake, relaxation: float,
+                     recent: bool) -> str:
+    """
+    'constraining', 'to_constrain', or '' for a station with no stake in this event's
+    postseismic relaxation.
+
+    A station constrains the field only if it caught the transient from the start (a
+    solution within MISSING_DAYS_TOLERANCE of the event) and then ran long enough for
+    the decay to be worth something (MIN_CONSTRAINING_YEARS, waived while the event is
+    still younger than that and nobody could have met it). Anything else carrying a
+    decay column for the event is a target.
+
+    Module-level so earthquake_catalog.drop_unconstrainable_postseismic can ask the same
+    question before any constraint exists: it decides whether a station anywhere can
+    resolve an event, and must not answer differently from select_stations below.
+    """
+    jump = stn.etm.jump_manager.get_geophysical_jump(event.id)
+    if not (jump and jump.p.jump_type != JumpType.COSEISMIC_ONLY
+            and jump.get_relaxation_cols(relaxation)):
+        return ''
+
+    dates = np.array([date.mjd for date in stn.etm.solution_data.coordinates.dates])
+    post_event = dates[dates >= jump.date.mjd]
+    if not post_event.size:
+        return ''
+
+    if np.min(post_event - jump.date.mjd) > MISSING_DAYS_TOLERANCE:
+        return 'to_constrain'
+
+    span_years = (np.max(post_event) - jump.date.mjd) / 365.25
+    if recent or span_years >= MIN_CONSTRAINING_YEARS:
+        return 'constraining'
+
+    logger.info(f'{stn.network_code}.{stn.station_code}: to_constrain for {event.id} '
+                f'(post-event span {span_years:.1f} yr < {MIN_CONSTRAINING_YEARS:.1f})')
+    return 'to_constrain'
+
+
+def event_is_recent(event: Earthquake) -> bool:
+    """True while the event is younger than MIN_CONSTRAINING_YEARS, so no station could
+    yet have met that bar."""
+    return (Date(datetime=_dt.now()).fyear - event.date.fyear) < MIN_CONSTRAINING_YEARS
+
+
 class PostseismicConstraint(SWOkada):
     """
     Constraints for postseismic relaxation using SW-Okada interpolation.
@@ -49,7 +93,7 @@ class PostseismicConstraint(SWOkada):
 
     def __init__(self, event: Earthquake, fault_geometry: FaultGeometry,
                 stations: List[Station], relaxation: float, grid: 'GridSystem',
-                 h_sigma: float = 0.001, v_sigma: float = 0.003,
+                 h_sigma: float = 0.003, v_sigma: float = 0.009,
                  spline_tension: float = 0.10, is_collision: bool = False):
 
         super().__init__(event, fault_geometry, stations, grid,
@@ -74,37 +118,14 @@ class PostseismicConstraint(SWOkada):
         """
         constraining = []
         to_constrain = []
-
-        # If the earthquake is younger than MIN_CONSTRAINING_YEARS (relative to today),
-        # no station can have accumulated enough post-event data to meet the coverage
-        # threshold — all qualifying stations are kept as constraining.
-        today_fyear = Date(datetime=_dt.now()).fyear
-
-        event_is_recent = (today_fyear - self.event.date.fyear) < MIN_CONSTRAINING_YEARS
+        recent = event_is_recent(self.event)
 
         for stn in all_stations:
-            jump = stn.etm.jump_manager.get_geophysical_jump(self.event.id)
-
-            if (jump and jump.p.jump_type != JumpType.COSEISMIC_ONLY and
-                    jump.get_relaxation_cols(self.relaxation)):
-
-                dates = np.array([date.mjd for date in stn.etm.solution_data.coordinates.dates])
-                post_event = dates[dates >= jump.date.mjd]
-
-                has_early_data = np.min(post_event - jump.date.mjd) <= MISSING_DAYS_TOLERANCE
-
-                if has_early_data:
-                    post_event_span_years = (np.max(post_event) - jump.date.mjd) / 365.25
-                    if event_is_recent or post_event_span_years >= MIN_CONSTRAINING_YEARS:
-                        constraining.append(stn)
-                    else:
-                        logger.info(f'{stn.network_code}.{stn.station_code}: moved to '
-                                    f'to_constrain for {self.event.id} (post-event span '
-                                    f'{post_event_span_years:.1f} yr < '
-                                    f'{MIN_CONSTRAINING_YEARS:.1f} yr)')
-                        to_constrain.append(stn)
-                else:
-                    to_constrain.append(stn)
+            role = classify_station(stn, self.event, self.relaxation, recent)
+            if role == 'constraining':
+                constraining.append(stn)
+            elif role == 'to_constrain':
+                to_constrain.append(stn)
 
         if self.is_collision:
             return [], constraining + to_constrain

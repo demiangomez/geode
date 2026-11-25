@@ -5,6 +5,7 @@ that follow from them.
 """
 
 import logging
+from typing import List
 import math
 from datetime import datetime as _dt
 
@@ -15,6 +16,7 @@ from . import console
 
 from . import etm_builder
 from .constraints import InterseismicConstraint, CoseismicConstraint, PostseismicConstraint
+from .constraints import postseismic as postseismic_module
 from .constraints.fault_geometry import FaultGeometry
 from ..core.data_classes import Earthquake
 from ..core.s_score import batch_score_scan
@@ -222,6 +224,108 @@ class EarthquakeCatalogMixin:
 
         # Collision detection was already performed in prepare_earthquake_list.
         # self.collided_earthquakes is pre-populated; no action needed here.
+
+    def drop_unconstrainable_postseismic(self) -> List[str]:
+        """
+        Stop estimating the postseismic decay of any event no station can resolve, and
+        rebuild the normal equations without those columns. Returns the event ids
+        dropped.
+
+        An event that no station caught early (fewer than two that
+        constraints.postseismic.classify_station calls 'constraining') has no
+        observable decay anywhere in the network. Left alone, every station still
+        carries a free decay column for it, and BaseConstraint falls back to tying all
+        of them to zero. That fallback is worse than it looks:
+
+          - It is not neutral. The column stays nearly collinear with velocity, and the
+            tie only bounds it to within its own sigma, so each such event can still
+            absorb that much velocity -- times six to ten events per station in a
+            catalogue reaching back to 1990.
+          - It fakes information. constraints/separability.py reads a tightly-tied
+            parameter as KNOWN, so the more unresolvable events are carried, the better
+            a station's velocity looks separated from its decays. Exactly backwards.
+
+        Dropping the column does not recover the transient -- that signal is in the
+        data either way and still lands in the velocity. It stops the model claiming
+        otherwise, which is the prerequisite for reporting the velocity's uncertainty
+        honestly.
+
+        A jump that also has a coseismic step keeps it: the step is observable whenever
+        a station straddles the event, and is not collinear with a trend. Only the decay
+        goes.
+        """
+        if not self.config.drop_unconstrainable_postseismic:
+            return []
+
+        dropped = []
+        changed = set()
+        for event in self.earthquakes:
+            recent = postseismic_module.event_is_recent(event)
+            resolvable = any(
+                sum(1 for stn in self.stations
+                    if postseismic_module.classify_station(stn, event, relax, recent)
+                    == 'constraining') >= 2
+                for relax in self.config.relaxation)
+            if resolvable:
+                continue
+
+            demoted = 0
+            for stn in self.stations + self.sparse_stations:
+                jump = stn.etm.jump_manager.get_geophysical_jump(event.id)
+                if jump is None or not jump.fit:
+                    continue
+                if jump.p.jump_type == JumpType.COSEISMIC_JUMP_DECAY:
+                    # keep the step, drop the decay -- the same demotion
+                    # JumpFunction already performs when a decay cannot be computed
+                    jump.p.jump_type = JumpType.COSEISMIC_ONLY
+                    jump.param_count = 1
+                    demoted += 1
+                    changed.add(id(stn))
+                elif jump.p.jump_type == JumpType.POSTSEISMIC_ONLY:
+                    # nothing but the decay, so there is nothing left to estimate
+                    jump.fit = False
+                    demoted += 1
+                    changed.add(id(stn))
+            if demoted:
+                dropped.append(event.id)
+                logger.info(f'{event.id}: no station can resolve its postseismic decay; '
+                            f'dropped the decay term at {demoted} station(s)')
+
+        if dropped:
+            self._rebuild_all_normal_equations(changed)
+            console.result('Postseismic terms dropped as unresolvable',
+                           f'{len(dropped)} event(s): {", ".join(dropped)}')
+
+        return dropped
+
+    def _rebuild_all_normal_equations(self, changed: set):
+        """Re-derive normal equations after some stations' designs changed.
+
+        DesignMatrix.matrix is a property that reassigns column indices and rebuilds
+        from the currently active functions, so demoting a jump shrinks that station's
+        matrix -- and shifts parameter_start_idx for every station after it.
+
+        Only the stations in `changed` (a set of id()) are recomputed. The rest keep
+        their matrices and are merely renumbered. That distinction matters under
+        gls_for_all_stations: _create_normal_equations builds a dense epoch-by-epoch
+        covariance and Choleskys it, which for a station with 7786 daily solutions is a
+        7786x7786 factorisation per component. Recomputing all of them to renumber a
+        few would roughly double the most expensive step of the build for no gain.
+        """
+        self.total_parameters = 0
+        self.total_equations = 0
+        rebuilt = []
+        for station, neq in zip(self.stations, list(self.normal_equations)):
+            if id(station) in changed:
+                rebuilt.append(self._create_normal_equations(station))
+                continue
+            neq.parameter_start_idx = self.total_parameters
+            neq.parameter_range = np.arange(neq.parameter_count) + self.total_parameters
+            station.normal_equations = neq
+            self.total_parameters += neq.parameter_count
+            self.total_equations += neq.equation_count
+            rebuilt.append(neq)
+        self.normal_equations = rebuilt
 
     def _register_constraints(self):
         """Register all constraint types, replacing any already registered.

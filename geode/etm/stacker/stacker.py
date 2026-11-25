@@ -375,6 +375,9 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                                                      extent_stations=self.sparse_stations)
 
         console.step('constraints')
+        # Must run before the constraints are built: it changes which decay columns
+        # exist, and therefore which stations each postseismic constraint can see.
+        self.drop_unconstrainable_postseismic()
         self._register_constraints()
 
         # 3b. Apply any non-default Okada regularization weight to every constraint just

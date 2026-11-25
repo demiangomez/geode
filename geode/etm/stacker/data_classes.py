@@ -43,6 +43,15 @@ class EtmStackerConfig(BaseDataClass):
     # 0.01 that left 13 of the 17 interseismic-field-defining stations carrying a
     # transient they were then used to define the field with.
     postseismic_min_separability: float = 0.
+    # Stop estimating an event's postseismic decay when no station in the network
+    # caught it early enough to resolve one (fewer than two 'constraining' stations by
+    # constraints.postseismic.classify_station) -- see
+    # earthquake_catalog.drop_unconstrainable_postseismic. The alternative is not
+    # neutral: those columns stay in every station's fit, nearly collinear with
+    # velocity, tied to zero only to within their own sigma, and read by
+    # constraints/separability.py as known values, so carrying more unresolvable events
+    # makes a station's velocity look better separated than it is.
+    drop_unconstrainable_postseismic: bool = True
     # Which stations may DEFINE the interseismic field, replacing
     # etm_builder.create_station's "does it have clean pre-event data" rule -- see
     # constraints/separability.py for why that proxy fails in both directions. This is
@@ -67,8 +76,23 @@ class EtmStackerConfig(BaseDataClass):
     interseismic_v_sigma: float = 0.001
     coseismic_h_sigma: float = 1
     coseismic_v_sigma: float = 1
-    postseismic_h_sigma: float = 0.001   # 1 mm — matches PostseismicConstraint class default
-    postseismic_v_sigma: float = 0.003   # 3 mm — matches PostseismicConstraint class default
+    # 3 mm / 9 mm, matching PostseismicConstraint's class default. Calibrated rather
+    # than chosen: sweeping h_sigma over 0.5-8 mm (v = 3h) on the Ecuador stack under
+    # GLS, with unresolvable events already dropped, the ratio of the postseismic
+    # constraint's own residual rms to the sigma that produced it rises monotonically
+    # 0.39, 0.56, 0.74, 0.91, 1.10, 0.88, 1.12 and crosses 1 between 3 and 4 mm. Below
+    # that the tie asserts more agreement between a station and the interpolated field
+    # than the data supports and overrides stations instead of coupling them -- at the
+    # old 1 mm, Pedernales came back with a 4.1 mm residual against a 1 mm tolerance.
+    #
+    # Self-consistent, not optimal: sqrt(variance of unit weight) sits at 1.372 across
+    # that entire range and the per-station WRMS increments barely move, so whatever
+    # limits this fit is not the postseismic sigma. Also note the sweep can only be read
+    # this way once the zero-tied constraints are gone (see
+    # drop_unconstrainable_postseismic) -- pinned to a value nothing contradicts, they
+    # returned tiny residuals at every sigma and flattened the curve.
+    postseismic_h_sigma: float = 0.003
+    postseismic_v_sigma: float = 0.009
     vertical_method: str = 'spline2d'
     vertical_load_radius: float = 50  # in km
     tension: float = 0.10
@@ -367,14 +391,25 @@ class Station:
                 if jump.p.jump_type < JumpType.POSTSEISMIC_ONLY:
                     par, sig = self.get_constrained_jump(event, solution, covariance)
 
-                    for j in range(3):
-                        # assign the values (coseismic, always 0)
-                        jc.p.params[j][0] = par[col[j]]
-                        jc.p.sigmas[j][0] = sig[col[j]] / MULT
+                    if par is not None:
+                        for j in range(3):
+                            # assign the values (coseismic, always 0)
+                            jc.p.params[j][0] = par[col[j]]
+                            jc.p.sigmas[j][0] = sig[col[j]] / MULT
 
                 for relax in relaxations:
-                    par, sig = self.get_constrained_relax(event, relax, solution, covariance)
+                    # A jump can be fitted and still have no column for this
+                    # relaxation: earthquake_catalog.drop_unconstrainable_postseismic
+                    # demotes an unresolvable event to COSEISMIC_ONLY, keeping the step
+                    # and removing every decay. Both lookups below return None in that
+                    # case, and assigning from None is how this surfaced.
                     idj = jump.get_relaxation_cols(relax, False)
+                    if not idj:
+                        continue
+
+                    par, sig = self.get_constrained_relax(event, relax, solution, covariance)
+                    if par is None:
+                        continue
 
                     for j in range(3):
                         # assign the values
