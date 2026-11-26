@@ -165,6 +165,38 @@ def deactivate_mechanical_jumps(etm: EtmEngine) -> None:
         j.fit = False
 
 
+def sync_geophysical_jumps(etm: EtmEngine, reference: EtmEngine) -> None:
+    """Make `etm`'s geophysical jumps match the ones `reference` actually fitted.
+
+    An ETM rebuilt from an EtmStackerConfig derives its jump table afresh from
+    earthquakes_cherry_picked, which holds every event any station in the network scored
+    and admits them per-station without a magnitude check, back to post_seismic_back_lim
+    (a Date, so an absolute epoch rather than a window before the station's own start).
+    earthquake_catalog.drop_unconstrainable_postseismic then demotes the events no
+    station can resolve -- but it edits the ETMs that exist at that moment, so a later
+    rebuild silently re-admits every one of them.
+
+    That matters because a station whose data begins years after an event gets a
+    log(1 + dt/tau) column that is flat over its own span, and several such columns are
+    collinear with each other and with the intercept. The resulting design is rank
+    deficient, and least_squares catches DesignMatrixException by deactivating *every*
+    function -- so the station loses its trend and seasonals too, and reports
+    UNABLE_TO_FIT despite having a full time series.
+    """
+    for jump in etm.jump_manager.jumps:
+        if not jump.is_geophysical() or jump.earthquake is None:
+            continue
+
+        ref = reference.jump_manager.get_geophysical_jump(jump.earthquake.id)
+        if ref is None:
+            jump.fit = False
+            continue
+
+        if ref.p.jump_type != jump.p.jump_type:
+            jump.configure_behavior({'jump_type': ref.p.jump_type})
+        jump.fit = ref.fit
+
+
 def apply_prefit(etm: EtmEngine, prefit: List[JumpFunction]) -> None:
     """Install mechanical-jump prefit models on an ETM and deactivate their own fit flags.
 
