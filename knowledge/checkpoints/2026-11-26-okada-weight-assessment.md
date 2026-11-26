@@ -191,6 +191,53 @@ keep. "0 is best" is a statement about the measurable region only, and a non-zer
 postseismic `h` of about 1 remains defensible if the station parameters are thought
 noisier than the dislocation shape.
 
+## Does more penalty smooth the field? No -- the fields are not rough
+
+The weight had been judged on out-of-sample prediction and on how well each field
+reproduces its own stations, both fit criteria. Smoothing is what the penalty is for, so
+it was measured directly, on direction as well as magnitude (noisy vectors is largely a
+direction property, which a magnitude-only roughness cannot see):
+
+  rough_mag  median over the grid of |m - median(m of 8 neighbours)| / that median
+  rough_dir  median angle between a cell's horizontal vector and its neighbours' mean
+
+Horizontal sweep, postseismic, on the deduplicated system with `v = 0`:
+
+| h | rough_mag | rough_dir | rel | worst rel | oos | decay |
+|---|---|---|---|---|---|---|
+| 0 | 0.0047 | 0.12° | 0.19 | 0.29 | 2.69 | -0.08 |
+| 0.25 | 0.0039 | 0.11° | 0.38 | 0.61 | 2.71 | -0.17 |
+| 1 | 0.0039 | 0.12° | 0.44 | 0.93 | 2.70 | -0.32 |
+| 5 | 0.0046 | 0.11° | 0.58 | 0.99 | 2.79 | -0.35 |
+
+Roughness does not move. The metric is not blind to roughness -- adding Gaussian noise to
+a field at 1% of its median magnitude takes rough_mag from 0.0049 to 0.0134 and rough_dir
+from 0.14° to 0.55°, and both rise monotonically to 0.2375 and 16.73° at 50%. The measured
+0.0047 and 0.12° therefore mean the horizontal fields are smooth to well under 1%
+noise-equivalent before any Okada penalty is applied. What the penalty buys is far-field
+decay, and it is paid for in station fidelity.
+
+The apparent roughness that motivated this almost certainly came from two things since
+fixed: the singular design matrix from co-located stations (`da5ea21`), and one arrow
+drawn per grid point so the field was hidden under a solid mass of them (`8aeff6f`).
+
+**The vertical is the interesting case, and its reported sigma is misleading.** `v` has
+no effect on any horizontal metric, confirming the separability, and reduces the largest
+vertical sigma on any postseismic field from 1030 mm to 180 mm. But:
+
+| v | oos_U | stations improved | rel_U | rough_U | max sigma_U |
+|---|---|---|---|---|---|
+| 0 | **2.45** | - | **0.15** | 0.0244 | 1029.7 mm |
+| 0.25 | 2.64 | 8/23 | 0.54 | 0.0219 | 622.0 |
+| 1 | 2.59 | 7/23 | 0.60 | 0.0216 | 338.2 |
+| 5 | 2.72 | 6/23 | 0.81 | 0.0201 | 179.6 mm |
+
+Vertical roughness falls only 0.0244 -> 0.0201, while held-out prediction gets worse and
+station fidelity collapses. A regularizer adds prior information, so the posterior sigma
+shrinks whether or not the prior is right; here the out-of-sample test says it is not.
+The 1030 mm is the honest number and the 180 mm is overconfidence. The vertical
+postseismic field is poorly determined, and `v = 0` is the setting that says so.
+
 ## Known issues / limitations
 
 - **The field still does not decay as fast as it should.** The slope of
