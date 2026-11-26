@@ -136,6 +136,31 @@ class WidgetManager:
 
         return self._scale_slider
 
+    def create_epoch_slider(self, callback, val_min: float, val_max: float) -> Slider:
+        """Epoch slider for the panels that are evaluated at a point in time.
+
+        Sits above the scale slider. Starts at val_max -- the last epoch any station
+        observed -- because anything past that is extrapolation.
+        """
+        self._epoch_slider_ax = self.fig.add_axes([0.25, 0.072, 0.5, 0.022])
+        self._epoch_slider = Slider(
+            ax=self._epoch_slider_ax,
+            label='Epoch',
+            valmin=val_min,
+            valmax=val_max,
+            valinit=val_max,
+            valstep=0.05,
+            valfmt='%.2f'
+        )
+        self._epoch_callback = callback
+        self._epoch_slider.on_changed(callback)
+        return self._epoch_slider
+
+    def get_epoch(self):
+        """Current epoch slider value, or None when there is no epoch slider."""
+        slider = getattr(self, '_epoch_slider', None)
+        return slider.val if slider is not None else None
+
     def get_scale_factor(self) -> float:
         """Get the current scale factor from slider value."""
         if self._scale_slider is not None:

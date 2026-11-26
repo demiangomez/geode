@@ -110,21 +110,39 @@ class DiagnosticsMixin:
 
             sparse_data.append(sparse_params)
 
-        # One more panel: every event's postseismic contribution to the velocity field at
-        # a single epoch, summed. See _postseismic_rate_field for why this is the view to
-        # read rather than the per-event panels above.
+        # Two more panels: every event's postseismic contribution summed at one epoch,
+        # as a rate and as a cumulative displacement. See postseismic_combined for why
+        # these are the views to read rather than the per-event panels above. Both follow
+        # the epoch slider, so they are recomputed through epoch_callback below.
+        epoch_indices, epoch_limits, epoch_callback = [], None, None
         if not sigmas:
-            rate = self._postseismic_rate_field(n_sparse)
-            if rate is not None:
-                label, r_field, r_params, r_sparse, r_lon, r_lat = rate
-                available_fields.append(label)
-                fields.append(r_field)
-                station_data.append(r_params)
-                sparse_data.append(r_sparse)
-                grid_lon.append(r_lon)
-                grid_lat.append(r_lat)
-                fcovar.append(None)
-                field_notes.append(None)
+            components = self._postseismic_components(n_sparse)
+            epoch_limits = self.postseismic_epoch_limits(components)
+            if epoch_limits is not None:
+                epoch0 = epoch_limits[1]
+                for cumulative, name in ((False, 'Postseismic rate'),
+                                         (True, 'Postseismic cumulative')):
+                    f_, p_, s_, used = self.postseismic_combined(components, epoch0, cumulative)
+                    if not used:
+                        continue
+                    epoch_indices.append(len(available_fields))
+                    available_fields.append(name)
+                    fields.append(f_)
+                    station_data.append(p_)
+                    sparse_data.append(s_)
+                    grid_lon.append(self.grids.interpolation_geographic[0])
+                    grid_lat.append(self.grids.interpolation_geographic[1])
+                    fcovar.append(None)
+                    field_notes.append(None)
+
+                cumulative_by_index = {epoch_indices[i]: bool(i)
+                                       for i in range(len(epoch_indices))}
+
+                def epoch_callback(field_index, epoch, _c=components,
+                                   _m=cumulative_by_index):
+                    """Recompute one epoch-dependent panel; called by the epoch slider."""
+                    f_, p_, s_, _u = self.postseismic_combined(_c, epoch, _m[field_index])
+                    return f_, p_, s_
 
         # do the thing
         return plot_velocity_field(grid_lon, grid_lat, fields,
@@ -135,6 +153,9 @@ class DiagnosticsMixin:
                                    sparse_data=sparse_data, sparse_names=sparse_names,
                                    on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None,
                                    field_notes=field_notes,
+                                   epoch_callback=epoch_callback,
+                                   epoch_limits=epoch_limits,
+                                   epoch_indices=epoch_indices,
                                    output_file=output_file)
 
     def postseismic_entanglement(self, threshold: float = 0.5) -> dict:
@@ -204,74 +225,88 @@ class DiagnosticsMixin:
                 if stn.etm is not None and stn.etm.solution_data.time_vector.size]
         return max(last) if last else None
 
-    def _postseismic_rate_field(self, n_sparse: int):
-        """Total postseismic contribution to the velocity field at one epoch.
+    def _postseismic_components(self, n_sparse: int) -> list:
+        """Each postseismic field reduced to the pieces an epoch combination needs.
 
-        Each event contributes A * d/dt log(1 + dt/tau) = A / (tau + dt), with dt in years
-        from that event's onset, so the result is a rate in the same units as the
-        interseismic field and directly comparable to it.
-
-        This exists because the per-event panels are not independently readable. The
-        amplitudes of events close together in time are strongly anti-correlated -- on
-        the Ecuador stack the 2016-107 and 2016-139 pair (32 days apart) correlates at
-        -0.945 median and -0.996 worst -- so each event's own amplitude is a marginal
-        quantity with a marginal uncertainty, while only the combination is determined.
-        At col.psto the two amplitudes are -10.3 +/- 10.0 mm and +1.6 +/- 9.4 mm, both
-        consistent with zero on their own, while their sum is 8.7 +/- 1.1 mm. Summing
-        over events along exactly the direction they trade off against each other is what
-        makes the displayed quantity meaningful.
-
-        Returns None when there is no postseismic field, or no epoch to evaluate at.
-        Omitted from the sigma view deliberately: an honest sigma here needs the
-        cross-event covariance propagated to the grid, which the per-field enu_covar does
-        not carry, and summing the per-event sigmas in quadrature would report roughly the
-        10 mm marginal figure when the real one is nearer 1 mm -- the exact error this
-        panel exists to avoid.
+        Precomputed once so moving the epoch slider is a weighted sum over these rather
+        than a re-interpolation: the sparse-station values in particular come from
+        get_values_geo, which runs a griddata interpolation per station per field.
         """
         from .types import ConstraintType
 
-        epoch = self.postseismic_rate_epoch()
-        if epoch is None:
-            return None
-
-        fields = [f for f in self.fields if f.base_type == ConstraintType.POSTSEISMIC]
-        if not fields:
-            return None
-
-        total = np.zeros((3, self.grids.points))
-        parameters = np.zeros((3, len(self.stations)))
-        sparse_params = np.full((3, n_sparse), np.nan)
-        used = 0
-
-        for f in fields:
-            dt = epoch - f.event.date.fyear
-            if dt <= 0:
+        out = []
+        for f in self.fields:
+            if f.base_type != ConstraintType.POSTSEISMIC:
                 continue
-            weight = 1.0 / (f.relaxation + dt)
-            used += 1
-
-            mask = self.grids.earthquake_masks[f.event.id][1]
-            total[:, mask] += f.enu_field * weight
 
             cols, keep = self._parameter_columns(f)
-            parameters[:, cols] += f.constrained_parameters[:, keep] * weight
-
+            sparse = np.full((3, n_sparse), np.nan)
             for k, stn in enumerate(self.sparse_stations):
                 vals, _ = f.get_values_geo(stn.lon, stn.lat)
                 if vals is None:
                     continue
-                if np.isnan(sparse_params[:, k]).all():
-                    sparse_params[:, k] = 0.0
-                for j in range(3):
-                    sparse_params[j, k] += vals[j][0] * weight
+                sparse[:, k] = [vals[j][0] for j in range(3)]
 
-        if not used:
+            out.append(dict(
+                mask=self.grids.earthquake_masks[f.event.id][1],
+                grid=f.enu_field,
+                cols=cols, keep=keep,
+                params=f.constrained_parameters,
+                sparse=sparse,
+                onset=f.event.date.fyear,
+                relaxation=f.relaxation,
+            ))
+        return out
+
+    def postseismic_combined(self, components: list, epoch: float, cumulative: bool):
+        """Sum every event's postseismic contribution at one epoch.
+
+        cumulative=False gives the rate, A / (tau + dt), i.e. d/dt of A log(1 + dt/tau),
+        in the same units as the interseismic field. cumulative=True gives the
+        displacement accumulated since each event's own onset, A log(1 + dt/tau).
+
+        Either way the point is the summation. The per-event panels are not independently
+        readable: amplitudes of events close in time are strongly anti-correlated -- on
+        the Ecuador stack 2016-107 and 2016-139, 32 days apart, sit at -0.98 -- so each
+        amplitude alone is a marginal quantity with a marginal uncertainty while only the
+        combination is determined. At col.psto the two East amplitudes are -10.3 +/- 10.0
+        and +1.6 +/- 9.4 mm, both consistent with zero, and their sum is 8.7 +/- 1.1 mm.
+        Summing along the direction they trade off against each other is what makes the
+        displayed quantity mean something.
+
+        Returns (field, station_parameters, sparse_parameters, n_events_used).
+        """
+        total = np.zeros((3, self.grids.points))
+        parameters = np.zeros((3, len(self.stations)))
+        sparse_params = np.full((3, len(self.sparse_stations)), np.nan)
+        used = 0
+
+        for c in components:
+            dt = epoch - c['onset']
+            if dt <= 0:
+                continue
+            weight = (np.log(1.0 + dt / c['relaxation']) if cumulative
+                      else 1.0 / (c['relaxation'] + dt))
+            used += 1
+
+            total[:, c['mask']] += c['grid'] * weight
+            parameters[:, c['cols']] += c['params'][:, c['keep']] * weight
+
+            live = ~np.isnan(c['sparse'][0])
+            if live.any():
+                blank = np.isnan(sparse_params[0]) & live
+                sparse_params[:, blank] = 0.0
+                sparse_params[:, live] += c['sparse'][:, live] * weight
+
+        return total, parameters, sparse_params, used
+
+    def postseismic_epoch_limits(self, components: list):
+        """(first onset, last observed epoch) for the epoch slider, or None."""
+        last = self.postseismic_rate_epoch()
+        onsets = [c['onset'] for c in components]
+        if last is None or not onsets or min(onsets) >= last:
             return None
-
-        label = f'Postseismic rate {epoch:.2f} ({used} events)'
-        return (label, total, parameters, sparse_params,
-                self.grids.interpolation_geographic[0],
-                self.grids.interpolation_geographic[1])
+        return min(onsets), last
 
     def _parameter_columns(self, field) -> Tuple[np.ndarray, np.ndarray]:
         """Map a field's own parameter columns onto columns of self.stations.

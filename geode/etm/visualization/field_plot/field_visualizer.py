@@ -100,7 +100,10 @@ class FieldVisualizer:
             sparse_data: List[np.ndarray] = None,
             sparse_names: List[str] = None,
             on_sparse_click: Optional[Callable[[int], None]] = None,
-            field_notes: Optional[List[Optional[str]]] = None
+            field_notes: Optional[List[Optional[str]]] = None,
+            epoch_callback: Optional[Callable[[int, float], tuple]] = None,
+            epoch_limits: Optional[Tuple[float, float]] = None,
+            epoch_indices: Optional[List[int]] = None
     ) -> plt.Figure:
         """
         Create the field visualization.
@@ -154,6 +157,9 @@ class FieldVisualizer:
         self._on_sparse_click = on_sparse_click
         self._covar = covar
         self._field_notes = field_notes or []
+        self._epoch_callback = epoch_callback
+        self._epoch_limits = epoch_limits
+        self._epoch_indices = set(epoch_indices or [])
         self._on_station_click = on_station_click
         self._field_names = available_fields or [f"Field {i}" for i in range(len(data))]
 
@@ -235,7 +241,7 @@ class FieldVisualizer:
         # full figure width that is reliably free. Above it collides with the subplot
         # titles, below it with the Vector Scale slider.
         self._note_text = self.fig.text(
-            0.5, 0.115, '', ha='center', va='center', fontsize=9,
+            0.5, 0.128, '', ha='center', va='center', fontsize=9,
             color='firebrick', style='italic')
         self._update_field_note(self.state.current_field_index)
 
@@ -695,6 +701,14 @@ class FieldVisualizer:
         if field_index == self.state.current_field_index:
             return
 
+        self._render_field(field_index)
+
+    def _render_field(self, field_index: int) -> None:
+        """Redraw the figure for `field_index`, preserving the current view.
+
+        Split out of switch_field, which early-returns when the index is unchanged --
+        update_epoch needs exactly this work on the panel already being shown.
+        """
         # 1. Capture view state from all axes
         for i, ax in enumerate(self.axes):
             self.state.view_states[i].capture(ax)
@@ -720,6 +734,21 @@ class FieldVisualizer:
         # 7. Update the caption and display
         self._update_field_note(field_index)
         self.fig.canvas.draw_idle()
+
+    def update_epoch(self, epoch: float) -> None:
+        """Re-evaluate the epoch-dependent panels and redraw if one is on screen."""
+        if self._epoch_callback is None:
+            return
+
+        for index in self._epoch_indices:
+            field, stations, sparse = self._epoch_callback(index, float(epoch))
+            self._data[index] = field
+            self._stations_data[index] = stations
+            if self._sparse_data is not None:
+                self._sparse_data[index] = sparse
+
+        if self.state.current_field_index in self._epoch_indices:
+            self._render_field(self.state.current_field_index)
 
     def update_scale(self, slider_value: float) -> None:
         """
@@ -814,6 +843,10 @@ class FieldVisualizer:
             self.update_scale,
             initial_value=50.0
         )
+
+        # Epoch slider, only when some panel actually depends on an epoch
+        if self._epoch_callback is not None and self._epoch_limits is not None:
+            self.widgets.create_epoch_slider(self.update_epoch, *self._epoch_limits)
 
         # Reset view button
         self.widgets.create_reset_button(self.reset_view)
