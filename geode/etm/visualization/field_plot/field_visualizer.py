@@ -428,7 +428,8 @@ class FieldVisualizer:
         field = spec['field']
         label = spec['label']
 
-        vmin, vmax = self._colour_range(index, field)
+        vmin, vmax = self._colour_range(index, field,
+                                        non_negative=bool(spec.get('sequential')))
 
         levels = np.linspace(vmin, vmax, self.config.n_contour_levels)
 
@@ -838,7 +839,8 @@ class FieldVisualizer:
         self._update_field_note(field_index)
         self.fig.canvas.draw_idle()
 
-    def _colour_range(self, panel_index: int, field) -> Tuple[float, float]:
+    def _colour_range(self, panel_index: int, field,
+                      non_negative: bool = False) -> Tuple[float, float]:
         """Symmetric colour limits for one panel.
 
         Locked for the epoch-dependent panels: their values change by an order of
@@ -858,6 +860,17 @@ class FieldVisualizer:
 
         vmin = float(np.nanmin(field))
         vmax = float(np.nanmax(field))
+
+        # A magnitude starts at zero. Only a signed component wants the range made
+        # symmetric so that the diverging colour map's midpoint lands on zero; doing it
+        # to a magnitude put negative numbers on the bar for a quantity that cannot be
+        # negative.
+        if non_negative:
+            vmin = 0.0
+            if vmax <= 0.0:
+                vmax = 1.0
+            return vmin, vmax
+
         if abs(vmax) > abs(vmin):
             vmin = -vmax
         else:
