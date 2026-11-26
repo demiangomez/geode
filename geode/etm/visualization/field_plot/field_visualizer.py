@@ -99,7 +99,8 @@ class FieldVisualizer:
             sparse_lat: np.ndarray = None,
             sparse_data: List[np.ndarray] = None,
             sparse_names: List[str] = None,
-            on_sparse_click: Optional[Callable[[int], None]] = None
+            on_sparse_click: Optional[Callable[[int], None]] = None,
+            field_notes: Optional[List[Optional[str]]] = None
     ) -> plt.Figure:
         """
         Create the field visualization.
@@ -152,6 +153,7 @@ class FieldVisualizer:
         self._sparse_names = sparse_names
         self._on_sparse_click = on_sparse_click
         self._covar = covar
+        self._field_notes = field_notes or []
         self._on_station_click = on_station_click
         self._field_names = available_fields or [f"Field {i}" for i in range(len(data))]
 
@@ -225,6 +227,17 @@ class FieldVisualizer:
             self.axes.append(ax)
 
         self.fig.suptitle(self.config.title, fontsize=16, fontweight='bold')
+
+        # One-line caption for the selected field, empty for most of them. Lives on the
+        # figure rather than in the field selector: the selector is already as wide as
+        # its longest event label, while there is a full figure width going spare here.
+        # In the strip between the colorbar labels and the slider row -- the only band of
+        # full figure width that is reliably free. Above it collides with the subplot
+        # titles, below it with the Vector Scale slider.
+        self._note_text = self.fig.text(
+            0.5, 0.115, '', ha='center', va='center', fontsize=9,
+            color='firebrick', style='italic')
+        self._update_field_note(self.state.current_field_index)
 
     def _process_data(self, field_index: int) -> None:
         """
@@ -663,6 +676,13 @@ class FieldVisualizer:
                 label.remove()
             self.state.contour_labels[i] = []
 
+    def _update_field_note(self, field_index: int) -> None:
+        """Show the caption for `field_index`, or clear it when that field has none."""
+        note = ''
+        if 0 <= field_index < len(self._field_notes):
+            note = self._field_notes[field_index] or ''
+        self._note_text.set_text(note)
+
     def switch_field(self, field_index: int) -> None:
         """
         Switch to a different field while preserving view state.
@@ -697,7 +717,8 @@ class FieldVisualizer:
         for i, ax in enumerate(self.axes):
             self.state.view_states[i].restore(ax)
 
-        # 7. Update display
+        # 7. Update the caption and display
+        self._update_field_note(field_index)
         self.fig.canvas.draw_idle()
 
     def update_scale(self, slider_value: float) -> None:

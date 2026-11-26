@@ -40,6 +40,14 @@ class DiagnosticsMixin:
         available_fields, station_data, sparse_data, grid_lon, grid_lat, fields, fcovar = \
             [], [], [], [], [], [], []
 
+        # Per-panel caption, appended alongside each entry below so it keys off the field
+        # object rather than its label -- the coseismic and postseismic panels for one
+        # event share an event id, and only the postseismic amplitudes are entangled. The
+        # caption goes on the figure rather than in the field selector because the
+        # selector is already the width of its longest event label.
+        entangled = self.postseismic_entanglement() if not sigmas else {}
+        field_notes = []
+
         postseismic = []
         for ifield in self.fields:
             if ifield.base_type == ConstraintType.POSTSEISMIC:
@@ -51,6 +59,12 @@ class DiagnosticsMixin:
             station_data.append(parameters)
             sparse_params = np.full((3, n_sparse), np.nan)
             available_fields.append(ifield.description)
+            hit = (entangled.get(ifield.event.id)
+                   if ifield.base_type == ConstraintType.POSTSEISMIC else None)
+            field_notes.append(
+                f'not separately determined: r = {hit[0]:+.2f} with {hit[1]}  '
+                f'-- read the Postseismic rate panel instead'
+                if hit else None)
             lon, lat = ifield.get_interpolation_grid_geographic()
             grid_lon.append(lon)
             grid_lat.append(lat)
@@ -110,6 +124,7 @@ class DiagnosticsMixin:
                 grid_lon.append(r_lon)
                 grid_lat.append(r_lat)
                 fcovar.append(None)
+                field_notes.append(None)
 
         # do the thing
         return plot_velocity_field(grid_lon, grid_lat, fields,
@@ -119,7 +134,63 @@ class DiagnosticsMixin:
                                    sparse_lon=sparse_lon, sparse_lat=sparse_lat,
                                    sparse_data=sparse_data, sparse_names=sparse_names,
                                    on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None,
+                                   field_notes=field_notes,
                                    output_file=output_file)
+
+    def postseismic_entanglement(self, threshold: float = 0.5) -> dict:
+        """event id -> (worst signed correlation, the other event's id), for postseismic
+        amplitudes that are not separately determined.
+
+        Two events close together in time have nearly collinear log(1 + dt/tau) columns
+        over a given station's span, so their amplitudes trade off: the pair is well
+        determined, each one alone is not. The correlation is read straight off the
+        solved covariance, per station and component, and the median taken -- so this
+        reports what the solution itself says about separability, not a guess from the
+        event dates.
+
+        Only pairs above `threshold` in absolute value are returned.
+        """
+        from .types import ConstraintType
+
+        events = {f.event.id: f.event for f in self.fields
+                  if f.base_type == ConstraintType.POSTSEISMIC}
+        if len(events) < 2:
+            return {}
+
+        tp = self.solution.shape[1]
+        cols = {}
+        for event_id in events:
+            per_station = {}
+            for station in self.stations:
+                for relax in self.config.relaxation:
+                    col = station.get_postseismic_column(event_id, relax)
+                    if col is not None:
+                        per_station[(stationID(station), relax)] = int(np.atleast_1d(col)[0])
+            cols[event_id] = per_station
+
+        worst = {}
+        ids = list(events)
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                shared = set(cols[a]) & set(cols[b])
+                rs = []
+                for key in shared:
+                    for comp in range(3):
+                        ga = cols[a][key] + comp * tp
+                        gb = cols[b][key] + comp * tp
+                        denom = self.covariance[ga, ga] * self.covariance[gb, gb]
+                        if denom > 0:
+                            rs.append(self.covariance[ga, gb] / np.sqrt(denom))
+                if not rs:
+                    continue
+                r = float(np.median(rs))
+                if abs(r) < threshold:
+                    continue
+                for one, other in ((a, b), (b, a)):
+                    if one not in worst or abs(r) > abs(worst[one][0]):
+                        worst[one] = (r, other)
+
+        return worst
 
     def postseismic_rate_epoch(self) -> Optional[float]:
         """Decimal year the postseismic rate panel is evaluated at: the last epoch any

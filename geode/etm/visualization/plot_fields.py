@@ -42,6 +42,7 @@ def plot_velocity_field(
         sparse_data: list = None,
         sparse_names: list = None,
         on_sparse_click: Optional[callable] = None,
+        field_notes: list = None,
         show_plate_boundaries: bool = True,
         plate_boundary_color: str = 'darkred',
         plate_boundary_width: float = 0.8
@@ -149,5 +150,6 @@ def plot_velocity_field(
         sparse_lat=sparse_lat,
         sparse_data=sparse_data,
         sparse_names=sparse_names,
-        on_sparse_click=on_sparse_click
+        on_sparse_click=on_sparse_click,
+        field_notes=field_notes
     )
