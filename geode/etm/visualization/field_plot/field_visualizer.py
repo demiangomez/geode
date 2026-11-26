@@ -249,12 +249,6 @@ class FieldVisualizer:
             ax.set_adjustable('datalim')
             self.axes.append(ax)
 
-        # The box each axis must always occupy, taken before any colorbar exists.
-        # plt.colorbar(ax=ax) steals space from its parent and removing it does not give
-        # all of it back, so across redraws the boxes creep -- and with adjustable
-        # 'datalim' a shrinking box is absorbed by widening the data limits instead.
-        # That is what made the view zoom out a little on every magnitude toggle.
-        self._axes_boxes = [ax.get_position().frozen() for ax in self.axes]
 
         self.fig.suptitle(self.config.title, fontsize=16, fontweight='bold')
 
@@ -384,10 +378,6 @@ class FieldVisualizer:
 
     def _draw_all_subplots(self) -> None:
         """Draw all three subplots."""
-        # Put every box back where it started before the colorbars take their cut again
-        for ax, box in zip(self.axes, self._axes_boxes):
-            ax.set_position(box)
-
         for i, (ax, spec) in enumerate(zip(self.axes, self._panel_specs())):
             ax.set_visible(spec['visible'])
             if not spec['visible']:
@@ -657,8 +647,16 @@ class FieldVisualizer:
                 [cov_flat[j], vn_flat[j] ** 2]
             ])
 
-            # Eigenvalue decomposition
+            # Eigenvalue decomposition. The matrix is assembled from an interpolated
+            # sigma field and an interpolated E-N covariance, which are gridded
+            # independently, so nothing guarantees |cov| <= sigma_e * sigma_n and a
+            # negative eigenvalue is entirely possible -- it produced a NaN axis and a
+            # RuntimeWarning per grid point. Clip at zero and skip anything still not
+            # finite rather than drawing a degenerate patch.
             eigenvalues, eigenvectors = np.linalg.eigh(cov_2x2)
+            eigenvalues = np.clip(eigenvalues, 0.0, None)
+            if not np.all(np.isfinite(eigenvalues)):
+                continue
 
             # Sort by eigenvalue
             order = eigenvalues.argsort()[::-1]

@@ -31,10 +31,22 @@ class ViewState:
         view, so in the common case the limits already hold the values being restored and
         the whole cost is avoidable.
         """
-        if self.xlim is not None and tuple(ax.get_xlim()) != tuple(self.xlim):
-            ax.set_xlim(self.xlim)
-        if self.ylim is not None and tuple(ax.get_ylim()) != tuple(self.ylim):
-            ax.set_ylim(self.ylim)
+        if self.xlim is None or self.ylim is None:
+            return
+
+        # Both or neither. These are cartopy GeoAxes with a fixed aspect and
+        # adjustable='datalim', so set_xlim and set_ylim each re-derive the OTHER axis to
+        # keep the aspect: setting just one of them moves the view instead of restoring
+        # it, and the error compounds on every redraw. Skipping the pair entirely when it
+        # already matches is what keeps this cheap -- set_xlim/set_ylim re-project and
+        # re-clip every map feature on the axis, 3.8 s for the three panels against 0.1 s
+        # to redraw all the data artists.
+        if (tuple(ax.get_xlim()) == tuple(self.xlim)
+                and tuple(ax.get_ylim()) == tuple(self.ylim)):
+            return
+
+        ax.set_xlim(self.xlim)
+        ax.set_ylim(self.ylim)
 
     def is_captured(self) -> bool:
         """Check if a view state has been captured."""
