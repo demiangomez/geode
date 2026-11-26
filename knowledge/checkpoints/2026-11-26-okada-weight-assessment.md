@@ -5,11 +5,15 @@
 
 ## Summary
 
-Swept the postseismic SW-Okada regularization weights on the Ecuador stack against a
-held-out criterion. The horizontal weight helps and `h = 5` is at the optimum; the vertical
-weight *hurts* and should be 0, not the 5 currently used. The global variance of unit
-weight is insensitive to both, which is why these were never tunable before. The field's
-failure to decay with distance is structural, not a weight setting.
+Swept the SW-Okada regularization weights on the Ecuador stack against a held-out
+criterion, and added the far-field force balance the horizontal block was missing. The
+horizontal weight helps, the vertical weight *hurts* and should be 0, and with the force
+balance in place the horizontal optimum moves from 5 to 25. The global variance of unit
+weight is insensitive to every one of these, which is why they were never tunable before.
+The field's failure to decay with distance was structural rather than a weight setting:
+the force balance takes the decay slope from -0.17 to -0.51 and removes the station-centred
+"sinks" entirely. Net effect of the recommended settings, on 23 held-out stations: -15% in
+both the horizontal and vertical prediction residual.
 
 ## Files / modules affected
 
@@ -17,8 +21,9 @@ failure to decay with distance is structural, not a weight setting.
 - `geode/etm/stacker/constraints/fault_geometry.py` — far-field force balance on the
   horizontal block of `_compute_sw_okada_system`.
 
-Sweep script: `okada_sweep.py` (session scratch, not committed — it reads a pickled
-session by path).
+Sweep scripts: `okada_sweep.py` and `okada_sweep2.py` (session scratch, not committed —
+they read a pickled session by path). The second supersedes the first; see the note on
+normalisation below.
 
 ## Architectural decisions
 
@@ -133,7 +138,6 @@ held-out residual goes 2.50 -> 2.13 in E/N and 2.84 -> 2.41 in U, both about -15
 - One network, one catalogue, one relaxation (0.5). The optimum is broad (2-10 for `h`),
   so the exact value is not the point, but the *sign* of the vertical result should be
   re-checked elsewhere before changing a shipped default.
-- The coseismic Okada weights were not swept; only postseismic.
 - The out-of-sample metric mixes all three field types (a sparse station is predicted from
   interseismic + coseismic + postseismic together). Only the postseismic weights changed,
   so the differences are attributable, but the absolute level is not a postseismic-only
