@@ -27,6 +27,13 @@ from .interaction_handler import InteractionHandler
 # has to re-render on each interaction.
 _MAX_GRID_ARROWS = 700
 
+# Metres per unit of 3-sigma uncertainty in _draw_ellipses, chosen so the ellipses are
+# the size they were before the scaling was inverted, at the slider's default.
+_ELLIPSE_SIZE = 1.0e6
+
+# Colour map for the non-negative magnitude panel, where a diverging map is wrong.
+_SEQUENTIAL_CMAP = 'viridis'
+
 
 class FieldVisualizer:
     """
@@ -161,6 +168,9 @@ class FieldVisualizer:
         self._covar = covar
         self._field_notes = field_notes or []
         self._interp_cache = {}
+        self._locked_levels = {}
+        self._locked_magnitude = {}
+        self._magnitude = False
         self._sigma_data = sigma_data or []
         self._epoch_marks = epoch_marks or []
         self._show_sigmas = bool(self.config.plot_sigmas)
@@ -238,6 +248,13 @@ class FieldVisualizer:
             # This prevents axis resizing on zoom while maintaining map proportions
             ax.set_adjustable('datalim')
             self.axes.append(ax)
+
+        # The box each axis must always occupy, taken before any colorbar exists.
+        # plt.colorbar(ax=ax) steals space from its parent and removing it does not give
+        # all of it back, so across redraws the boxes creep -- and with adjustable
+        # 'datalim' a shrinking box is absorbed by widening the data limits instead.
+        # That is what made the view zoom out a little on every magnitude toggle.
+        self._axes_boxes = [ax.get_position().frozen() for ax in self.axes]
 
         self.fig.suptitle(self.config.title, fontsize=16, fontweight='bold')
 
@@ -337,14 +354,47 @@ class FieldVisualizer:
         self.state.reference_vector = np.nanmax(vh)
         self.state.current_field_index = field_index
 
+    def _panel_specs(self) -> List[dict]:
+        """What each of the three panels shows, as (label, field, vectors, contours,
+        visible).
+
+        Component mode is the long-standing East / North / Up. Magnitude mode replaces
+        the first two with one horizontal-magnitude panel and hides the third: the
+        separate E and N colour fields are hard to read as one vector field, and the
+        arrows already carry the direction.
+        """
+        if not self._magnitude:
+            return [
+                dict(label='East', field=self.state.ve_grid, vectors=True,
+                     contours=False, visible=True),
+                dict(label='North', field=self.state.vn_grid, vectors=True,
+                     contours=False, visible=True),
+                dict(label='Up', field=self.state.vu_grid, vectors=False,
+                     contours=True, visible=True),
+            ]
+
+        horizontal = np.hypot(self.state.ve_grid, self.state.vn_grid)
+        return [
+            dict(label='Horizontal magnitude', field=horizontal, vectors=True,
+                 contours=False, visible=True, sequential=True),
+            dict(label='Up', field=self.state.vu_grid, vectors=False,
+                 contours=True, visible=True),
+            dict(label=None, field=None, vectors=False, contours=False, visible=False),
+        ]
+
     def _draw_all_subplots(self) -> None:
-        """Draw all three subplots (East, North, Up)."""
-        labels = ['East', 'North', 'Up']
+        """Draw all three subplots."""
+        # Put every box back where it started before the colorbars take their cut again
+        for ax, box in zip(self.axes, self._axes_boxes):
+            ax.set_position(box)
 
-        for i, (ax, label) in enumerate(zip(self.axes, labels)):
-            self._draw_subplot(ax, i, label, connect_interaction=(i == 0))
+        for i, (ax, spec) in enumerate(zip(self.axes, self._panel_specs())):
+            ax.set_visible(spec['visible'])
+            if not spec['visible']:
+                continue
+            self._draw_subplot(ax, i, spec, connect_interaction=(i == 0))
 
-    def _draw_subplot(self, ax, index: int, label: str, connect_interaction: bool = False) -> None:
+    def _draw_subplot(self, ax, index: int, spec: dict, connect_interaction: bool = False) -> None:
         """
         Draw a single subplot.
 
@@ -359,33 +409,20 @@ class FieldVisualizer:
         connect_interaction : bool
             Whether to set up interaction handlers on this axis
         """
-        # Select field data
-        if index == 0:
-            field = self.state.ve_grid
-        elif index == 1:
-            field = self.state.vn_grid
-        else:
-            field = self.state.vu_grid
+        field = spec['field']
+        label = spec['label']
 
-        # Compute color range (symmetric around zero)
-        vmin = np.nanmin(field)
-        vmax = np.nanmax(field)
-
-        if np.abs(vmax) > np.abs(vmin):
-            vmin = -vmax
-        else:
-            vmax = -vmin
-
-        if vmin == vmax:
-            vmin, vmax = -1, 1
+        vmin, vmax = self._colour_range(index, field)
 
         levels = np.linspace(vmin, vmax, self.config.n_contour_levels)
 
         # Draw contours
+        # A magnitude is non-negative, so the diverging map would put its midpoint at
+        # half the maximum and render everything below that as saturated colour.
         cs = ax.contourf(
             self.state.xi_grid, self.state.yi_grid, field,
             levels=levels,
-            cmap=self.config.cmap,
+            cmap=_SEQUENTIAL_CMAP if spec.get('sequential') else self.config.cmap,
             extend=self.config.colorbar_extend,
             transform=self.renderer.projection
         )
@@ -400,7 +437,7 @@ class FieldVisualizer:
         scale = self.state.reference_vector * self.state.scale_factor
 
         # Draw vectors (only for East and North)
-        if index != 2:
+        if spec['vectors']:
             if self._show_sigmas and self.state.cov_grid is not None:
                 self._draw_ellipses(ax, index, scale)
             else:
@@ -416,7 +453,7 @@ class FieldVisualizer:
         )
         self.state.scatter_artists[index] = scatter
 
-        if index != 2:
+        if spec['vectors']:
             q_stn = ax.quiver(
                 self.state.x_stn, self.state.y_stn,
                 self.state.ve_stn, self.state.vn_stn,
@@ -441,7 +478,7 @@ class FieldVisualizer:
             )
             self.state.scatter_sparse[index] = scatter_sp
 
-            if index != 2 and self.state.ve_sparse is not None:
+            if spec['vectors'] and self.state.ve_sparse is not None:
                 q_sp = ax.quiver(
                     self.state.x_sparse, self.state.y_sparse,
                     self.state.ve_sparse, self.state.vn_sparse,
@@ -468,8 +505,8 @@ class FieldVisualizer:
 
         ax.set_title(label, fontsize=12, fontweight='bold')
 
-        # Add contour lines for Up component
-        if index == 2:
+        # Add contour lines for the vertical panel
+        if spec['contours']:
             cs_lines = ax.contour(
                 self.state.xi_grid, self.state.yi_grid, field,
                 levels=10, colors='black',
@@ -603,8 +640,11 @@ class FieldVisualizer:
         vn_flat = self.state.vn_grid[::step, ::step].flatten()
         cov_flat = self.state.cov_grid[::step, ::step].flatten()
 
-        # Normalize scale
-        norm_scale = scale / self.state.reference_vector
+        # Inverted, because `scale` is matplotlib quiver's scale parameter and that runs
+        # the other way: a larger value draws SMALLER arrows. Multiplying the ellipse axes
+        # by it directly made the ellipses grow as the arrows shrank. _ELLIPSE_SIZE is set
+        # so the ellipses come out the same size as before at the slider's default.
+        norm_scale = self.state.reference_vector / scale
 
         ellipses = []
         for j in range(ve_flat.size):
@@ -625,8 +665,8 @@ class FieldVisualizer:
             eigenvalues = eigenvalues[order]
             eigenvectors = eigenvectors[:, order]
 
-            width = 2 * 3 * np.sqrt(eigenvalues[0]) * norm_scale * 10000
-            height = 2 * 3 * np.sqrt(eigenvalues[1]) * norm_scale * 10000
+            width = 2 * 3 * np.sqrt(eigenvalues[0]) * norm_scale * _ELLIPSE_SIZE
+            height = 2 * 3 * np.sqrt(eigenvalues[1]) * norm_scale * _ELLIPSE_SIZE
             angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))
 
             ellipse = Ellipse(
@@ -757,6 +797,60 @@ class FieldVisualizer:
         self._update_field_note(field_index)
         self.fig.canvas.draw_idle()
 
+    def _colour_range(self, panel_index: int, field) -> Tuple[float, float]:
+        """Symmetric colour limits for one panel.
+
+        Locked for the epoch-dependent panels: their values change by an order of
+        magnitude across the slider's range, and rescaling the colourbar with every move
+        makes two epochs impossible to compare by eye. The lock is set from the extremes
+        of the epoch range, so the scale holds at the largest value the panel ever takes.
+        """
+        if self._magnitude:
+            bounds = self._locked_magnitude.get(self.state.current_field_index)
+            if bounds is not None and panel_index < 2:
+                bound = bounds[panel_index]
+                return (0.0, bound) if panel_index == 0 else (-bound, bound)
+        else:
+            locked = self._locked_levels.get((self.state.current_field_index, panel_index))
+            if locked is not None:
+                return locked
+
+        vmin = float(np.nanmin(field))
+        vmax = float(np.nanmax(field))
+        if abs(vmax) > abs(vmin):
+            vmin = -vmax
+        else:
+            vmax = -vmin
+        if vmin == vmax:
+            vmin, vmax = -1.0, 1.0
+        return vmin, vmax
+
+    def _lock_epoch_levels(self) -> None:
+        """Precompute the fixed colour limits of every epoch-dependent panel.
+
+        Sampled across the epoch range rather than taken from the current epoch: the rate
+        panel peaks at the earliest epoch and the cumulative one at the latest, so either
+        end alone would clip the other.
+        """
+        if self._epoch_callback is None or self._epoch_limits is None:
+            return
+
+        lo, hi = self._epoch_limits
+        epochs = np.linspace(lo, hi, 9)
+
+        for field_index in self._epoch_indices:
+            peak = np.zeros(3)
+            for epoch in epochs:
+                field, _stations, _sparse = self._epoch_callback(field_index, float(epoch))
+                peak = np.maximum(peak, np.nanmax(np.abs(field), axis=1) * 1000.0)
+
+            horizontal = float(np.hypot(peak[0], peak[1]))
+            for panel_index, bound in enumerate((peak[0], peak[1], peak[2])):
+                bound = float(bound) or 1.0
+                self._locked_levels[(field_index, panel_index)] = (-bound, bound)
+            # magnitude mode: panel 0 carries |E,N| and panel 1 carries Up
+            self._locked_magnitude[field_index] = (horizontal or 1.0, float(peak[2]) or 1.0)
+
     def _sigma_source(self, field_index: int):
         """The array to display for `field_index`: its uncertainty when the toggle is on
         and this panel has one, otherwise the field itself."""
@@ -771,13 +865,24 @@ class FieldVisualizer:
         return (field_index < len(self._sigma_data)
                 and self._sigma_data[field_index] is not None)
 
+    def toggle_magnitude(self, show: bool) -> None:
+        """Switch between East/North/Up panels and horizontal-magnitude + Up."""
+        self._magnitude = bool(show)
+        self._render_field(self.state.current_field_index)
+        # These axes are adjustable='datalim' with a fixed aspect, so matplotlib widens
+        # the data limits at draw time to fill the box. Changing which panels are visible
+        # makes that land somewhere slightly different each time, and the view creeps
+        # outward over repeated toggles. Switching the panel layout is a view change
+        # anyway, so reset rather than carry a drifting extent.
+        self.reset_view()
+
     def toggle_sigmas(self, show: bool) -> None:
         """Switch all panels between the field and its uncertainty."""
         self._show_sigmas = bool(show)
         self._interp_cache.clear()
         self._render_field(self.state.current_field_index)
         self._update_field_note(self.state.current_field_index)
-        self.fig.canvas.draw_idle()
+        self.reset_view()  # same reason as toggle_magnitude
 
     def update_epoch(self, epoch: float) -> None:
         """Re-evaluate the epoch-dependent panels and redraw if one is on screen."""
@@ -810,8 +915,10 @@ class FieldVisualizer:
         self.state.scale_factor = scale_factor
         scale = self.state.reference_vector * scale_factor
 
-        # Update quivers for East and North
-        for i in range(2):
+        # Update quivers on whichever panels carry them
+        for i, spec in enumerate(self._panel_specs()):
+            if not spec['vectors']:
+                continue
             ax = self.axes[i]
 
             if self._show_sigmas and self.state.cov_grid is not None:
@@ -888,6 +995,8 @@ class FieldVisualizer:
             initial_value=50.0
         )
 
+        self._lock_epoch_levels()
+
         # Epoch slider, only when some panel actually depends on an epoch
         if self._epoch_callback is not None and self._epoch_limits is not None:
             self.widgets.create_epoch_slider(self.update_epoch, *self._epoch_limits,
@@ -896,6 +1005,7 @@ class FieldVisualizer:
         # Uncertainty toggle, only when some panel actually has an uncertainty
         if any(sigma is not None for sigma in self._sigma_data):
             self.widgets.create_sigma_toggle(self.toggle_sigmas, initial=self._show_sigmas)
+        self.widgets.create_magnitude_toggle(self.toggle_magnitude, initial=self._magnitude)
 
         # Reset view button
         self.widgets.create_reset_button(self.reset_view)

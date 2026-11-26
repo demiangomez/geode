@@ -184,6 +184,22 @@ class WidgetManager:
         self._sigma_toggle.on_clicked(lambda _label: callback(self._sigma_toggle.get_status()[0]))
         return self._sigma_toggle
 
+    def create_magnitude_toggle(self, callback, initial: bool = False) -> CheckButtons:
+        """Checkbox collapsing the East/North panels into one horizontal magnitude."""
+        self._magnitude_toggle_ax = self.fig.add_axes([0.01, 0.165, 0.115, 0.05])
+        self._magnitude_toggle_ax.set_axis_off()
+        self._magnitude_toggle = CheckButtons(
+            ax=self._magnitude_toggle_ax,
+            labels=['magnitude'],
+            actives=[bool(initial)]
+        )
+        for label in self._magnitude_toggle.labels:
+            label.set_fontsize(8)
+        self._magnitude_callback = callback
+        self._magnitude_toggle.on_clicked(
+            lambda _label: callback(self._magnitude_toggle.get_status()[0]))
+        return self._magnitude_toggle
+
     def get_scale_factor(self) -> float:
         """Get the current scale factor from slider value."""
         if self._scale_slider is not None:
