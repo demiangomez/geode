@@ -292,7 +292,14 @@ def batch_score_scan(cnn: Cnn, stations: List[Tuple[str, str, float, float]],
         else:
             score = Score(float(j['lat']), float(j['lon']), float(j['depth']), float(j['mag']),
                          strike, dip, rake, j['date'], location=j['location'], event_id=j['id'])
+            # Same coercion as ScoreTable.__init__ above, and for the same reason:
+            # Score.score_values returns a one-element array for a mask-carrying event
+            # and a plain scalar otherwise, and numpy 2.x refuses float() on the
+            # former. Only cache misses reach this branch, so it stays hidden until a
+            # run widens the magnitude limit and pulls in never-scored events.
             s_score, p_score = score.score(lat, lon)
+            s_score = float(np.asarray(s_score).reshape(-1)[0])
+            p_score = float(np.asarray(p_score).reshape(-1)[0])
 
             if j['hash'] is not None:
                 to_delete_keys.append((j['id'], net, code))
@@ -300,8 +307,8 @@ def batch_score_scan(cnn: Cnn, stations: List[Tuple[str, str, float, float]],
                 'event_id': j['id'],
                 'network_code': net,
                 'station_code': code,
-                'coseismic': float(s_score),
-                'postseismic': float(p_score),
+                'coseismic': s_score,
+                'postseismic': p_score,
                 'hash': current_hash,
             })
 
