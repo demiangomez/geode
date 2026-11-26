@@ -33,8 +33,25 @@ class PatchGrid:
 
 # Smallest station count at which the horizontal far-field force balance in
 # _compute_sw_okada_system is worth its two constraint rows. They cost a fraction 1/N of
-# the horizontal model, so this caps that at 10%.
-_FORCE_BALANCE_MIN_SITES = 10
+# the horizontal model, so 16 caps that at 6.25%.
+#
+# Calibrated, not derived. On the Ecuador stack, measuring each field's median value at a
+# constraining station as a fraction of that station's own fitted offset (0 = the field
+# passes through its stations, 1 = it predicts nothing there), the force balance is
+# affordable only well above N = 10:
+#
+#   us7000jl3s coseismic   N=10   0.11 without -> 0.69 with
+#   us7000fxq2 postseismic N=12   0.05 without -> 0.50 with
+#   us7000jl3s postseismic N=15   0.19 without -> 0.75 with
+#   us60003sc0 postseismic N=25   0.22 with, far-field decay slope -0.41
+#   us2000jlfv postseismic N=26   0.23 with, -0.79
+#   us20005j32 postseismic N=28   0.10 with, -0.75
+#
+# So the three densest fields take it for free and everything below N = 16 does not. That
+# cliff is this network's geometry as much as a property of the method -- a second network
+# should be measured before trusting the exact number. A criterion based on each field's
+# own conditioning or azimuthal coverage would be better than a station count.
+_FORCE_BALANCE_MIN_SITES = 16
 
 
 class FaultGeometry:
