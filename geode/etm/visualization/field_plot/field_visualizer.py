@@ -34,6 +34,10 @@ _ELLIPSE_SIZE = 1.0e6
 # Colour map for the non-negative magnitude panel, where a diverging map is wrong.
 _SEQUENTIAL_CMAP = 'viridis'
 
+# Length of a unit-mode arrow, as a fraction of the field's largest vector, so the
+# arrows stay comparable to the scale slider's other settings.
+_UNIT_ARROW_FRACTION = 0.45
+
 
 class FieldVisualizer:
     """
@@ -171,6 +175,7 @@ class FieldVisualizer:
         self._locked_levels = {}
         self._locked_magnitude = {}
         self._magnitude = False
+        self._unit_vectors = False
         self._sigma_data = sigma_data or []
         self._epoch_marks = epoch_marks or []
         self._show_sigmas = bool(self.config.plot_sigmas)
@@ -491,7 +496,7 @@ class FieldVisualizer:
         if spec['vectors']:
             q_stn = ax.quiver(
                 self.state.x_stn, self.state.y_stn,
-                self.state.ve_stn, self.state.vn_stn,
+                *self._arrows(self.state.ve_stn, self.state.vn_stn),
                 scale=scale,
                 color=self.config.vector_color,
                 width=self.config.vector_width,
@@ -516,7 +521,7 @@ class FieldVisualizer:
             if spec['vectors'] and self.state.ve_sparse is not None:
                 q_sp = ax.quiver(
                     self.state.x_sparse, self.state.y_sparse,
-                    self.state.ve_sparse, self.state.vn_sparse,
+                    *self._arrows(self.state.ve_sparse, self.state.vn_sparse),
                     scale=scale,
                     color=self.config.vector_color,
                     width=self.config.vector_width,
@@ -601,7 +606,7 @@ class FieldVisualizer:
 
         q = ax.quiver(
             self.state.xi_grid[sl], self.state.yi_grid[sl],
-            self.state.ve_grid[sl], self.state.vn_grid[sl],
+            *self._arrows(self.state.ve_grid[sl], self.state.vn_grid[sl]),
             scale=scale,
             color=self.config.vector_color,
             width=self.config.vector_width,
@@ -612,6 +617,13 @@ class FieldVisualizer:
             transform=self.renderer.projection
         )
         self.state.quivers_grid[index] = q
+
+        if self._unit_vectors:
+            # No reference arrow: in unit mode the arrow length carries no value, and a
+            # key reading "20 mm/yr" next to arrows that all mean the same thing is worse
+            # than no key at all.
+            self.state.quiver_keys[index] = None
+            return
 
         # Calculate a reference value that gives consistent visual arrow size
         # Target ~10% of axis width for the reference arrow visual length
@@ -905,6 +917,31 @@ class FieldVisualizer:
             # magnitude mode: panel 0 carries |E,N| and panel 1 carries Up
             self._locked_magnitude[field_index] = (horizontal or 1.0, float(peak[2]) or 1.0)
 
+    def _arrows(self, ve, vn):
+        """Arrow components to draw: the vectors themselves, or all the same length.
+
+        In unit-vector mode every arrow is normalised to the same length, so the arrows
+        carry direction only and the contoured field carries magnitude. Normalised to a
+        fraction of the field's largest vector rather than to 1, so the scale slider
+        keeps working the way it does in the other mode.
+        """
+        if not self._unit_vectors:
+            return ve, vn
+
+        magnitude = np.hypot(ve, vn)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            factor = np.where(magnitude > 0,
+                              self.state.reference_vector * _UNIT_ARROW_FRACTION / magnitude,
+                              0.0)
+        factor = np.nan_to_num(factor, nan=0.0, posinf=0.0, neginf=0.0)
+        return ve * factor, vn * factor
+
+    def toggle_unit_vectors(self, show: bool) -> None:
+        """Switch the arrows between true vectors and direction-only unit vectors."""
+        self._unit_vectors = bool(show)
+        self._render_field(self.state.current_field_index)
+        self.fig.canvas.draw_idle()
+
     def _sigma_source(self, field_index: int):
         """The array to display for `field_index`: its uncertainty when the toggle is on
         and this panel has one, otherwise the field itself."""
@@ -994,7 +1031,7 @@ class FieldVisualizer:
 
             q_stn = ax.quiver(
                 self.state.x_stn, self.state.y_stn,
-                self.state.ve_stn, self.state.vn_stn,
+                *self._arrows(self.state.ve_stn, self.state.vn_stn),
                 scale=scale,
                 color=self.config.vector_color,
                 width=self.config.vector_width,
@@ -1014,7 +1051,7 @@ class FieldVisualizer:
                     and self.state.ve_sparse is not None):
                 q_sp = ax.quiver(
                     self.state.x_sparse, self.state.y_sparse,
-                    self.state.ve_sparse, self.state.vn_sparse,
+                    *self._arrows(self.state.ve_sparse, self.state.vn_sparse),
                     scale=scale,
                     color=self.config.vector_color,
                     width=self.config.vector_width,
@@ -1055,6 +1092,8 @@ class FieldVisualizer:
         if any(sigma is not None for sigma in self._sigma_data):
             self.widgets.create_sigma_toggle(self.toggle_sigmas, initial=self._show_sigmas)
         self.widgets.create_magnitude_toggle(self.toggle_magnitude, initial=self._magnitude)
+        self.widgets.create_unit_vector_toggle(self.toggle_unit_vectors,
+                                               initial=self._unit_vectors)
 
         # Reset view button
         self.widgets.create_reset_button(self.reset_view)

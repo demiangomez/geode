@@ -200,6 +200,22 @@ class WidgetManager:
             lambda _label: callback(self._magnitude_toggle.get_status()[0]))
         return self._magnitude_toggle
 
+    def create_unit_vector_toggle(self, callback, initial: bool = False) -> CheckButtons:
+        """Checkbox drawing every arrow the same length, direction only."""
+        self._unit_toggle_ax = self.fig.add_axes([0.01, 0.21, 0.115, 0.05])
+        self._unit_toggle_ax.set_axis_off()
+        self._unit_toggle = CheckButtons(
+            ax=self._unit_toggle_ax,
+            labels=['unit vectors'],
+            actives=[bool(initial)]
+        )
+        for label in self._unit_toggle.labels:
+            label.set_fontsize(8)
+        self._unit_callback = callback
+        self._unit_toggle.on_clicked(
+            lambda _label: callback(self._unit_toggle.get_status()[0]))
+        return self._unit_toggle
+
     def get_scale_factor(self) -> float:
         """Get the current scale factor from slider value."""
         if self._scale_slider is not None:
