@@ -15,12 +15,6 @@ import os
 import sys
 import argparse
 import platform
-import json
-import shutil
-import glob
-import uuid
-from decimal import Decimal
-import zipfile
 
 # deps
 from tqdm import tqdm
@@ -34,19 +28,20 @@ from geode import pyDate
 from geode import pyRinex
 from geode import pyRinexName
 from geode import pyOTL
-from geode.metadata.station_info import StationInfo, StationInfoRecord, StationInfoException
+from geode.metadata.station_info import StationInfo, StationInfoException
 from geode import pyProducts
 from geode import pyPPP
 from geode import pyOptions
 from geode import Utils
 from geode import pyJobServer
 from geode import pyEvents
+from geode import station_package
 from geode.Utils import (add_version_argument,
+                          str2bool,
                           process_date,
                           ecef2lla,
                           file_append,
                           file_open,
-                          file_read_all,
                           stationID,
                           station_list_help,
                           SmartHelpFormatter,
@@ -58,14 +53,8 @@ error_message = False
 ERRORS_LOG = 'errors_ScanArchive.log'
 
 
-class Encoder(json.JSONEncoder):
-    def default(self, o):
-        if isinstance(o, Decimal):
-            return float(o)
-        elif isinstance(o, datetime.datetime):
-            return datetime.datetime.strftime(o, '%Y-%m-%d %H:%M:%S')
-        else:
-            return super(Encoder, self).default(o)
+# kept for the scripts that import Encoder from ScanArchive
+Encoder = station_package.Encoder
 
 
 class callback_class():
@@ -946,317 +935,165 @@ def print_scan_archive_summary(cnn):
     print(' -- warnings: %i' % warn[0][0])
 
 
-def export_station(cnn, stnlist, pyArchive, archive_path, dataless):
+def export_station(cnn, stnlist, pyArchive, media_root, dataless, images=False, attachments=False):
+    """Writes one station package (NET.STNM.zip) per station in the current directory."""
+    print(" >> Exporting %i station(s)..." % len(stnlist))
 
-    # loop collecting the necessary information
-    print(" >> Collecting the information for each station in the list...")
+    pbar = tqdm(total=len(stnlist), ncols=160, disable=None)
 
-    pbar1 = tqdm(total=len(stnlist), ncols=160, position=0, disable=None)
+    def progress(station_id):
+        pbar.set_postfix(Station=station_id)
+        pbar.update()
 
-    for stn in stnlist:
+    try:
+        results = station_package.export_stations(cnn, stnlist, folder='.', archive=pyArchive,
+                                                  media_root=media_root, rinex=not dataless, images=images,
+                                                  attachments=attachments, progress=progress)
+    except station_package.StationPackageException as e:
+        pbar.close()
+        tqdm.write(' -- ' + str(e))
+        return
+    pbar.close()
 
-        NetworkCode = stn['NetworkCode']
-        StationCode = stn['StationCode']
-
-        rs_stn = cnn.query('SELECT * FROM stations WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\''
-                           % (NetworkCode, StationCode))
-        stn = rs_stn.dictresult()[0]
-
-        pbar1.set_postfix(Station='%s.%s' % (NetworkCode, StationCode))
-        pbar1.update()
-
-        # list of rinex files
-        rinex_lst = cnn.query('SELECT * FROM rinex WHERE "NetworkCode" = \'%s\' AND "StationCode" = \'%s\' '
-                              'ORDER BY "ObservationYear", "ObservationDOY"' % (NetworkCode, StationCode))
-        rinex_lst = rinex_lst.dictresult()
-        # rinex_lst = pyArchive.get_rinex_record(NetworkCode=NetworkCode, StationCode=StationCode)
-        # list of metadata
-        stninfo = StationInfo(cnn, NetworkCode, StationCode, allow_empty=True)
-
-        export_dic = {'NetworkCode' : NetworkCode,
-                      'StationCode' : StationCode,
-                      'StationInfo' : stninfo } 
-
-        if stn['lat'] and stn['auto_x'] and stn['Harpos_coeff_otl']:
-            export_dic['lat']          = stn['lat']
-            export_dic['lon']          = stn['lon']
-            export_dic['height']       = stn['height']
-            export_dic['x']            = stn['auto_x']
-            export_dic['y']            = stn['auto_y']
-            export_dic['z']            = stn['auto_z']
-            export_dic['otl']          = stn['Harpos_coeff_otl']
-            export_dic['dome']         = stn['dome']
-            export_dic['max_dist']     = stn['max_dist']
-            export_dic['marker'] = stn['marker']
-            export_dic['country_code'] = stn['country_code']
-        else:
-            tqdm.write(' -- Warning! %s.%s has incomplete station data' % (NetworkCode, StationCode))
-
-        # create dir for the rinex files
-        # dest = 'production/export/%s.%s' % (NetworkCode, StationCode)
-        # if not os.path.isdir(dest):
-        #    os.makedirs(dest)
-
-        rinex_dict = []
-        pbar2      = tqdm(total=len(rinex_lst), ncols=160, position=1, disable=None, leave=False)
-
-        tqdm.write(' >> Creating station package for %s.%s' % (NetworkCode, StationCode))
-
-        with zipfile.ZipFile('%s.%s.zip' % (NetworkCode, StationCode),
-                             "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-            for rnx in rinex_lst:
-                # update bar first to provide more information
-                pbar2.set_postfix(Date='%4.0f %03.0f' % (rnx['ObservationYear'], rnx['ObservationDOY']))
-                pbar2.update()
-                # make a copy of each file
-                rnx_path = pyArchive.build_rinex_path(NetworkCode     = NetworkCode,
-                                                      StationCode     = StationCode,
-                                                      ObservationYear = rnx['ObservationYear'],
-                                                      ObservationDOY  = rnx['ObservationDOY'],
-                                                      filename        = rnx['Filename'])
-                # tqdm.write(' -- Adding %s observation date %4.0f %03.0f filename %s'
-                #            % (stationID(rnx), rnx['ObservationYear'], rnx['ObservationDOY'], rnx_path))
-                try:
-                    if not dataless:
-                        # only copy the files if dataless == False
-                        # shutil.copy(os.path.join(archive_path, rnx_path), os.path.join(dest, os.path.basename(rnx_path)))
-                        name = os.path.normpath(os.path.join(archive_path, rnx_path))
-                        zf.write(name, os.path.basename(name))
-
-                    rinex_dict += [rnx]
-                except IOError:
-                    tqdm.write(' -- Warning! File not found in archive: %s' % (os.path.join(archive_path, rnx_path)))
-
-            export_dic['files'] = len(rinex_dict)
-            export_dic['rinex'] = rinex_dict
-
-            with zf.open( '%s.%s.json' % (NetworkCode, StationCode), 'w') as json_file:
-                data_bytes = json.dumps(export_dic, indent=4, sort_keys=True, cls=Encoder).encode('utf-8')
-                json_file.write(data_bytes)
-
-        pbar2.close()
-    pbar1.close()
+    for result in results:
+        if 'error' in result:
+            tqdm.write(' -- %s not exported: %s' % (result['station'], result['error']))
+            continue
+        for warning in result['warnings']:
+            tqdm.write(' -- %s: %s' % (result['station'], warning))
+        counts = result['manifest']['counts']
+        tqdm.write(' -- %s exported to %s: %i station info record(s), %i RINEX record(s) with %i file(s), '
+                   '%i picture(s) and %i attached file(s) included'
+                   % (result['station'], result['zip'], counts.get('stationinfo', 0), counts.get('rinex', 0),
+                      counts['rinex_files'], counts['image_files'], counts['attachment_files']))
 
 
-def import_station(cnn, args):
+def ask(question):
+    return input('\n  %s ' % question).strip().lower()
 
+
+def choose_destination(cnn, package, network):
+    """(NetworkCode, StationCode, existing) for the package, asking the user, or None to skip it."""
+    StationCode = package.StationCode
+    station_id  = package.source_id
+    coordinates = package.coordinates()
+    new_station = (network, StationCode, False)
+
+    if coordinates is None:
+        # a station made outside GeoDE may have no coordinates: only its code can be checked
+        tqdm.write(' -- %s has no coordinates: the spatial check is skipped.' % station_id)
+        if cnn.query('SELECT 1 FROM stations WHERE "NetworkCode" = %s AND "StationCode" = %s',
+                     (network, StationCode)).dictresult():
+            r = ask('Station %s.%s exists. Add the RINEX files and station info of the package to it?: y/n'
+                    % (network, StationCode))
+            return (network, StationCode, True) if r == 'y' else None
+        r = ask('Insert new station %s with network code %s?: y/n' % (StationCode, network))
+        return new_station if r == 'y' else None
+
+    lat, lon, height = coordinates
+    spatial = pyPPP.PPPSpatialCheck([lat], [lon], [height])
+    result, match, closest_stn = spatial.verify_spatial_coherence(cnn, StationCode)
+
+    if result:
+        tqdm.write(' -- Found external station %s in network %s (distance %.3f m)'
+                   % (station_id, match[0]['NetworkCode'], match[0]['distance']))
+        r = ask('Insert data to this station?: y/n')
+        return (match[0]['NetworkCode'], match[0]['StationCode'], True) if r == 'y' else None
+
+    if len(match) == 1:
+        tqdm.write(' -- External station %s not found. Possible match is %s.%s: %.3f m'
+                   % (station_id, match[0]['NetworkCode'], match[0]['StationCode'], match[0]['distance']))
+        r = ask('Insert new station %s with network code %s or add this data to station %s.%s?: (i)nsert new/(a)dd'
+                % (StationCode, network, match[0]['NetworkCode'], match[0]['StationCode']))
+        if r == 'i':
+            return new_station
+        if r == 'a':
+            return match[0]['NetworkCode'], match[0]['StationCode'], True
+        return None
+
+    if len(match) > 1:
+        tqdm.write(' -- External station %s not found. Possible matches are %s'
+                   % (station_id, ', '.join(['%s.%s: %.3f m' % (m['NetworkCode'], m['StationCode'], m['distance'])
+                                             for m in match])))
+        options = ', '.join(['%s.%s (%i)' % (m['NetworkCode'], m['StationCode'], i + 1) for i, m in enumerate(match)])
+        r = ask('Insert new station %s with network code %s or add this data as %s: (i)nsert new/(number)'
+                % (StationCode, network, options))
+        if r == 'i':
+            return new_station
+        try:
+            i = int(r)
+        except ValueError:
+            tqdm.write(' -- Selected value is not numeric!')
+            return None
+        if not 1 <= i <= len(match):
+            tqdm.write(' -- Selected value is not one of the options!')
+            return None
+        return match[i - 1]['NetworkCode'], match[i - 1]['StationCode'], True
+
+    if closest_stn:
+        tqdm.write(' -- External station %s not found. Closest station is %s.%s: %.3f m'
+                   % (station_id, closest_stn[0]['NetworkCode'], closest_stn[0]['StationCode'],
+                      closest_stn[0]['distance']))
+    else:
+        tqdm.write(' -- External station %s not found.' % station_id)
+    r = ask('Insert new station with default station network %s?: y/n' % network)
+    return new_station if r == 'y' else None
+
+
+def import_station(cnn, args, archive=None, media_root=None):
+    """
+    Imports station packages (args: {default net} and the zip files), one transaction per package: a failed record
+    is left out, a failed package is rolled back alone. Returns the records and packages that were not imported.
+    """
+    network = args[0].lower()
     files   = args[1:]
-    network = args[0]
 
-    archive = pyArchiveStruct.RinexStruct(cnn)
+    if not files:
+        tqdm.write(' -- No station package given: -import {default net} {zipfiles}')
+        return []
 
-    print(" >> Processing input files...")
+    archive = archive if archive is not None else pyArchiveStruct.RinexStruct(cnn)
 
-    for ff in tqdm(files, ncols=160, disable=None):
+    print(' >> Importing %i station package(s)...' % len(files))
 
-        filename = os.path.basename(ff)
+    failed = []
 
-        if filename.endswith('.zip'):
+    def package_failed(ff, station, error):
+        tqdm.write(' -- %s not imported, nothing was changed: %s' % (ff, error))
+        failed.append(station_package.not_imported(ff, station, getattr(error, 'table', None) or 'package',
+                                                   getattr(error, 'record', None) or os.path.basename(ff),
+                                                   station_package.error_message(error),
+                                                   getattr(error, 'data', None)))
 
-            fileparts = filename.split('.')
+    for ff in files:
+        tqdm.write(' -- Processing %s' % ff)
+        try:
+            package = station_package.StationImport(cnn, ff, archive=archive, media_root=media_root)
+        except Exception as e:
+            package_failed(ff, '', e)
+            continue
 
-            NetworkCode = fileparts[0].lower()
-            StationCode = fileparts[1].lower()
+        destination = choose_destination(cnn, package, network)
+        if destination is None:
+            package_failed(ff, package.source_id, 'Skipped: no destination station was chosen.')
+            continue
 
-            path = 'production/archive/' + str(uuid.uuid4())
+        NetworkCode, StationCode, existing = destination
+        try:
+            report = package.execute(NetworkCode, StationCode, existing=existing)
+        except Exception as e:
+            package_failed(ff, '%s.%s' % (NetworkCode, StationCode or package.StationCode), e)
+            continue
 
-            try:
-                # process each station file
-                zipfile.ZipFile(ff).extractall(path)
+        for line in station_package.format_import_report(report):
+            tqdm.write(line)
+        failed += report['not_imported']
 
-                jfile = glob.glob(os.path.join(path, '*.json'))
-
-                # DDG: may want to consider other compression formats
-                rnx_files = [f
-                             for f_ in [glob.glob(os.path.join(path, e))
-                                        for e in ('*.gz', '*d.Z')]
-                             for f in f_]
-
-                station = json.loads(file_read_all(jfile[0]))
-
-                spatial = pyPPP.PPPSpatialCheck([station['lat']], 
-                                                [station['lon']], 
-                                                [station['height']])
-
-                result, match, closest_stn = spatial.verify_spatial_coherence(cnn, StationCode)
-
-                tqdm.write(' -- Processing %s' % filename)
-                
-                if result:
-                    tqdm.write(' -- Found external station %s.%s in network %s (distance %.3f)'
-                               % (NetworkCode, StationCode, match[0]['NetworkCode'], match[0]['distance']))
-
-                    # ask the user what to do with the data
-                    r = input('\n  Insert data to this station?: y/n ')
-
-                    if r.lower() == 'y':
-                        try_insert_files(cnn, archive, station, match[0]['NetworkCode'], StationCode, rnx_files)
-
-                elif len(match) == 1:
-                    tqdm.write(' -- External station %s.%s not found. Possible match is %s.%s: %.3f m'
-                               % (NetworkCode, StationCode, match[0]['NetworkCode'],
-                                  match[0]['StationCode'], match[0]['distance']))
-
-                    # ask the user what to do with the data
-                    r = input('\n  Insert new station %s with network code %s '
-                                  'or add this data to station %s.%s?: (i)nsert new/(a)dd '
-                                  % (StationCode, network, match[0]['NetworkCode'], match[0]['StationCode']))
-
-                    if r.lower() == 'i':
-                        if insert_station(cnn, network, station):
-                            try_insert_files(cnn, archive, station, network, StationCode, rnx_files)
-                    else:
-                        # if data is added to existing station, replace the StationCode with the matched
-                        # StationCode the rinexobj will apply the naming convention to the file
-                        try_insert_files(cnn, archive, station, match[0]['NetworkCode'],
-                                         match[0]['StationCode'], rnx_files)
-
-                elif len(match) > 1:
-                    tqdm.write(' -- External station %s.%s not found. Possible matches are %s'
-                               % (NetworkCode, StationCode,
-                                  ', '.join(['%s.%s: %.3f m' %
-                                             (m['NetworkCode'], m['StationCode'], m['distance']) for m in match])))
-
-                    options = ', '.join(['%s.%s (%i)' % (m['NetworkCode'], m['StationCode'], i+1)
-                                         for i, m in enumerate(match)])
-
-                    r = input('\n  Insert new station %s with network code %s '
-                                  'or add this data as %s: (i)nsert new/(number)' % (StationCode, network, options))
-
-                    if r.lower() == 'i':
-                        if insert_station(cnn, network, station):
-                            try_insert_files(cnn, archive, station, network, StationCode, rnx_files)
-                    else:
-                        try:
-                            i = int(r)
-                            try_insert_files(cnn, archive, station, match[i]['NetworkCode'],
-                                             match[i]['StationCode'], rnx_files)
-                        except ValueError:
-                            tqdm.write(' -- Selected value is not numeric!')
-
-                else:
-                    tqdm.write(' -- External station %s.%s not found. Closest station is %s.%s: %.3f m'
-                               % (NetworkCode, StationCode, closest_stn[0]['NetworkCode'],
-                                  closest_stn[0]['StationCode'], closest_stn[0]['distance']))
-
-                    # ask the user what to do with the data
-                    r = input('\n  Insert new station with default station network %s?: y/n ' % network)
-
-                    if r.lower() == 'y':
-                        if insert_station(cnn, network, station):
-                            # now that station was created, insert files
-                            try_insert_files(cnn, archive, station, network,
-                                             StationCode, rnx_files)
-
-                # delete all files once we're done.
-                shutil.rmtree(path)
-
-            except zipfile.BadZipfile:
-                tqdm.write(' -- Bad zipfile detected: %s' % ff)
-
-
-def insert_station(cnn, network, station):
-
-    # check that another station with same name doesn't exist in this network
-    rstn = cnn.query_float('SELECT * FROM stations WHERE "NetworkCode" = \'%s\' AND '
-                           '"StationCode" = \'%s\'' % (network, station['StationCode']))
-    if len(rstn) > 0:
-        tqdm.write(' -- Station code %s already exists in network %s. Cannot insert station'
-                   % (station['StationCode'], network))
-        return False
+    if failed:
+        tqdm.write(' -- %i record(s) or package(s) were not imported (listed above).' % len(failed))
     else:
-        # check if network exists
-        if not cnn.query_float('SELECT * FROM networks WHERE "NetworkCode" = \'%s\'' % network):
-            cnn.insert('networks', NetworkCode=network)
-
-        # insert the station and metadata in the json file
-        cnn.insert('stations',
-                   NetworkCode      = network,
-                   StationCode      = station['StationCode'],
-                   auto_x           = station['x'],
-                   auto_y           = station['y'],
-                   auto_z           = station['z'],
-                   Harpos_coeff_otl = station['otl'],
-                   lat              = station['lat'],
-                   lon              = station['lon'],
-                   height           = station['height'],
-                   max_dist         = station['max_dist'] if 'max_dist' in station.keys() else None,
-                   dome             = station['dome']     if 'dome'     in station.keys() else None)
-        return True
-
-
-def try_insert_files(cnn, archive, station, NetworkCode, StationCode, rinex):
-
-    import_stninfo = station['StationInfo']
-    stninfo        = StationInfo(cnn, NetworkCode, StationCode, allow_empty=True)
-
-    if rinex:
-        # a station file with rinex data in it. Attempt to insert the data and the associated station information
-        for rnx in rinex:
-
-            try:
-                with pyRinex.ReadRinex(NetworkCode, StationCode, rnx) as rinexinfo:
-
-                    inserted = archive.insert_rinex(rinexobj=rinexinfo)
-
-                    if not inserted:
-                        # display an error message
-                        tqdm.write(' -- %s.%s (%s) not imported: already existed in database.'
-                                   % (NetworkCode, StationCode, os.path.basename(rnx)))
-                    else:
-                        tqdm.write(' -- %s.%s (%s) successfully imported into database.'
-                                   % (NetworkCode, StationCode, os.path.basename(rnx)))
-
-                    try:
-                        StationInfo(cnn, NetworkCode, StationCode, rinexinfo.date)
-
-                    except StationInfoException:
-
-                        # station info not in db! import the corresponding station info
-
-                        stninfo_inserted = False
-
-                        for record in import_stninfo:
-                            import_record = StationInfoRecord(NetworkCode, StationCode, _record=record)
-
-                            # DDG: to avoid problems with files that contain two different station info records, check
-                            # that import_record.DateEnd.datetime() is not less than the first observation of the rinex
-                            if rinexinfo.datetime_firstObs >= import_record.DateStart.datetime() and \
-                               not import_record.DateEnd.datetime() <= rinexinfo.datetime_firstObs:
-
-                                if rinexinfo.datetime_lastObs > import_record.DateEnd.datetime():
-                                    tqdm.write('    WARNING! RINEX file %s has an end data past the station info '
-                                               'record. Maybe this file has a receiver/antenna change in the middle.'
-                                               % os.path.basename(rnx))
-
-                                # the record we are looking for
-                                try:
-                                    stninfo.insert_station_info(import_record)
-                                    stninfo_inserted = True
-
-                                except StationInfoException as e:
-                                    tqdm.write('    ' + str(e))
-
-                        if not stninfo_inserted:
-                            tqdm.write('    Could not find a valid station info in the database or in the station '
-                                       'package. File remains in database without metadata.')
-            except pyRinex.pyRinexException as e:
-                tqdm.write('    Problem while processing RINEX file for database record insert: ' + str(e))
-    else:
-        # a station file without rinex data
-        # attempt to merge the station information
-
-        for record in import_stninfo:
-
-            import_record = StationInfoRecord(NetworkCode, StationCode, _record=record)
-
-            try:
-                stninfo.insert_station_info(import_record)
-                tqdm.write('  -- Successful insert: %s -> %s' % (str(import_record['DateStart']), 
-                                                                 str(import_record['DateEnd'])))
-
-            except StationInfoException as e:
-                tqdm.write(' -- ' + str(e))
+        tqdm.write(' -- Every record of the package(s) was imported.')
+    return failed
 
 
 def get_rinex_file(cnn, stnlist, date, Archive_path):
@@ -1319,18 +1156,50 @@ def main():
                              "networks 'igs' and 'arg', only 'arg.igm1' will get the station information insert. "
                              "Use keyword 'stdin' to read the station information data from the pipeline.")
 
-    parser.add_argument('-export', '--export_station', nargs='?', metavar='[dataless seed]', default=None, const=False,
-                        help="Export a station from the local database that can be imported into another "
-                             "GeoDE system using the -import option."
-                             "One file is created per station in the current directory. If the [dataless seed] switch "
-                             "is passed (e.g. -export true), then the export seed is created without data "
-                             "(only metadata included, i.e. station info, station record, etc).")
+    parser.add_argument('-export', '--export_station', nargs='?', metavar='[dataless]', default=None, const=False,
+                        type=str2bool,
+                        help="Export a station from the local database to a package that can be imported into "
+                             "another GeoDE system using the -import option. One file (NET.STNM.zip) is created per "
+                             "station in the current directory with the RINEX files and a json file with the "
+                             "station, its station info, RINEX records, events, alias, ETM parameters, data sources "
+                             "and GeoDE Studio data (metadata, visits, people), plus the catalogs they use and the "
+                             "agencies of the station (by name, with their roles and contacts). "
+                             "If [dataless] is true (e.g. -export true), the package is created without the RINEX "
+                             "files (only the database rows). Accepted values: true/false, yes/no, 1/0. "
+                             "Use -images and -attachments to add the files of the media folder.")
+
+    parser.add_argument('-images', '--export_images', action='store_true',
+                        help="With -export: include the pictures of the station and its visits (and those of the "
+                             "monument types, station types and people it uses). They are read from the media "
+                             "folder of GeoDE Studio ('media' in the [archive] section of gnss_data.cfg).")
+
+    parser.add_argument('-attachments', '--export_attachments', action='store_true',
+                        help="With -export: include the attached files of the station and its visits, the log "
+                             "sheets, navigation files and GNSS data files of the visits and the navigation file "
+                             "of the station, from the media folder ('media' in the [archive] section of "
+                             "gnss_data.cfg).")
 
     parser.add_argument('-import', '--import_station', nargs='+', type=str, metavar=('{default net}', '{zipfiles}'),
-                        help="Import a station from zipfiles produced by another GeoDE system. "
-                             "Wildcards are accepted to import multiple zipfiles. If station does not exist, use "
-                             "{default net} to specify the network where station should be added to. If {default net} "
-                             "does not exit, it will be created. Station list is ignored.")
+                        help="Import a station from zipfiles produced by -export in another GeoDE system or by "
+                             "another program with the same format (packages of format 0, without manifest.json, "
+                             "are read too; the name of the zip file does not matter). Wildcards are accepted to "
+                             "import multiple zipfiles. If station does not exist, use {default net} to specify the "
+                             "network where station should be added to (also for packages without network code). "
+                             "If {default net} does not exist, it will be created. A new station gets everything in "
+                             "the package: station info, RINEX files, events, alias, ETM parameters, data sources, "
+                             "GeoDE Studio data, agencies (owner and hosts, with their contacts) and the catalogs "
+                             "it needs. An existing station keeps its data: it only gets the RINEX files it does "
+                             "not have, the station info record of the package for each RINEX file whose date has "
+                             "none, the data sources it does not have, the metadata source of a server that has "
+                             "none and the agencies it does not have (the owner only if it has none, otherwise as a "
+                             "host). The RINEX files without a RINEX record in the package are read with pyRinex, "
+                             "as ArchiveService does. Each package is "
+                             "imported in one transaction. A record that fails (for example a station info record "
+                             "with an unknown receiver) is left out and the import goes on; a package that fails "
+                             "is rolled back alone and the run goes on with the next one. The records and packages "
+                             "that were not imported are listed with the reason. "
+                             "Pictures and attached files are copied to the media folder ('media' in the [archive] "
+                             "section of gnss_data.cfg) with the owner of that folder. Station list is ignored.")
 
     parser.add_argument('-get', '--get_from_archive', nargs=1, metavar='{date}',
                         help="Get the specified station from the archive and copy it to the current directory. Fix it "
@@ -1362,7 +1231,14 @@ def main():
     if args.station_info is not None and (not len(args.station_info) in (0, 2)):
         parser.error('-stninfo requires 0 or 2 arguments. {} given.'.format(len(args.station_info)))
 
+    if (args.export_images or args.export_attachments) and args.export_station is None:
+        parser.error('-images and -attachments can only be used with -export.')
+
     Config = pyOptions.ReadOptions("gnss_data.cfg")  # type: pyOptions.ReadOptions
+
+    if (args.export_images or args.export_attachments) and not Config.media:
+        parser.error('-images and -attachments need the media folder of GeoDE Studio: add "media = <folder>" to '
+                     'the [archive] section of gnss_data.cfg.')
 
     cnn = dbConnection.Cnn("gnss_data.cfg")
     # create the execution log
@@ -1434,13 +1310,14 @@ def main():
 
     if args.export_station is not None:
 
-        export_station(cnn, stnlist, pyArchive, Config.archive_path, args.export_station)
+        export_station(cnn, stnlist, pyArchive, Config.media, args.export_station,
+                       images=args.export_images, attachments=args.export_attachments)
 
     #########################################
 
     if args.import_station:
 
-        import_station(cnn, args.import_station)
+        import_station(cnn, args.import_station, archive=pyArchive, media_root=Config.media)
 
     #########################################
 

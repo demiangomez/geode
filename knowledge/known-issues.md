@@ -162,3 +162,12 @@ first.
   Currently harmless because `gamit_stats` is not in `station_merge.TIME_TABLES` and nothing
   `UPDATE`s its key columns in place. Revisit if `gamit_stats` ever becomes mutable by a
   merge-like code path.
+
+## `ScanArchive.py`: undefined name `station_info` (found 2026-11-17)
+
+`pyflakes com/ScanArchive.py` reports `undefined name 'station_info'` in the RINEX scan (the
+`StationInfo(... Rinex.date, h_tolerance=...)` call) and a few lines later: the module imports
+`StationInfo` and `StationInfoException` directly, and only `stninfo_insert` imports
+`geode.metadata.station_info as station_info` locally. Present on `master` (548 and 620 at
+d00aaab). Those paths raise `NameError` when they run. Not fixed: out of scope of the station
+package work.
