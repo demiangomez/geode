@@ -47,6 +47,18 @@ def add_version_argument(parser):
     return parser
 
 
+def str2bool(value):
+    """argparse type for true/false arguments: bool('false') is True, so the text has to be parsed."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ('true', 't', 'yes', 'y', '1'):
+        return True
+    if text in ('false', 'f', 'no', 'n', '0'):
+        return False
+    raise argparse.ArgumentTypeError("expected true or false, got '%s'" % value)
+
+
 def cart2euler(x, y, z):
     alt = numpy.rad2deg(numpy.sqrt(x**2 + y**2 + z**2) * 1e-9 * 1e6)
     lat = numpy.rad2deg(numpy.arctan2(z, numpy.sqrt(x**2 + y**2)))

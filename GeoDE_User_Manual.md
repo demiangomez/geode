@@ -719,13 +719,27 @@ ScanArchive.py igs.algo -export
 
 # Dataless export (metadata only)
 ScanArchive.py igs.algo -export true
+
+# Full export plus the pictures and attached files of GeoDE Studio
+ScanArchive.py igs.algo -export -images -attachments
 ```
 
+One package (`NET.STNM.zip`) is written per station in the current directory. The format is described in
+`docs/station_package_format.md`.
+
 **Export Contents:**
-- Station information records
-- Coordinates and OTL coefficients
-- RINEX file list
-- RINEX data (unless dataless)
+- `manifest.json`: format version, options and the list of files with their size and sha256
+- `station.json`: the `stations` row (coordinates, OTL, DOMES, country, marker...), station information records,
+  RINEX records, events, alias, ETM parameters, data sources (servers included, with their credentials), the
+  GeoDE Studio data (metadata, pictures and attached files, people roles, visits) and the catalogs they use
+  (receivers, antennas, height codes, country, status, types, people, campaigns), written by natural key, and
+  the agencies of the station by name, each with its role (`owner`, the one that operates it, or `host`) and contacts
+- RINEX files of the archive (unless dataless)
+- Pictures (`-images`) and attached files (`-attachments`) from the media folder (`media` in the `[archive]`
+  section of `gnss_data.cfg`)
+
+Solutions and time series (PPP, GAMIT, stacks, ETM results) are not exported: they are computed again from the
+RINEX files.
 
 **Import Station:**
 ```bash
@@ -737,13 +751,42 @@ ScanArchive.py dummy -import ars *.zip
 ```
 
 **Import Process:**
-1. Extract ZIP contents
-2. Read JSON metadata
-3. Perform spatial coherence check
-4. Present options to user:
+1. Check the files of the package against its manifest (packages of format 0, without manifest, are read too)
+2. Perform spatial coherence check (skipped if the package has no coordinates)
+3. Present options to user:
    - Insert as new station
    - Merge with existing station
    - Skip import
+4. Import the package in one transaction. A record that fails (for example a station information record with an
+   unknown receiver) is left out and the import goes on with the next one. If the package itself fails (damaged,
+   refused, its station cannot be inserted), nothing of it is changed in the database, the archive or the media
+   folder, and the run goes on with the next package
+5. List the records and packages that were not imported, with the reason
+
+The first argument of `-import` is the network of the new stations. A package without network code (one made by
+another program; the name of the zip does not matter) gets the network the administrator gives here:
+
+```bash
+# Packages without network code, into network ngs
+ScanArchive.py dummy -import ngs packages/*.zip
+```
+
+A new station gets everything in the package and the catalogs it needs that do not exist yet. A package is added to
+an existing station only if it is no farther from it than its `max_dist` (20 m when it has none), and the station
+keeps its data: its row, station information, GeoDE Studio data, alias, events and ETM parameters are ignored. It
+only gets the RINEX files and data sources it does not have, the metadata source of a server that has none and the
+agencies it does not have. For each RINEX file of the package whose date has no station information record, it
+also gets the record of the package that covers it, as the import of format 0 did. RINEX files without their record
+in the package (format 0, or a package made by another program) are read with pyRinex, as ArchiveService does. The owner of the package becomes its owner only if it has none; otherwise it is added as
+a host, with a warning. Agencies are matched by name without
+distinguishing case and created when they do not exist (a new one needs its primary contact: name, email and phone);
+their contacts and RTN names only fill in what an existing agency does not have.
+Pictures and attached files are copied to the media folder (`media` in the `[archive]` section of `gnss_data.cfg`)
+with the owner of that folder: run the import as root or as that user. A new station without a
+country code gets the one of the country that contains its coordinates; if no country contains them, the station
+is not imported (reported). Optional fields of the station that GeoDE does not have yet
+(`custom_fields`, for example the NGS PID of the Station Workbook) are not imported: the import shows a warning.
+See `docs/station_package_format.md` for the complete rules.
 
 **Interactive Prompts:**
 ```
@@ -1307,7 +1350,9 @@ ScanArchive.py stnlist [options]
 | `-rinex` | 0\|1 | Scan archive (0=use stnlist, 1=ignore) |
 | `-otl` | - | Calculate OTL coefficients |
 | `-stninfo` | [file] [net] | Insert station information |
-| `-export` | [true] | Export station (true=dataless) |
+| `-export` | [true\|false] | Export station (true=dataless) |
+| `-images` | - | With -export: add the pictures of the media folder |
+| `-attachments` | - | With -export: add the attached files of the media folder |
 | `-import` | net files... | Import station ZIP files |
 | `-get` | date | Extract RINEX from archive |
 | `-ppp` | [dates] [hash] | Run PPP solutions |
