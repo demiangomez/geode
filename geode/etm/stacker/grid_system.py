@@ -700,7 +700,10 @@ class GridSystem:
         """Output enu_cov is en, eu, nu."""
         logger.info(f'Predicting from {constraint.constraint_type} for event {event.id} {event.date.yyyyddd()}')
 
-        sites = np.isin([stationID(s) for s in constraint.station_list],
+        # Against model_station_list, not station_list: a_full and the grid kernels are
+        # built on the deduplicated set (see SWOkada._compute_dislocation_model), so every
+        # index into them has to come from that list.
+        sites = np.isin([stationID(s) for s in constraint.model_station_list],
                         [stationID(stn) for stn in stations])
 
         # grab the design matrix (dislocation_model is now a tuple (a, p))
@@ -709,7 +712,7 @@ class GridSystem:
         # Select rows corresponding to the stations we have
         # a_full is block_diag(ah, av) where ah is (2N x 2N) and av is (N x N)
         # Rows are ordered: [East_1..East_N, North_1..North_N, Up_1..Up_N]
-        N = len(constraint.station_list)
+        N = len(constraint.model_station_list)
         # Build index array for selected sites (E, N, U blocks)
         idx_e = np.where(sites)[0]
         idx_n = idx_e + N

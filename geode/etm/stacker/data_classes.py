@@ -503,8 +503,19 @@ class EtmStackerField(BaseDataClass):
                 constrain_stations=constraint.station_list, constrained_parameters=params,
                 enu_covar=velocity_cova)
         else:
+            # params/sigmas are indexed by station_list; the dislocation model and the
+            # grid kernels are built on model_station_list (co-located duplicates
+            # removed), so subset to that before predicting. constrain_stations below
+            # stays the full list: every station still owns parameters and is still drawn
+            # on the map, it just no longer acts as an interpolation source.
+            model_stations = constraint.model_station_list
+            keep = np.array([constraint.station_list.index(stn) for stn in model_stations])
+            n_all = params.shape[1]
+            cov_idx = np.concatenate((keep, keep + n_all, keep + 2 * n_all))
+
             seismic_field, seismic_sigma, seismic_covar = grids.predict_seismic_deformation(
-                constraint.event, constraint.station_list, params, sigmas, constraint
+                constraint.event, model_stations, params[:, keep],
+                sigmas[np.ix_(cov_idx, cov_idx)], constraint
             )
 
             return EtmStackerField(

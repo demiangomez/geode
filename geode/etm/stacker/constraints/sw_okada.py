@@ -142,7 +142,18 @@ class SWOkada(BaseConstraint):
         # Use ALL stations (constraining + to_constrain): both sets have fitted
         # parameters from the joint stack and their spatial distribution improves
         # the SW-Okada regularization and the grid prediction coverage.
-        all_stations = self._station_list
+        # Deduplicate co-located stations before building anything. Two stations at the
+        # same point give identical rows in both the SW and the spline Green's function
+        # matrices, so `a` is exactly singular and lstsq(a.T @ a + p, a.T) discards real
+        # directions at its machine-precision cutoff. On the Ecuador stack igs.qui3 and
+        # igs.qui4 are 0.000 km apart and every field whose station list contained both
+        # had cond(a.T @ a) ~ 1e19, against 1e2-1e6 for the fields that did not. The
+        # dropped station keeps its own parameters and is still predicted by the field;
+        # it just stops acting as an interpolation source. constraints/sparse.py has
+        # always done this for its own interpolation sources.
+        from .sparse import dedup_colocated_stations
+        all_stations = dedup_colocated_stations(self._station_list)
+        self._model_stations = all_stations
         sites_lon = np.array([stn.lon for stn in all_stations])
         sites_lat = np.array([stn.lat for stn in all_stations])
 
@@ -158,6 +169,14 @@ class SWOkada(BaseConstraint):
         ke, kn, ku = self._compute_grid_prediction_kernels(all_stations, mask)
 
         self.grid_prediction_kernels = (ke, kn, ku)
+
+    @property
+    def model_station_list(self) -> List[Station]:
+        """The stations dislocation_model and grid_prediction_kernels were actually built
+        on: station_list with co-located duplicates removed. Anything that indexes into
+        those matrices must use this list, not station_list. getattr for sessions pickled
+        before the deduplication existed."""
+        return getattr(self, '_model_stations', None) or self._station_list
 
     def compute_constraint_coefficients(self, target_station: Station,
                                         constraining_stations: List[Station],
@@ -281,7 +300,16 @@ class SWOkada(BaseConstraint):
         except ValueError:
             idx = -1
 
-        other_stations = [stn for i, stn in enumerate(constraining_stations) if i != idx]
+        # Full source list, and the deduplicated set the local system is actually built
+        # on -- same singularity as in _compute_dislocation_model. The coefficients are
+        # scattered back to full length at the end of this function so the (3 * N_other)
+        # contract with _build_k_matrix and _get_target_cols is preserved; a dropped
+        # duplicate simply gets a zero coefficient.
+        from .sparse import dedup_colocated_stations
+        other_stations_full = [stn for i, stn in enumerate(constraining_stations) if i != idx]
+        other_stations = dedup_colocated_stations(other_stations_full)
+        kept = [other_stations_full.index(stn) for stn in other_stations]
+        n_full = len(other_stations_full)
         N_other = len(other_stations)
 
         other_lon = np.array([stn.lon for stn in other_stations])
@@ -353,6 +381,16 @@ class SWOkada(BaseConstraint):
         ke = ap_e_full @ a_dagger
         kn = ap_n_full @ a_dagger
         ku = ap_u_full @ a_dagger
+
+        if N_other != n_full:
+            cols = np.array(kept, dtype=int)
+            def scatter(v):
+                out = np.zeros(3 * n_full)
+                out[cols] = v[:N_other]
+                out[cols + n_full] = v[N_other:2 * N_other]
+                out[cols + 2 * n_full] = v[2 * N_other:]
+                return out
+            ke, kn, ku = scatter(ke), scatter(kn), scatter(ku)
 
         return ke, kn, ku
 
