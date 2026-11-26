@@ -31,6 +31,12 @@ class PatchGrid:
     n_patches: int            # number of patches
 
 
+# Smallest station count at which the horizontal far-field force balance in
+# _compute_sw_okada_system is worth its two constraint rows. They cost a fraction 1/N of
+# the horizontal model, so this caps that at 10%.
+_FORCE_BALANCE_MIN_SITES = 10
+
+
 class FaultGeometry:
     """
     Manages fault geometry and Okada dislocation model computations.
@@ -503,10 +509,17 @@ class FaultGeometry:
         # log(distance) saturated at -0.17 for every h_weight from 2 to 100, against the
         # ~-2 an elastic far field should show.
         #
-        # Skipped at N < 2, where the only force-balanced solution is the zero field: one
-        # station cannot express a decaying field, and zeroing it outright would be worse
-        # than the biased one. Two stations already give a dipole.
-        if N >= 2:
+        # Only where the station count can afford it. The two constraint rows cost 2 of
+        # the 2N horizontal parameters, i.e. a fraction 1/N of the model: negligible for a
+        # well-observed postseismic field (N = 29 for Pedernales) and crippling for a
+        # coseismic one with a handful of stations. Applied at every N >= 2 it left the
+        # coseismic fields unable to reproduce their own stations -- the median field
+        # value at a constraining station missed that station's own fitted offset by 80%
+        # of the offset, against 11% without it, which is visible on the map as station
+        # vectors disagreeing with the field they sit in. At N >= _FORCE_BALANCE_MIN_SITES
+        # the coseismic fields recover (back to 11%) and the postseismic decay slope is
+        # kept (-0.50 against -0.51).
+        if N >= _FORCE_BALANCE_MIN_SITES:
             C_h = np.zeros((2, 2 * N))
             C_h[0, :N] = 1.0
             C_h[1, N:] = 1.0
