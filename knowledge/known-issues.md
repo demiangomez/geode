@@ -208,7 +208,16 @@ Confirmed on the Ecuador stack (branch `stacker_refactor`); see
   A per-station window, or a floor tied to the network's validity epoch, is the real fix.
   The drop only reaches the ETMs that exist when it runs: a sparse station's free fit is
   never subject to it, and any ETM rebuilt from the config afterwards re-admits every
-  dropped event. `col.abcc`, `col.abpd`, `col.gara` and `col.zarz` carry decay columns for
+  dropped event. Three sites have needed the drop replayed explicitly so far
+  (`diagnostics._run_constrained_etm`, sparse free fits, and
+  `earthquake_catalog._recompute_affected_stations`); a per-station window would remove the
+  need for all of them. See
+  [checkpoints/2026-11-26-stacker-ordering-audit.md](checkpoints/2026-11-26-stacker-ordering-audit.md).
+- **`interpolate_field` and `predict_seismic_deformation` docstrings misstate the
+  covariance order.** Both return `concatenate((en_cov, nu_cov, eu_cov))`, while the
+  docstrings say `"en, e-u, n-u"` and `"en, eu, nu"` respectively. Harmless at present --
+  `field_visualizer` reads index 0 (E-N) only -- but any future consumer of index 1 or 2
+  will be wrong. `col.abcc`, `col.abpd`, `col.gara` and `col.zarz` carry decay columns for
   1991/1992/2004 events against data that starts in 2020.
 - **A rank-deficient design discards the entire model, not the offending columns.**
   `least_squares.py:1069-1079` catches `DesignMatrixException` by setting
