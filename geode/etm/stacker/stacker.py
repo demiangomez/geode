@@ -374,6 +374,17 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
                                                      tension=self.config.tension,
                                                      extent_stations=self.sparse_stations)
 
+        # Sparse stations are not part of the GridSystem's own construction (they anchor
+        # neither grids_origin nor the vertical-response solve), so create_from_stations
+        # never assigns them one and they keep Station.projected_coords' (0., 0.) default.
+        # Nothing reads it for a sparse station today -- dedup_colocated_stations, the one
+        # consumer that would collapse them all onto the origin, is only ever handed full
+        # stations -- but leaving 23 stations sitting on the origin is a trap for the next
+        # caller. Project them through the same transform the grids use.
+        for station in self.sparse_stations:
+            x, y = self.grids.transform_coordinate(station.lon, station.lat)
+            station.projected_coords = (float(x), float(y))
+
         console.step('constraints')
         self._register_constraints()
 

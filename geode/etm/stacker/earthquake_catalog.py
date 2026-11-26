@@ -403,41 +403,44 @@ class EarthquakeCatalogMixin:
 
         Shared by add_earthquake and remove_earthquake, which both need to redo this
         whenever the earthquake list changes which jumps a station's ETM must fit.
-        """
-        for i, stn in enumerate(self.stations):
-            s_score, p_score = mask.score(stn.lat, stn.lon)
-            if p_score > 0 or s_score > 0:
-                tqdm.write(f'Recomputing etm for {stationID(stn)}')
-                # replace old etm
-                etm_result = etm_builder.build_etm(self.config, cnn, stn.network_code, stn.station_code,
-                                                   json_folder, save_json_folder)
-                stn.etm = etm_result[0]
-                if stn.etm is None:
-                    tqdm.write(print_yellow(
-                        f'   ! could not rebuild ETM for {stationID(stn)}: '
-                        f'{etm_result[2]}'))
-                    continue
-                # get dimensions of neq
-                new_par_count = stn.etm.design_matrix.matrix.shape[1]
-                # assume number of unknowns will change, so update the rest of the stations down from current
-                remove_from_index = 0
-                # will be added when calling _create_normal_equations
-                self.total_parameters = 0
-                self.total_equations = 0
 
-                for station in self.stations:
-                    if stationID(station) == stationID(stn):
-                        # add the number of new parameters to remove_from_index
-                        remove_from_index = station.normal_equations.parameter_count - new_par_count
-                        # create a new normal equations object and replace current
-                        self.normal_equations[i] = self._create_normal_equations(stn)
-                    else:
-                        # remove from the parameter range the station that has been removed
-                        # this is applied to any stations that come after the removed site
-                        station.normal_equations.parameter_range -= remove_from_index
-                        station.normal_equations.parameter_start_idx -= remove_from_index
-                        self.total_parameters += station.normal_equations.parameter_count
-                        self.total_equations += station.normal_equations.equation_count
+        The drop has to be replayed afterwards. build_etm derives its jump table from
+        earthquakes_cherry_picked, so a rebuilt station comes back carrying every event
+        in that list -- including the ones drop_unconstrainable_postseismic had demoted,
+        which it edited in place on the ETM objects that existed at the time. Those decay
+        columns have no constraint (their events are not in self.earthquakes), are flat
+        and collinear with velocity, and are what sent a removed-then-re-added event to a
+        NaN variance of unit weight and velocities in the thousands of mm/yr.
+        """
+        changed = set()
+
+        for stn in self.stations:
+            s_score, p_score = mask.score(stn.lat, stn.lon)
+            if p_score <= 0 and s_score <= 0:
+                continue
+
+            tqdm.write(f'Recomputing etm for {stationID(stn)}')
+            etm_result = etm_builder.build_etm(self.config, cnn, stn.network_code,
+                                               stn.station_code, json_folder, save_json_folder)
+            if etm_result[0] is None:
+                tqdm.write(print_yellow(
+                    f'   ! could not rebuild ETM for {stationID(stn)}: {etm_result[2]}'))
+                continue
+
+            stn.etm = etm_result[0]
+            changed.add(id(stn))
+
+        if changed:
+            # _rebuild_all_normal_equations renumbers every station from the rebuilt
+            # parameter counts in one pass. This used to be done inline, by resetting
+            # total_parameters inside a nested loop over all stations for each rebuilt
+            # station and shifting the others by the difference -- which only held while
+            # exactly one station changed and self.normal_equations stayed index-aligned
+            # with self.stations.
+            self._rebuild_all_normal_equations(changed)
+            self.drop_unconstrainable_postseismic()
+
+        self.solved = False
 
     def add_earthquake(self, event: Earthquake, json_folder: str = None, save_json_folder: str = None):
         """Add event to the list of modeled earthquakes."""
