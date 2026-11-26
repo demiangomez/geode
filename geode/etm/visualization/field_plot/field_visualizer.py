@@ -249,6 +249,31 @@ class FieldVisualizer:
             ax.set_adjustable('datalim')
             self.axes.append(ax)
 
+        # Dedicated colorbar axes, created once at fixed positions.
+        #
+        # plt.colorbar(cs, ax=ax) steals space from its parent to make room, and removing
+        # it does not hand all of that space back. Every redraw therefore left the map
+        # axes a little smaller -- and these axes are adjustable='datalim' with a fixed
+        # aspect, so matplotlib absorbs a smaller box by WIDENING the data limits. The
+        # result was a map that zoomed out a little on every draw, with no interaction at
+        # all, compounding without limit. Giving the colorbars their own axes means the
+        # map boxes are never touched.
+        # The map axes have to give up the space themselves now, since the colorbars no
+        # longer take it: the gridspec cell is split into the map and, below it, a strip
+        # for the bar. The 0.8 reproduces the height the axes used to settle at once
+        # plt.colorbar had taken its cut, so the layout is unchanged from before.
+        self._cbar_axes = []
+        self._cbar_rects = []
+        for ax in self.axes:
+            cell = ax.get_position()
+            map_height = 0.8 * cell.height
+            ax.set_position([cell.x0, cell.y0 + cell.height - map_height,
+                             cell.width, map_height])
+            rect = [cell.x0, cell.y0 + cell.height - map_height - 0.055,
+                    cell.width, 0.022]
+            self._cbar_rects.append(rect)
+            self._cbar_axes.append(self.fig.add_axes(list(rect)))
+
 
         self.fig.suptitle(self.config.title, fontsize=16, fontweight='bold')
 
@@ -380,6 +405,7 @@ class FieldVisualizer:
         """Draw all three subplots."""
         for i, (ax, spec) in enumerate(zip(self.axes, self._panel_specs())):
             ax.set_visible(spec['visible'])
+            self._cbar_axes[i].set_visible(spec['visible'])
             if not spec['visible']:
                 continue
             self._draw_subplot(ax, i, spec, connect_interaction=(i == 0))
@@ -418,8 +444,26 @@ class FieldVisualizer:
         )
         self.state.contours[index] = cs
 
-        # Add colorbar
-        cbar = plt.colorbar(cs, ax=ax, orientation='horizontal', pad=0.05, aspect=30)
+        # Rebuilt on its own fixed axes, not with ax=... . Recreating is what gives the
+        # correct ticks for a new field -- update_normal leaves a contour colorbar's
+        # boundaries stale, so the bar kept the previous field's numbers. Doing it on a
+        # dedicated cax is harmless; it was plt.colorbar(ax=ax) stealing from the map
+        # axis that used to shrink the box on every redraw.
+        cax = self._cbar_axes[index]
+        cax.set_visible(True)
+        cax.clear()
+        # clear() keeps the aspect the previous Colorbar set on this axis, which would
+        # squeeze the rebuilt bar down to a stub
+        cax.set_aspect('auto')
+        cbar = self.fig.colorbar(cs, cax=cax, orientation='horizontal')
+        # Colorbar() installs an axes locator that re-derives the cax position at DRAW
+        # time to honour its aspect, so the bar narrowed on every redraw -- the same
+        # creep the map axes had, moved onto the cax. Dropping the locator and pinning
+        # the rect is what actually holds it; set_position alone does not, because the
+        # locator runs afterwards.
+        cax.set_axes_locator(None)
+        cax.set_aspect('auto')
+        cax.set_position(list(self._cbar_rects[index]))
         cbar.set_label(label, fontsize=9)
         self.state.colorbars[index] = cbar
 
@@ -688,10 +732,9 @@ class FieldVisualizer:
                     coll.remove()
                 self.state.contours[i] = None
 
-            # Remove colorbars
-            if self.state.colorbars[i] is not None:
-                self.state.colorbars[i].remove()
-                self.state.colorbars[i] = None
+            # Colorbars are NOT removed: they live on their own axes and are updated
+            # in place by _draw_subplot. Recreating them is what used to shrink the map
+            # axes a little on every redraw.
 
             # Remove grid quivers
             if self.state.quivers_grid[i] is not None:
@@ -867,12 +910,7 @@ class FieldVisualizer:
         """Switch between East/North/Up panels and horizontal-magnitude + Up."""
         self._magnitude = bool(show)
         self._render_field(self.state.current_field_index)
-        # These axes are adjustable='datalim' with a fixed aspect, so matplotlib widens
-        # the data limits at draw time to fill the box. Changing which panels are visible
-        # makes that land somewhere slightly different each time, and the view creeps
-        # outward over repeated toggles. Switching the panel layout is a view change
-        # anyway, so reset rather than carry a drifting extent.
-        self.reset_view()
+        self.fig.canvas.draw_idle()
 
     def toggle_sigmas(self, show: bool) -> None:
         """Switch all panels between the field and its uncertainty."""
@@ -880,7 +918,7 @@ class FieldVisualizer:
         self._interp_cache.clear()
         self._render_field(self.state.current_field_index)
         self._update_field_note(self.state.current_field_index)
-        self.reset_view()  # same reason as toggle_magnitude
+        self.fig.canvas.draw_idle()
 
     def update_epoch(self, epoch: float) -> None:
         """Re-evaluate the epoch-dependent panels and redraw if one is on screen."""
