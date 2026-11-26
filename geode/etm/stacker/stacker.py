@@ -392,15 +392,15 @@ class EtmStacker(EarthquakeCatalogMixin, NormalEquationsMixin, SolverMixin, Diag
         # built, so config.*_sw_okada_h_weight/v_weight take effect from the start of a
         # run instead of needing the interactive okada_weights command afterward. Each
         # type (coseismic/postseismic) is applied separately and is a no-op (and silent)
-        # at the SWOkada-internal default (1.0, 1.0) -- see data_classes.py for why they
+        # at the SWOkada-internal default (0.0, 0.0) -- see data_classes.py for why they
         # aren't meant to share one value.
-        if (self.config.coseismic_sw_okada_h_weight != 1.0 or
-                self.config.coseismic_sw_okada_v_weight != 1.0):
+        if (self.config.coseismic_sw_okada_h_weight != 0.0 or
+                self.config.coseismic_sw_okada_v_weight != 0.0):
             self.update_okada_weights(self.config.coseismic_sw_okada_h_weight,
                                       self.config.coseismic_sw_okada_v_weight,
                                       constraint_type='coseismic')
-        if (self.config.postseismic_sw_okada_h_weight != 1.0 or
-                self.config.postseismic_sw_okada_v_weight != 1.0):
+        if (self.config.postseismic_sw_okada_h_weight != 0.0 or
+                self.config.postseismic_sw_okada_v_weight != 0.0):
             self.update_okada_weights(self.config.postseismic_sw_okada_h_weight,
                                       self.config.postseismic_sw_okada_v_weight,
                                       constraint_type='postseismic')

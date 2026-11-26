@@ -210,10 +210,27 @@ class EtmStackerConfig(BaseDataClass):
     # mid-session. See stacker.update_okada_weights for the mechanism (also clears the
     # cached dislocation model so a changed value actually takes effect on the next
     # solve).
-    coseismic_sw_okada_h_weight: float = 1.0
-    coseismic_sw_okada_v_weight: float = 1.0
-    postseismic_sw_okada_h_weight: float = 1.0
-    postseismic_sw_okada_v_weight: float = 1.0
+    #
+    # All four default to 0, i.e. no Okada shape prior, measured rather than assumed on
+    # the Ecuador stack -- see
+    # knowledge/checkpoints/2026-11-26-okada-weight-assessment.md. Once co-located
+    # stations stopped making the design matrix singular (da5ea21) and the horizontal
+    # block gained its far-field force balance (077ddf2, gated in 7226121), the penalty
+    # has nothing left to contribute: the fields are already smooth to under 1%
+    # noise-equivalent without it, and on the three fields with enough stations to carry
+    # the deformation signal it leaves the far-field decay unchanged (-0.75 -> -0.72,
+    # -0.79 -> -0.80, -0.41 -> -0.32) while tripling the misfit between the field and the
+    # stations it was built from. Where it does buy decay, it is on 3- to 9-station
+    # fields that it then stops representing at all.
+    #
+    # One caveat on that measurement: rel, oos, sink and roughness all evaluate the field
+    # at or near stations, so none of them sees the offshore field, which is exactly where
+    # a dislocation prior would earn its keep. If that matters for a given network, 0.25
+    # is the least damaging non-zero value.
+    coseismic_sw_okada_h_weight: float = 0.0
+    coseismic_sw_okada_v_weight: float = 0.0
+    postseismic_sw_okada_h_weight: float = 0.0
+    postseismic_sw_okada_v_weight: float = 0.0
 
 
 @dataclass

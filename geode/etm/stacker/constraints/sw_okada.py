@@ -82,8 +82,12 @@ class SWOkada(BaseConstraint):
         # With the normalized scaling (weight=1 → Okada term = data term),
         # the useful range is ~0.01 (data-dominated) to ~10 (Okada-dominated).
         # Values above ~10 are saturated: incremental changes have no effect.
-        self.sw_okada_h_weight = 1.0
-        self.sw_okada_v_weight = 1.0
+        # Match EtmStackerConfig's defaults, so a constraint built without an explicit
+        # weight behaves the same as one the stacker configured. These were 1.0 while the
+        # config default was also 1.0; see the config for why 0 is now the measured
+        # default.
+        self.sw_okada_h_weight = 0.0
+        self.sw_okada_v_weight = 0.0
 
         if constraint_type == ConstraintType.COSEISMIC:
             self._mask_index = 0
