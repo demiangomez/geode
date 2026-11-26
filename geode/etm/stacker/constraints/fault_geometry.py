@@ -489,8 +489,34 @@ class FaultGeometry:
         C_z = np.ones((1, N))
         mu_z = 1e4 * term_av / N
 
+        # The horizontal counterpart of C_z, and for the same reason. The SW parameters
+        # are body forces [fx (N); fy (N)] (ah = [[q, w], [w, p]] maps them to [ux; uy]),
+        # and get_qpw's Green's functions carry a (3-nu)ln(r) term -- so in the far field
+        # sum_i (3-nu) ln(r_i) f_i tends to (3-nu) ln(r) sum_i f_i, i.e. a non-zero NET
+        # force gives a field that GROWS logarithmically without bound instead of
+        # decaying. Zeroing it leaves the dipole, which decays.
+        #
+        # This is not something the Okada annihilator can do in its place: Pok penalizes
+        # the field's departure from an Okada shape AT THE STATIONS (P_h is ah.T Pok ah,
+        # with ah evaluated at station coordinates), so it says nothing about behaviour
+        # away from them. Measured on the Ecuador stack, the slope of log|Vh| against
+        # log(distance) saturated at -0.17 for every h_weight from 2 to 100, against the
+        # ~-2 an elastic far field should show.
+        #
+        # Skipped at N < 2, where the only force-balanced solution is the zero field: one
+        # station cannot express a decaying field, and zeroing it outright would be worse
+        # than the biased one. Two stations already give a dipole.
+        if N >= 2:
+            C_h = np.zeros((2, 2 * N))
+            C_h[0, :N] = 1.0
+            C_h[1, N:] = 1.0
+            mu_h = 1e4 * term_ah / (2 * N)
+            force_balance_h = mu_h * C_h.T @ C_h
+        else:
+            force_balance_h = 0.0
+
         # Build regularization matrices
-        P_h = h_weight_eff * ah.T @ Pok @ ah
+        P_h = h_weight_eff * ah.T @ Pok @ ah + force_balance_h
         P_z = v_weight_eff * av.T @ Poz @ av + mu_z * C_z.T @ C_z
 
         return a, block_diag(P_h, P_z)
