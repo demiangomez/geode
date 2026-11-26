@@ -27,7 +27,12 @@ belongs in [checkpoints/](checkpoints/)).
   The direct-data-injection approach was implemented on branch `stacker_refactor` and is **not
   merged**; `master` currently only has detection/plotting groundwork
   (`geode/etm/stacker/sparse_station_constraints.md` is a spec, not shipped code). Check which
-  branch is checked out before assuming either state.
+  branch is checked out before assuming either state. On `stacker_refactor` as of 2026-11-25 the
+  sparse-injection defect is fixed, GLS is the default weighting, and the stack's variance of unit
+  weight is ~1.02; what remains open is that the interseismic field is not observable
+  independently of the postseismic model. See
+  [checkpoints/2026-11-25-interseismic-observability.md](checkpoints/2026-11-25-interseismic-observability.md)
+  and [checkpoints/2026-11-25-gls-outlier-weighting.md](checkpoints/2026-11-25-gls-outlier-weighting.md).
 - **Multi-engine table naming migration** (`gamit_soln`→`soln_gamit` etc., see
   [architecture/database-schema.md](architecture/database-schema.md)) is fully planned
   (`database/migration_plan_engine_table_naming.md`) but **not applied**. Needed before adding a

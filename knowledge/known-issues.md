@@ -190,3 +190,40 @@ Confirmed 2026-11-25 on the Ecuador stack (branch `stacker_refactor`, 31 full st
   renamed `etm_functions/stochastic_signal.py`/`StochasticSignal` to
   `stochastic.py`/`Stochastic`, and `Stochastic.p.params` changed shape, so a module alias
   is not sufficient. Rebuild affected `.pkl` sessions rather than shimming them.
+
+## ETM Stacker: weighting and catalogue (2026-11-25)
+
+Confirmed on the Ecuador stack (branch `stacker_refactor`); see
+[checkpoints/2026-11-25-gls-outlier-weighting.md](checkpoints/2026-11-25-gls-outlier-weighting.md).
+
+- **`EtmStackerConfig.post_seismic_back_lim` is an absolute `Date(1990, 1)`, not a window.**
+  `jump_manager.py:74-77` branches on the type: a `Date` is used verbatim, an int is
+  subtracted from the station's own `date_min` (`ModelingParameters`' default, `365 * 5`).
+  So every station in a stack admits catalogue events back to 1990 regardless of when it
+  came online, and `earthquakes_cherry_picked` additionally admits them without the
+  per-station magnitude check. `bra.amta` (799 solutions, 2015-036 to 2017-332) receives
+  decay columns for events in 1994, 2001, 2005 and 2007 — flat over its own span and
+  collinear with each other and the intercept. `drop_unconstrainable_postseismic` and
+  `etm_builder.sync_geophysical_jumps` both clean up after this rather than preventing it.
+  A per-station window, or a floor tied to the network's validity epoch, is the real fix.
+- **A rank-deficient design discards the entire model, not the offending columns.**
+  `least_squares.py:1069-1079` catches `DesignMatrixException` by setting
+  `FitStatus.UNABLE_TO_FIT`, blanking `results`, and setting `fit = False` on *every*
+  function — polynomial and periodic included. A station with one unresolvable decay
+  column therefore reports "Not enough solutions to fit an ETM" and plots blank even with
+  a complete time series. The message names the wrong cause.
+- **The JSON cache quantizes the GLS noise model, so `-load_json` and GLS are mutually
+  exclusive.** `etm_engine.py:~389` serializes with `round_digits=6`;
+  `noise_covariance_lag` is in m² (order 1e-6, set in `least_squares.py:784` as
+  `nm.c_lag_final / s ** 2`) and is absent from `no_round_fields`, so rounding destroys
+  positive-definiteness — observed min eigenvalue -8.6e-05, failing as
+  `ecu.abec E is not positive definite even with a jitter of 1`. `stochastic_signal` and
+  `stochastic_noise` carry the same units and are also absent from the list. The comment
+  one line above the assignment ("in mm: the JSON output rounds to 6 decimals") shows the
+  rounding was designed for mm-unit diagnostics and then applied to an m²-unit array.
+- **The stacker does not use the estimated inter-component covariance.** `master`'s
+  `4f45d96` added N-E/N-U/E-U cross-covariance (`EtmFit.cross_covariance`), but
+  `normal_equations._create_normal_equations` loops `for i in [1, 0, 2]` building an
+  independent `N` per component, and `_build_base_normal_equations` lays those out as three
+  separate diagonal blocks. There is also no cross-*station* term anywhere, by construction,
+  so common-mode error is invisible to the weighting.

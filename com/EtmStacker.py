@@ -406,7 +406,12 @@ class EtmStackerShell(cmd.Cmd):
                     print(f'Will save ETM for station {parts[0]} in {folder}')
                     if not os.path.exists(folder):
                         os.makedirs(folder)
-                    return folder
+                    # Trailing separator, for the same reason do_plot_all's _subfolder
+                    # adds one: _handle_plot_output treats the path as a directory to
+                    # auto-name a file in only when os.path.basename(...) is empty.
+                    # Without it the station's plot lands in a file named after the
+                    # folder, beside the (empty) folder that was just created.
+                    return os.path.join(folder, '')
                 return None
 
             for i, stn in enumerate(self.etm_stacker.stations):
