@@ -119,6 +119,31 @@ distorts the fit.
 
 and `v = 0` gives oos U 2.41 against 2.48 at any `v >= 1` — the same sign as postseismic.
 
+**FINAL RECOMMENDATION (supersedes everything below in this file): `h = 0, v = 0` on
+both constraint types, with the horizontal force balance gated at N >= 16.**
+
+Broken out per field, with `v = 0`, the cost of `h = 1` against `h = 0`:
+
+| field | N | force balance | rel | decay |
+|---|---|---|---|---|
+| us20005j32 (0.5) | 28 | yes | 0.10 -> 0.31 | -0.75 -> -0.72 |
+| us2000jlfv (0.5) | 26 | yes | 0.23 -> 0.58 | -0.79 -> -0.80 |
+| us60003sc0 (0.5) | 25 | yes | 0.22 -> 0.36 | -0.41 -> -0.32 |
+| usp000jta1 (0.5) | 9 | no | 0.05 -> 0.67 | +0.09 -> -0.41 |
+| us7000jl3s (0.5) | 15 | no | 0.19 -> 0.44 | -0.08 -> -0.27 |
+| us7000fxq2 (0.5) | 12 | no | 0.05 -> 0.36 | +0.09 -> -0.02 |
+| us10005i9n (0.5) | 3 | no | 0.29 -> 0.93 | +0.55 -> +0.16 |
+
+On the three dense fields -- the ones carrying the deformation signal -- the Okada
+penalty changes the decay by nothing and triples the station misfit. The force balance
+has already done that job for them. Where the penalty does buy decay it is on fields with
+3 to 9 stations, and it costs those fields the ability to represent their own data. There
+is no station count at which it is the better trade.
+
+Everything below records how the earlier, wrong answers were arrived at and why each was
+withdrawn; the measurements predating `da5ea21` were taken on a numerically singular
+system and only the post-dedup numbers should be used.
+
 **That `h = 25` recommendation was wrong, and is withdrawn.** It collapses the coseismic
 fields: at h=25 the Pedernales coseismic field peaks at 0.92 mm against a 38.64 mm median
 station offset (fieldmax 12.44 mm at h=1, 53.37 mm at h=0). The out-of-sample metric
