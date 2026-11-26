@@ -472,12 +472,22 @@ class EtmStackerField(BaseDataClass):
         return self.base_type.description + event
 
     @classmethod
-    def create_field(cls, stations: List[Station],
+    def create_field(cls,
                      solution: np.ndarray,
                      covariance: np.ndarray,
                      grids: 'GridSystem',
                      constraint: Union['InterseismicConstraint', 'CoseismicConstraint', 'PostseismicConstraint']):
-        """Create field(s) from solution."""
+        """Create field(s) from solution.
+
+        Every station list here comes from constraint.station_list, because that is the
+        order get_parameters_and_covariance indexes `params` in. This used to take the
+        stacker's own station list as an argument and pass it to interpolate_field for the
+        interseismic case, which was correct only while InterseismicConstraint.__init__ set
+        _station_list to exactly that list; once collect_constraints began rebuilding it as
+        constraining + to_constrain, the two orders diverged and every velocity was
+        interpolated at another station's coordinates. The argument is gone so the mismatch
+        cannot be reintroduced.
+        """
 
         # Import here to avoid circular imports
         from .types import ConstraintType
@@ -485,11 +495,13 @@ class EtmStackerField(BaseDataClass):
         params, sigmas = constraint.get_parameters_and_covariance(solution, covariance)
 
         if constraint.constraint_type == ConstraintType.INTERSEISMIC:
-            velocity_field, velocity_sigma, velocity_cova = grids.interpolate_field(stations, params, sigmas)
+            velocity_field, velocity_sigma, velocity_cova = grids.interpolate_field(
+                constraint.station_list, params, sigmas)
 
             return EtmStackerField(
                 ConstraintType.INTERSEISMIC, grids, enu_field=velocity_field, enu_sigma=velocity_sigma,
-                constrain_stations=stations, constrained_parameters=params, enu_covar=velocity_cova)
+                constrain_stations=constraint.station_list, constrained_parameters=params,
+                enu_covar=velocity_cova)
         else:
             seismic_field, seismic_sigma, seismic_covar = grids.predict_seismic_deformation(
                 constraint.event, constraint.station_list, params, sigmas, constraint

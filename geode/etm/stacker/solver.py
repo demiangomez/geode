@@ -303,7 +303,7 @@ class SolverMixin:
                     try:
                         self.fields.append(
                             EtmStackerField.create_field(
-                                self.stations, self.solution, self.covariance, self.grids, constraint)
+                                self.solution, self.covariance, self.grids, constraint)
                         )
                     except np.linalg.LinAlgError:
                         tqdm.write(f'Skipping field interpolation for {constraint.short_description()} '

@@ -5,6 +5,7 @@ field) folded in as a constraint, for visual inspection.
 """
 
 import copy
+from typing import Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -62,13 +63,12 @@ class DiagnosticsMixin:
                     r_field = 0
                     for f in [ff for ff in self.fields if ff.base_type == ConstraintType.POSTSEISMIC]:
                         if ifield.event == f.event:
-                            idx = np.isin(np.array([stationID(stn) for stn in self.stations]),
-                                          np.array([stationID(stn) for stn in f.constrain_stations]))
+                            cols, keep = self._parameter_columns(f)
                             # pick the max relaxation and use it a dt
                             r_field += f.enu_field * np.log(1 + self.config.relaxation.max()/f.relaxation)
                             # assign values to where they belong
-                            parameters[:, idx] += (f.constrained_parameters *
-                                                   np.log(1 + self.config.relaxation.max()/f.relaxation))
+                            parameters[:, cols] += (f.constrained_parameters[:, keep] *
+                                                    np.log(1 + self.config.relaxation.max()/f.relaxation))
                             # predicted value at each sparse station (summed across relaxations)
                             dt_weight = np.log(1 + self.config.relaxation.max()/f.relaxation)
                             for k, stn in enumerate(self.sparse_stations):
@@ -82,10 +82,9 @@ class DiagnosticsMixin:
                     postseismic.append(ifield.event.id)
                     fields.append(r_field)
                 else:
-                    idx = np.isin(np.array([stationID(stn) for stn in self.stations]),
-                                  np.array([stationID(stn) for stn in ifield.constrain_stations]))
+                    cols, keep = self._parameter_columns(ifield)
                     # assign values to where they belong
-                    parameters[:, idx] = ifield.constrained_parameters
+                    parameters[:, cols] = ifield.constrained_parameters[:, keep]
                     fields.append(ifield.enu_field)
 
                     value_idx = 1 if ifield.base_type == ConstraintType.INTERSEISMIC else 0
@@ -106,6 +105,27 @@ class DiagnosticsMixin:
                                    sparse_data=sparse_data, sparse_names=sparse_names,
                                    on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None,
                                    output_file=output_file)
+
+    def _parameter_columns(self, field) -> Tuple[np.ndarray, np.ndarray]:
+        """Map a field's own parameter columns onto columns of self.stations.
+
+        Returns (cols, keep): field.constrained_parameters[:, keep] belongs at
+        parameters[:, cols]. Needed because constrained_parameters is indexed by
+        field.constrain_stations -- which is constraint.station_list, i.e. constraining
+        stations first and then the ones being constrained -- while the plot's own array
+        is indexed by self.stations. A boolean np.isin mask was used here, which fills in
+        self.stations order and therefore silently pairs each station's parameters with a
+        different station's coordinates whenever the two orders differ.
+        """
+        position = {stationID(stn): k for k, stn in enumerate(self.stations)}
+        cols, keep = [], []
+        for k, stn in enumerate(field.constrain_stations):
+            column = position.get(stationID(stn))
+            if column is not None:
+                cols.append(column)
+                keep.append(k)
+
+        return np.array(cols, dtype=int), np.array(keep, dtype=int)
 
     def _run_constrained_etm(self, cnn: Cnn, stn, constraints, folder=None, catch_errors=False,
                              validity_date=None):
