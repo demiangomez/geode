@@ -154,6 +154,43 @@ A soft force balance was tried as an alternative to the gate (scaling `mu_h` dow
 every scale, coseismic fidelity and far-field decay move together in opposite directions
 (mu_h = 1e0 gives cos_rel 0.33 and decay -0.19; 1e4 gives 0.80 and -0.51).
 
+## The weights were being tuned on a singular system
+
+`cond(a.T @ a)`, *before* any regularization is added, was ~1e19 for most events. The
+correlation with co-located stations is exact: every field whose station list contained
+`igs.qui3`/`igs.qui4` (0.000 km apart) was at 1e19, every field that did not was at
+1e2-1e6. Two stations at the same point give identical rows in both the SW elastic and
+biharmonic-spline Green's function matrices. `constraints/sparse.py` has always
+deduplicated its own interpolation sources; the SW-Okada model never did (fixed in
+`da5ea21`, `cond` now 3.8e2-1.1e9).
+
+**Every weight result above this line was measured on that singular system and should be
+disregarded.** Re-tuned on the deduplicated system:
+
+Force-balance gate, both Okada weights 0:
+
+| gate | cos_rel | post_rel | oos | decay | sink |
+|---|---|---|---|---|---|
+| N >= 2 | 0.88 | 0.33 | 2.32 | -0.39 | 1.83 |
+| **N >= 10 (shipped)** | **0.07** | 0.23 | 2.69 | **-0.39** | 1.41 |
+| N >= 20 | 0.07 | 0.19 | 2.69 | -0.08 | 1.00 |
+| off | 0.07 | 0.05 | 2.69 | +0.05 | 0.84 |
+
+Okada weights, at that gate: postseismic `h` 0 -> 1 takes post_rel 0.23 -> 0.65 and oos
+2.69 -> 2.77, for decay -0.39 -> -0.46 and sink 1.41 -> 1.20; coseismic `h` 0 -> 1 takes
+cos_rel 0.07 -> 0.16 and changes nothing else. Once the singularity is gone the Okada
+shape prior mostly costs fit.
+
+**Recommended: `h = 0, v = 0` on both constraint types, force balance at N >= 10.** The
+earlier `h = 25, v = 0` and `h = 5, v = 0` recommendations are both withdrawn.
+
+Important limitation on that recommendation: `rel`, `oos` and `sink` all evaluate the
+field at or near stations, and `decay` is a single power law. None of them sees the
+offshore field, which is exactly where an Okada shape prior is supposed to earn its
+keep. "0 is best" is a statement about the measurable region only, and a non-zero
+postseismic `h` of about 1 remains defensible if the station parameters are thought
+noisier than the dislocation shape.
+
 ## Known issues / limitations
 
 - **The field still does not decay as fast as it should.** The slope of
