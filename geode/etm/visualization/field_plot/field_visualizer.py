@@ -412,6 +412,12 @@ class FieldVisualizer:
             dict(label=None, field=None, vectors=False, contours=False, visible=False),
         ]
 
+    def _showing_sigma(self) -> bool:
+        """Whether the panels are currently contouring an uncertainty rather than a
+        field. Not the same as the toggle being on: the summed postseismic panels have
+        no sigma and keep showing their field, so they stay signed."""
+        return self._show_sigmas and self.has_sigma(self.state.current_field_index)
+
     def _horizontal_scalar(self):
         """The scalar the magnitude panel contours, and which definition was used.
 
@@ -465,8 +471,11 @@ class FieldVisualizer:
         field = spec['field']
         label = self._panel_label(spec)
 
-        vmin, vmax = self._colour_range(index, field,
-                                        non_negative=bool(spec.get('sequential')))
+        # A sigma is non-negative, whichever panel it is on. Without this the range was
+        # forced symmetric about zero, so an uncertainty colourbar ran from -1.925 to
+        # 1.925 mm/yr and half of it described values that cannot occur.
+        non_negative = bool(spec.get('sequential')) or self._showing_sigma()
+        vmin, vmax = self._colour_range(index, field, non_negative=non_negative)
 
         levels = np.linspace(vmin, vmax, self.config.n_contour_levels)
 
@@ -476,7 +485,7 @@ class FieldVisualizer:
         cs = ax.contourf(
             self.state.xi_grid, self.state.yi_grid, field,
             levels=levels,
-            cmap=_SEQUENTIAL_CMAP if spec.get('sequential') else self.config.cmap,
+            cmap=_SEQUENTIAL_CMAP if non_negative else self.config.cmap,
             extend=self.config.colorbar_extend,
             transform=self.renderer.projection
         )
@@ -896,7 +905,9 @@ class FieldVisualizer:
         makes two epochs impossible to compare by eye. The lock is set from the extremes
         of the epoch range, so the scale holds at the largest value the panel ever takes.
         """
-        if self._magnitude:
+        if non_negative and not self._magnitude:
+            pass  # fall through to the data-driven, zero-based range below
+        elif self._magnitude:
             bounds = self._locked_magnitude.get(self.state.current_field_index)
             if bounds is not None and panel_index < 2:
                 bound = bounds[panel_index]
