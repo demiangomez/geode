@@ -3,7 +3,7 @@ Widget manager for field plot UI controls.
 """
 
 import numpy as np
-from matplotlib.widgets import RadioButtons, Slider, Button
+from matplotlib.widgets import RadioButtons, Slider, Button, CheckButtons
 from typing import Callable, List, Optional, Tuple
 
 
@@ -136,7 +136,8 @@ class WidgetManager:
 
         return self._scale_slider
 
-    def create_epoch_slider(self, callback, val_min: float, val_max: float) -> Slider:
+    def create_epoch_slider(self, callback, val_min: float, val_max: float,
+                            marks=None) -> Slider:
         """Epoch slider for the panels that are evaluated at a point in time.
 
         Sits above the scale slider. Starts at val_max -- the last epoch any station
@@ -152,6 +153,13 @@ class WidgetManager:
             valstep=0.05,
             valfmt='%.2f'
         )
+        # Event onsets, so the slider shows where the steps in the curve come from.
+        # Drawn in the slider's own data coordinates, which run valmin..valmax.
+        for mark in (marks or ()):
+            if val_min <= mark <= val_max:
+                self._epoch_slider_ax.axvline(mark, color='firebrick', linewidth=0.8,
+                                              alpha=0.9, zorder=10, clip_on=True)
+
         self._epoch_callback = callback
         self._epoch_slider.on_changed(callback)
         return self._epoch_slider
@@ -160,6 +168,21 @@ class WidgetManager:
         """Current epoch slider value, or None when there is no epoch slider."""
         slider = getattr(self, '_epoch_slider', None)
         return slider.val if slider is not None else None
+
+    def create_sigma_toggle(self, callback, initial: bool = False) -> CheckButtons:
+        """Checkbox switching the panels between field vectors and uncertainty."""
+        self._sigma_toggle_ax = self.fig.add_axes([0.01, 0.12, 0.115, 0.05])
+        self._sigma_toggle_ax.set_axis_off()
+        self._sigma_toggle = CheckButtons(
+            ax=self._sigma_toggle_ax,
+            labels=['uncertainty'],
+            actives=[bool(initial)]
+        )
+        for label in self._sigma_toggle.labels:
+            label.set_fontsize(8)
+        self._sigma_callback = callback
+        self._sigma_toggle.on_clicked(lambda _label: callback(self._sigma_toggle.get_status()[0]))
+        return self._sigma_toggle
 
     def get_scale_factor(self) -> float:
         """Get the current scale factor from slider value."""

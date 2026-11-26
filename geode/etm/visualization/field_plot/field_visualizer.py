@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from matplotlib.gridspec import GridSpec
 import cartopy.crs as ccrs
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, CloughTocher2DInterpolator
+from scipy.spatial import Delaunay
 from typing import List, Optional, Callable, Tuple
 
 from .data_classes import FieldPlotConfig, PlotState, ViewState
@@ -103,7 +104,9 @@ class FieldVisualizer:
             field_notes: Optional[List[Optional[str]]] = None,
             epoch_callback: Optional[Callable[[int, float], tuple]] = None,
             epoch_limits: Optional[Tuple[float, float]] = None,
-            epoch_indices: Optional[List[int]] = None
+            epoch_indices: Optional[List[int]] = None,
+            sigma_data: Optional[List[Optional[np.ndarray]]] = None,
+            epoch_marks: Optional[List[float]] = None
     ) -> plt.Figure:
         """
         Create the field visualization.
@@ -157,6 +160,10 @@ class FieldVisualizer:
         self._on_sparse_click = on_sparse_click
         self._covar = covar
         self._field_notes = field_notes or []
+        self._interp_cache = {}
+        self._sigma_data = sigma_data or []
+        self._epoch_marks = epoch_marks or []
+        self._show_sigmas = bool(self.config.plot_sigmas)
         self._epoch_callback = epoch_callback
         self._epoch_limits = epoch_limits
         self._epoch_indices = set(epoch_indices or [])
@@ -256,7 +263,7 @@ class FieldVisualizer:
         """
         lon = self._lon[field_index]
         lat = self._lat[field_index]
-        data = self._data[field_index]
+        data = self._sigma_source(field_index)
 
         # Transform coordinates to projection
         x, y = self.renderer.transform(lon, lat)
@@ -277,24 +284,39 @@ class FieldVisualizer:
             self.state.ve_sparse = sp_data[0, :] * 1000.0
             self.state.vn_sparse = sp_data[1, :] * 1000.0
 
-        # Create interpolation grid
-        grid_spacing = self.config.grid_spacing_m
-        xi = np.linspace(x.min(), x.max(), int((x.max() - x.min()) / grid_spacing))
-        yi = np.linspace(y.min(), y.max(), int((y.max() - y.min()) / grid_spacing))
-        xi_grid, yi_grid = np.meshgrid(xi, yi)
-
-        # Interpolate fields
+        # Everything here that does not depend on the field VALUES is cached: the display
+        # grid, the Delaunay triangulation griddata would otherwise rebuild three times
+        # per call, and the ocean mask. The epoch slider re-enters this method with the
+        # same geometry and different values on every move, and without the cache that is
+        # three triangulations and a point-in-polygon pass over the whole display grid
+        # each time.
         valid = ~np.isnan(ve)
-        ve_grid = griddata((x[valid], y[valid]), ve[valid], (xi_grid, yi_grid), method='cubic')
-        vn_grid = griddata((x[valid], y[valid]), vn[valid], (xi_grid, yi_grid), method='cubic')
-        vu_grid = griddata((x[valid], y[valid]), vu[valid], (xi_grid, yi_grid), method='cubic')
+        key = (field_index, valid.tobytes())
+        cached = self._interp_cache.get(key)
 
-        # Mask ocean points
-        glon, glat = self.renderer.inverse_transform_grid(xi_grid, yi_grid)
-        mask = CartopyRenderer.mask_ocean_points(glon.flatten(), glat.flatten(), 25)
-        ve_grid.flat[~mask] = np.nan
-        vn_grid.flat[~mask] = np.nan
-        vu_grid.flat[~mask] = np.nan
+        if cached is None:
+            grid_spacing = self.config.grid_spacing_m
+            xi = np.linspace(x.min(), x.max(), int((x.max() - x.min()) / grid_spacing))
+            yi = np.linspace(y.min(), y.max(), int((y.max() - y.min()) / grid_spacing))
+            xi_grid, yi_grid = np.meshgrid(xi, yi)
+
+            tri = Delaunay(np.column_stack([x[valid], y[valid]]))
+            glon, glat = self.renderer.inverse_transform_grid(xi_grid, yi_grid)
+            mask = CartopyRenderer.mask_ocean_points(glon.flatten(), glat.flatten(), 25)
+
+            cached = (xi_grid, yi_grid, tri, mask)
+            self._interp_cache[key] = cached
+
+        xi_grid, yi_grid, tri, mask = cached
+
+        def interpolate(values):
+            out = CloughTocher2DInterpolator(tri, values[valid])(xi_grid, yi_grid)
+            out.flat[~mask] = np.nan
+            return out
+
+        ve_grid = interpolate(ve)
+        vn_grid = interpolate(vn)
+        vu_grid = interpolate(vu)
 
         # Store in state
         self.state.xi_grid = xi_grid
@@ -304,12 +326,9 @@ class FieldVisualizer:
         self.state.vu_grid = vu_grid
 
         # Process covariance if available
-        if self.config.plot_sigmas and self._covar is not None:
+        if self._show_sigmas and self._covar is not None and self._covar[field_index] is not None:
             cov_en = self._covar[field_index][0, :] * (1000.0 ** 2)
-            self.state.cov_grid = griddata(
-                (x[valid], y[valid]), cov_en[valid],
-                (xi_grid, yi_grid), method='cubic'
-            )
+            self.state.cov_grid = CloughTocher2DInterpolator(tri, cov_en[valid])(xi_grid, yi_grid)
         else:
             self.state.cov_grid = None
 
@@ -382,7 +401,7 @@ class FieldVisualizer:
 
         # Draw vectors (only for East and North)
         if index != 2:
-            if self.config.plot_sigmas and self.state.cov_grid is not None:
+            if self._show_sigmas and self.state.cov_grid is not None:
                 self._draw_ellipses(ax, index, scale)
             else:
                 self._draw_quivers(ax, index, scale)
@@ -687,6 +706,9 @@ class FieldVisualizer:
         note = ''
         if 0 <= field_index < len(self._field_notes):
             note = self._field_notes[field_index] or ''
+        if self._show_sigmas and not self.has_sigma(field_index):
+            note = ('no uncertainty for this panel -- it sums several events and the '
+                    'cross-event covariance is not propagated to the grid')
         self._note_text.set_text(note)
 
     def switch_field(self, field_index: int) -> None:
@@ -735,6 +757,28 @@ class FieldVisualizer:
         self._update_field_note(field_index)
         self.fig.canvas.draw_idle()
 
+    def _sigma_source(self, field_index: int):
+        """The array to display for `field_index`: its uncertainty when the toggle is on
+        and this panel has one, otherwise the field itself."""
+        if self._show_sigmas and field_index < len(self._sigma_data):
+            sigma = self._sigma_data[field_index]
+            if sigma is not None:
+                return sigma
+        return self._data[field_index]
+
+    def has_sigma(self, field_index: int) -> bool:
+        """Whether `field_index` has an uncertainty view at all."""
+        return (field_index < len(self._sigma_data)
+                and self._sigma_data[field_index] is not None)
+
+    def toggle_sigmas(self, show: bool) -> None:
+        """Switch all panels between the field and its uncertainty."""
+        self._show_sigmas = bool(show)
+        self._interp_cache.clear()
+        self._render_field(self.state.current_field_index)
+        self._update_field_note(self.state.current_field_index)
+        self.fig.canvas.draw_idle()
+
     def update_epoch(self, epoch: float) -> None:
         """Re-evaluate the epoch-dependent panels and redraw if one is on screen."""
         if self._epoch_callback is None:
@@ -770,7 +814,7 @@ class FieldVisualizer:
         for i in range(2):
             ax = self.axes[i]
 
-            if self.config.plot_sigmas and self.state.cov_grid is not None:
+            if self._show_sigmas and self.state.cov_grid is not None:
                 # Remove old ellipses
                 for ellipse in self.state.ellipses[i]:
                     ellipse.remove()
@@ -846,7 +890,12 @@ class FieldVisualizer:
 
         # Epoch slider, only when some panel actually depends on an epoch
         if self._epoch_callback is not None and self._epoch_limits is not None:
-            self.widgets.create_epoch_slider(self.update_epoch, *self._epoch_limits)
+            self.widgets.create_epoch_slider(self.update_epoch, *self._epoch_limits,
+                                             marks=self._epoch_marks)
+
+        # Uncertainty toggle, only when some panel actually has an uncertainty
+        if any(sigma is not None for sigma in self._sigma_data):
+            self.widgets.create_sigma_toggle(self.toggle_sigmas, initial=self._show_sigmas)
 
         # Reset view button
         self.widgets.create_reset_button(self.reset_view)

@@ -39,6 +39,9 @@ class DiagnosticsMixin:
 
         available_fields, station_data, sparse_data, grid_lon, grid_lat, fields, fcovar = \
             [], [], [], [], [], [], []
+        # Parallel to `fields`: the uncertainty view of the same panel, or None where
+        # there is not one. The checkbox switches between the two without rebuilding.
+        sigma_data = []
 
         # Per-panel caption, appended alongside each entry below so it keys off the field
         # object rather than its label -- the coseismic and postseismic panels for one
@@ -68,10 +71,11 @@ class DiagnosticsMixin:
             lon, lat = ifield.get_interpolation_grid_geographic()
             grid_lon.append(lon)
             grid_lat.append(lat)
+            sigma_data.append(ifield.enu_sigma)
+            fcovar.append(ifield.enu_covar)
             if sigmas:
                 # do not plot data from stations in uncertainty mode
                 fields.append(ifield.enu_sigma)
-                fcovar.append(ifield.enu_covar)
             else:
                 if ifield.base_type == ConstraintType.POSTSEISMIC:
                     r_field = 0
@@ -133,6 +137,7 @@ class DiagnosticsMixin:
                     grid_lon.append(self.grids.interpolation_geographic[0])
                     grid_lat.append(self.grids.interpolation_geographic[1])
                     fcovar.append(None)
+                    sigma_data.append(None)
                     field_notes.append(None)
 
                 cumulative_by_index = {epoch_indices[i]: bool(i)
@@ -156,6 +161,9 @@ class DiagnosticsMixin:
                                    epoch_callback=epoch_callback,
                                    epoch_limits=epoch_limits,
                                    epoch_indices=epoch_indices,
+                                   sigma_data=sigma_data,
+                                   epoch_marks=sorted({c['onset'] for c in components})
+                                   if not sigmas and epoch_limits else None,
                                    output_file=output_file)
 
     def postseismic_entanglement(self, threshold: float = 0.5) -> dict:

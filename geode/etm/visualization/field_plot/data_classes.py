@@ -22,10 +22,18 @@ class ViewState:
         self.ylim = ax.get_ylim()
 
     def restore(self, ax) -> None:
-        """Restore the saved view state to an axis."""
-        if self.xlim is not None:
+        """Restore the saved view state to an axis, if it actually moved.
+
+        The comparison is not a micro-optimisation. These are cartopy GeoAxes, and
+        set_xlim/set_ylim re-project and re-clip every map feature on the axis --
+        coastlines, borders, plate boundaries. Measured at 3.8 s for the three panels,
+        against 0.1 s to redraw all the data artists. Redrawing a field does not move the
+        view, so in the common case the limits already hold the values being restored and
+        the whole cost is avoidable.
+        """
+        if self.xlim is not None and tuple(ax.get_xlim()) != tuple(self.xlim):
             ax.set_xlim(self.xlim)
-        if self.ylim is not None:
+        if self.ylim is not None and tuple(ax.get_ylim()) != tuple(self.ylim):
             ax.set_ylim(self.ylim)
 
     def is_captured(self) -> bool:

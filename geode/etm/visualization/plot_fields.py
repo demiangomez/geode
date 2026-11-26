@@ -46,6 +46,8 @@ def plot_velocity_field(
         epoch_callback=None,
         epoch_limits: Tuple[float, float] = None,
         epoch_indices: list = None,
+        sigma_data: list = None,
+        epoch_marks: list = None,
         show_plate_boundaries: bool = True,
         plate_boundary_color: str = 'darkred',
         plate_boundary_width: float = 0.8
@@ -157,5 +159,7 @@ def plot_velocity_field(
         field_notes=field_notes,
         epoch_callback=epoch_callback,
         epoch_limits=epoch_limits,
-        epoch_indices=epoch_indices
+        epoch_indices=epoch_indices,
+        sigma_data=sigma_data,
+        epoch_marks=epoch_marks
     )
