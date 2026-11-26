@@ -5,7 +5,7 @@ field) folded in as a constraint, for visual inspection.
 """
 
 import copy
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 from tqdm import tqdm
@@ -96,6 +96,21 @@ class DiagnosticsMixin:
 
             sparse_data.append(sparse_params)
 
+        # One more panel: every event's postseismic contribution to the velocity field at
+        # a single epoch, summed. See _postseismic_rate_field for why this is the view to
+        # read rather than the per-event panels above.
+        if not sigmas:
+            rate = self._postseismic_rate_field(n_sparse)
+            if rate is not None:
+                label, r_field, r_params, r_sparse, r_lon, r_lat = rate
+                available_fields.append(label)
+                fields.append(r_field)
+                station_data.append(r_params)
+                sparse_data.append(r_sparse)
+                grid_lon.append(r_lon)
+                grid_lat.append(r_lat)
+                fcovar.append(None)
+
         # do the thing
         return plot_velocity_field(grid_lon, grid_lat, fields,
                                    np.array(input_lon), np.array(input_lat), station_data, input_names,
@@ -105,6 +120,87 @@ class DiagnosticsMixin:
                                    sparse_data=sparse_data, sparse_names=sparse_names,
                                    on_sparse_click=self.plot_constrained_sparse_etm if n_sparse > 0 else None,
                                    output_file=output_file)
+
+    def postseismic_rate_epoch(self) -> Optional[float]:
+        """Decimal year the postseismic rate panel is evaluated at: the last epoch any
+        station in the stack actually observed.
+
+        Not datetime.now(): the model is a fit to data that ends here, and evaluating the
+        rate past that is extrapolation the panel should not quietly present as a result.
+        """
+        last = [float(stn.etm.solution_data.time_vector.max())
+                for stn in self.stations
+                if stn.etm is not None and stn.etm.solution_data.time_vector.size]
+        return max(last) if last else None
+
+    def _postseismic_rate_field(self, n_sparse: int):
+        """Total postseismic contribution to the velocity field at one epoch.
+
+        Each event contributes A * d/dt log(1 + dt/tau) = A / (tau + dt), with dt in years
+        from that event's onset, so the result is a rate in the same units as the
+        interseismic field and directly comparable to it.
+
+        This exists because the per-event panels are not independently readable. The
+        amplitudes of events close together in time are strongly anti-correlated -- on
+        the Ecuador stack the 2016-107 and 2016-139 pair (32 days apart) correlates at
+        -0.945 median and -0.996 worst -- so each event's own amplitude is a marginal
+        quantity with a marginal uncertainty, while only the combination is determined.
+        At col.psto the two amplitudes are -10.3 +/- 10.0 mm and +1.6 +/- 9.4 mm, both
+        consistent with zero on their own, while their sum is 8.7 +/- 1.1 mm. Summing
+        over events along exactly the direction they trade off against each other is what
+        makes the displayed quantity meaningful.
+
+        Returns None when there is no postseismic field, or no epoch to evaluate at.
+        Omitted from the sigma view deliberately: an honest sigma here needs the
+        cross-event covariance propagated to the grid, which the per-field enu_covar does
+        not carry, and summing the per-event sigmas in quadrature would report roughly the
+        10 mm marginal figure when the real one is nearer 1 mm -- the exact error this
+        panel exists to avoid.
+        """
+        from .types import ConstraintType
+
+        epoch = self.postseismic_rate_epoch()
+        if epoch is None:
+            return None
+
+        fields = [f for f in self.fields if f.base_type == ConstraintType.POSTSEISMIC]
+        if not fields:
+            return None
+
+        total = np.zeros((3, self.grids.points))
+        parameters = np.zeros((3, len(self.stations)))
+        sparse_params = np.full((3, n_sparse), np.nan)
+        used = 0
+
+        for f in fields:
+            dt = epoch - f.event.date.fyear
+            if dt <= 0:
+                continue
+            weight = 1.0 / (f.relaxation + dt)
+            used += 1
+
+            mask = self.grids.earthquake_masks[f.event.id][1]
+            total[:, mask] += f.enu_field * weight
+
+            cols, keep = self._parameter_columns(f)
+            parameters[:, cols] += f.constrained_parameters[:, keep] * weight
+
+            for k, stn in enumerate(self.sparse_stations):
+                vals, _ = f.get_values_geo(stn.lon, stn.lat)
+                if vals is None:
+                    continue
+                if np.isnan(sparse_params[:, k]).all():
+                    sparse_params[:, k] = 0.0
+                for j in range(3):
+                    sparse_params[j, k] += vals[j][0] * weight
+
+        if not used:
+            return None
+
+        label = f'Postseismic rate {epoch:.2f} ({used} events)'
+        return (label, total, parameters, sparse_params,
+                self.grids.interpolation_geographic[0],
+                self.grids.interpolation_geographic[1])
 
     def _parameter_columns(self, field) -> Tuple[np.ndarray, np.ndarray]:
         """Map a field's own parameter columns onto columns of self.stations.
