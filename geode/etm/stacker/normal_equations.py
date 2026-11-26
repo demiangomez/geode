@@ -18,6 +18,44 @@ logger = logging.getLogger(__name__)
 # NEU (fit.results/l index) -> ENU label, matching the [1, 0, 2] iteration order below.
 _NEU_TO_ENU_LABEL = {1: 'E', 0: 'N', 2: 'U'}
 
+# Ceiling on the variance inflation _outlier_inflated_covariance applies, so that a single
+# hard-rejected epoch (the robust weight can fall far enough to put its sigma 10 orders of
+# magnitude above the noise floor) cannot leave the Toeplitz matrix too ill-conditioned for
+# the Cholesky. At 1e6 the epoch already carries a millionth of a good epoch's weight.
+_OUTLIER_MAX_INFLATION = 1e6
+
+
+def _outlier_inflated_covariance(t_mjd: np.ndarray, noise_lag: np.ndarray,
+                                 results) -> np.ndarray:
+    """
+    Expand a lag-indexed colored-noise covariance into its Toeplitz matrix over t_mjd, with
+    the diagonal inflated at the epochs the station's own robust fit rejected.
+
+    The inflation is needed because noise_lag is estimated from inlier residuals only
+    (least_squares fits the noise model on rls.outlier_flags), so applying it unmodified to
+    every epoch weights a rejected epoch exactly like a good one. The diagonal branch in
+    _create_normal_equations does not have that problem: obs_sigmas keeps the robust fit's
+    inflated sigma at those epochs, so they are already downweighted there. This carries the
+    same downweighting into the colored-noise branch, scaling each rejected epoch's variance
+    up to the robust fit's own obs_sigma for it.
+
+    Inflating rather than deleting the rows keeps the epoch spacing intact, which a
+    lag-indexed covariance depends on.
+    """
+    c_mat = build_toeplitz_covariance(t_mjd, noise_lag)
+
+    inliers = results.outlier_flags.astype(bool)  # True == kept by the robust fit
+    if inliers.all():
+        return c_mat
+
+    idx = np.flatnonzero(~inliers)
+    # Clipped at 1 so an epoch whose robust sigma came out below the noise floor keeps the
+    # noise floor: rejected epochs may be downweighted, never upweighted.
+    inflation = np.clip(results.obs_sigmas[idx] ** 2 / noise_lag[0],
+                        1.0, _OUTLIER_MAX_INFLATION)
+    c_mat[idx, idx] += (inflation - 1.0) * noise_lag[0]
+    return c_mat
+
 
 class NormalEquationsMixin:
     """Mixed into EtmStacker: owns self.normal_equations / self.total_parameters."""
@@ -52,7 +90,8 @@ class NormalEquationsMixin:
                 # treating epochs as independent, the same technique
                 # constraints/sparse.py already uses for a sparse station's own data.
                 # weight_scale multiplies the weight, i.e. divides the covariance.
-                c_mat = build_toeplitz_covariance(t_mjd, noise_lag) / weight_scale
+                c_mat = _outlier_inflated_covariance(
+                    t_mjd, noise_lag, station.etm.fit.results[i]) / weight_scale
                 n_i, c_i, lpl_i = cholesky_whiten_design(
                     a, l[i], c_mat, f'{stationID(station)} {_NEU_TO_ENU_LABEL[i]}')
                 n.append(n_i)
@@ -65,7 +104,8 @@ class NormalEquationsMixin:
                 # per-station WRMS report in solver.py, and the legacy do_vce command in
                 # etm_stacker_vce.py, which also rescales this array directly) still
                 # have something to work with -- it is not what the solve itself used.
-                observation_weights.append(np.full(a.shape[0], weight_scale / noise_lag[0]))
+                # Taken from the diagonal so it reflects the outlier inflation above.
+                observation_weights.append(1.0 / np.diag(c_mat))
             else:
                 p = np.diag(1 / station.etm.fit.results[i].obs_sigmas ** 2) * weight_scale
                 n.append(a.T @ p @ a)
