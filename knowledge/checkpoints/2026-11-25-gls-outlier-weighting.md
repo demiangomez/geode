@@ -32,6 +32,16 @@ No change to the ETM core or the noise model.
 
 ## Architectural decisions
 
+**A diagnostic ETM is synced against the constraint list, not against a reference ETM.**
+`_run_constrained_etm` rebuilds an `EtmEngine` from the stacker config, which re-admits
+every event in `earthquakes_cherry_picked`. The first fix for this synced the rebuilt jump
+table against the station's own `stn.etm`, which is right for a full station (the stack
+demoted its unresolvable events in place) and wrong for a sparse one (`stn.etm` is a free
+fit, never subject to the drop, so it still carries those events as `fit=True`). The
+constraint list is the only reference that is correct for both, because it is built from
+the events the stack still models: a geophysical jump with no constraint is deactivated,
+and one whose constraint describes a different jump type adopts that type.
+
 **Outliers are downweighted inside the covariance, not dropped from the design.** Two
 options were on the table: mask the rejected rows out of `a`/`l`/`t_mjd` before building
 the Toeplitz, or inflate the covariance diagonal at those epochs. Inflating was chosen
@@ -100,7 +110,11 @@ so the hardcoded sigma is not rediscovered as a surprise.
   | WRMS increment 90th / max | 1.04 / 1.26 | 1.00 / 1.15 |
   | interseismic-eligible | 23 of 31 | 11 of 31 |
 
-- `plot_all` on the `-s_score 6.5` stack: 31 full + 23 sparse plots written, 0 failures.
+- `plot_all` on the `-s_score 6.5` stack: 31 full + 23 sparse plots written, 0 failures,
+  smallest plot 179 kB. An earlier pass of this check used a `-size -40k` threshold to find
+  blank plots and reported 0 while four sparse stations (`col.abcc`, `col.abpd`, `col.gara`,
+  `col.zarz`) were still blank at ~68-84 kB. Size alone is a poor blankness test; the
+  smallest plot in the run is the number to look at.
 - `plot_etm <station> <folder>` for two stations into one folder: both land inside it as
   `<station>_ppp.png`, no stray `<folder>.png`.
 

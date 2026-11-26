@@ -206,6 +206,10 @@ Confirmed on the Ecuador stack (branch `stacker_refactor`); see
   collinear with each other and the intercept. `drop_unconstrainable_postseismic` and
   `etm_builder.sync_geophysical_jumps` both clean up after this rather than preventing it.
   A per-station window, or a floor tied to the network's validity epoch, is the real fix.
+  The drop only reaches the ETMs that exist when it runs: a sparse station's free fit is
+  never subject to it, and any ETM rebuilt from the config afterwards re-admits every
+  dropped event. `col.abcc`, `col.abpd`, `col.gara` and `col.zarz` carry decay columns for
+  1991/1992/2004 events against data that starts in 2020.
 - **A rank-deficient design discards the entire model, not the offending columns.**
   `least_squares.py:1069-1079` catches `DesignMatrixException` by setting
   `FitStatus.UNABLE_TO_FIT`, blanking `results`, and setting `fit = False` on *every*

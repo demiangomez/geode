@@ -165,36 +165,42 @@ def deactivate_mechanical_jumps(etm: EtmEngine) -> None:
         j.fit = False
 
 
-def sync_geophysical_jumps(etm: EtmEngine, reference: EtmEngine) -> None:
-    """Make `etm`'s geophysical jumps match the ones `reference` actually fitted.
+def sync_geophysical_jumps(etm: EtmEngine, constraints: List[JumpFunction]) -> None:
+    """Make `etm`'s geophysical jumps match what `constraints` actually says something about.
 
     An ETM rebuilt from an EtmStackerConfig derives its jump table afresh from
     earthquakes_cherry_picked, which holds every event any station in the network scored
     and admits them per-station without a magnitude check, back to post_seismic_back_lim
     (a Date, so an absolute epoch rather than a window before the station's own start).
-    earthquake_catalog.drop_unconstrainable_postseismic then demotes the events no
-    station can resolve -- but it edits the ETMs that exist at that moment, so a later
-    rebuild silently re-admits every one of them.
+    earthquake_catalog.drop_unconstrainable_postseismic then removes the events no station
+    can resolve -- but a rebuild re-admits every one of them, and a sparse station's own
+    free fit, which is not subject to the drop, carries them as fit=True as well. Neither
+    is a usable reference; the constraint list is, because it is built from the events the
+    stack still models.
 
-    That matters because a station whose data begins years after an event gets a
+    So: a geophysical jump with no constraint is deactivated, and one whose constraint
+    describes a different jump type adopts that type (the stack is the authority on what is
+    modelled, and leaving a decay column the stack does not constrain is the whole problem).
+
+    This matters because a station whose data begins years after an event gets a
     log(1 + dt/tau) column that is flat over its own span, and several such columns are
     collinear with each other and with the intercept. The resulting design is rank
     deficient, and least_squares catches DesignMatrixException by deactivating *every*
     function -- so the station loses its trend and seasonals too, and reports
-    UNABLE_TO_FIT despite having a full time series.
+    UNABLE_TO_FIT despite having a usable time series.
     """
+    jump_constraints = [c for c in constraints if c.p.object == 'jump']
+
     for jump in etm.jump_manager.jumps:
-        if not jump.is_geophysical() or jump.earthquake is None:
+        if not jump.is_geophysical():
             continue
 
-        ref = reference.jump_manager.get_geophysical_jump(jump.earthquake.id)
-        if ref is None:
+        match = next((c for c in jump_constraints
+                      if Date(datetime=c.p.jump_date) == Date(datetime=jump.p.jump_date)), None)
+        if match is None:
             jump.fit = False
-            continue
-
-        if ref.p.jump_type != jump.p.jump_type:
-            jump.configure_behavior({'jump_type': ref.p.jump_type})
-        jump.fit = ref.fit
+        elif match.p.jump_type != jump.p.jump_type:
+            jump.configure_behavior({'jump_type': match.p.jump_type})
 
 
 def apply_prefit(etm: EtmEngine, prefit: List[JumpFunction]) -> None:

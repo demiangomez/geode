@@ -159,9 +159,9 @@ class DiagnosticsMixin:
 
         # deactivate mechanical jumps
         etm_builder.deactivate_mechanical_jumps(etm)
-        # ...and carry over which geophysical jumps the stack actually fitted, which a
-        # config-driven rebuild does not know about -- see sync_geophysical_jumps.
-        etm_builder.sync_geophysical_jumps(etm, stn.etm)
+        # ...and drop the geophysical jumps the stack has nothing to say about, which a
+        # config-driven rebuild re-admits -- see sync_geophysical_jumps.
+        etm_builder.sync_geophysical_jumps(etm, constraints)
 
         if catch_errors:
             try:
