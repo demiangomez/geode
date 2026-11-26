@@ -113,6 +113,12 @@ class SolverMixin:
         o_vpv = total_vpv - c_vpv
 
         self.variance = total_vpv / dof
+        # Kept on the object, not just printed: a weighting or regularization sweep needs
+        # the observation and constraint halves separately to tell "the model now fits the
+        # data worse" from "the constraints are being asked to do more".
+        self.obs_vpv = o_vpv
+        self.constraints_vpv = c_vpv
+        self.dof = dof
         # update the covariance
         self.covariance *= self.variance
         # compute variance of unit weight for each stations
