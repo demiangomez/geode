@@ -27,9 +27,6 @@ from .interaction_handler import InteractionHandler
 # has to re-render on each interaction.
 _MAX_GRID_ARROWS = 700
 
-# Metres per unit of 3-sigma uncertainty in _draw_ellipses, chosen so the ellipses are
-# the size they were before the scaling was inverted, at the slider's default.
-_ELLIPSE_SIZE = 1.0e6
 
 # Colour map for the non-negative magnitude panel, where a diverging map is wrong.
 _SEQUENTIAL_CMAP = 'viridis'
@@ -117,7 +114,8 @@ class FieldVisualizer:
             epoch_limits: Optional[Tuple[float, float]] = None,
             epoch_indices: Optional[List[int]] = None,
             sigma_data: Optional[List[Optional[np.ndarray]]] = None,
-            epoch_marks: Optional[List[float]] = None
+            epoch_marks: Optional[List[float]] = None,
+            field_units: Optional[List[str]] = None
     ) -> plt.Figure:
         """
         Create the field visualization.
@@ -178,6 +176,7 @@ class FieldVisualizer:
         self._unit_vectors = False
         self._sigma_data = sigma_data or []
         self._epoch_marks = epoch_marks or []
+        self._field_units = field_units or []
         self._show_sigmas = bool(self.config.plot_sigmas)
         self._epoch_callback = epoch_callback
         self._epoch_limits = epoch_limits
@@ -373,9 +372,16 @@ class FieldVisualizer:
         else:
             self.state.cov_grid = None
 
-        # Calculate reference vector
-        vh = np.sqrt(ve_grid ** 2 + vn_grid ** 2)
-        self.state.reference_vector = np.nanmax(vh)
+        # Reference vector for the arrow scale, taken from the FIELD even when the
+        # uncertainty is the thing being contoured. The arrows always show the field, so
+        # deriving their scale from whatever is on the colour map made them jump by the
+        # ratio of the two -- about 15x here, since a velocity of 15 mm/yr has a sigma
+        # near 1 mm/yr -- the moment the uncertainty box was ticked.
+        field = self._data[field_index]
+        reference = np.nanmax(np.hypot(field[0, :], field[1, :])) * 1000.0
+        if not np.isfinite(reference) or reference <= 0:
+            reference = float(np.nanmax(np.hypot(ve_grid, vn_grid)))
+        self.state.reference_vector = float(reference)
         self.state.current_field_index = field_index
 
     def _panel_specs(self) -> List[dict]:
@@ -431,7 +437,7 @@ class FieldVisualizer:
             Whether to set up interaction handlers on this axis
         """
         field = spec['field']
-        label = spec['label']
+        label = self._panel_label(spec)
 
         vmin, vmax = self._colour_range(index, field,
                                         non_negative=bool(spec.get('sequential')))
@@ -687,11 +693,15 @@ class FieldVisualizer:
         vn_flat = self.state.vn_grid[::step, ::step].flatten()
         cov_flat = self.state.cov_grid[::step, ::step].flatten()
 
-        # Inverted, because `scale` is matplotlib quiver's scale parameter and that runs
-        # the other way: a larger value draws SMALLER arrows. Multiplying the ellipse axes
-        # by it directly made the ellipses grow as the arrows shrank. _ELLIPSE_SIZE is set
-        # so the ellipses come out the same size as before at the slider's default.
-        norm_scale = self.state.reference_vector / scale
+        # Map a 3-sigma length through exactly the same transform the arrows use: quiver
+        # draws a value v as v / scale of the axis width, so the equivalent length in
+        # data units is v / scale * span. Previously this was an arbitrary constant,
+        # which put a 0.5 mm sigma on screen as a 400 km ellipse against a 25 km grid --
+        # every ellipse overlapping its neighbours. Tying it to `scale` also means the
+        # ellipses follow the Vector Scale slider the way the arrows do.
+        x0, x1 = ax.get_xlim()
+        span = abs(x1 - x0)
+        axis_per_unit = span / scale if scale else 0.0
 
         ellipses = []
         for j in range(ve_flat.size):
@@ -720,8 +730,8 @@ class FieldVisualizer:
             eigenvalues = eigenvalues[order]
             eigenvectors = eigenvectors[:, order]
 
-            width = 2 * 3 * np.sqrt(eigenvalues[0]) * norm_scale * _ELLIPSE_SIZE
-            height = 2 * 3 * np.sqrt(eigenvalues[1]) * norm_scale * _ELLIPSE_SIZE
+            width = 2 * 3 * np.sqrt(eigenvalues[0]) * axis_per_unit
+            height = 2 * 3 * np.sqrt(eigenvalues[1]) * axis_per_unit
             angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))
 
             ellipse = Ellipse(
@@ -916,6 +926,23 @@ class FieldVisualizer:
                 self._locked_levels[(field_index, panel_index)] = (-bound, bound)
             # magnitude mode: panel 0 carries |E,N| and panel 1 carries Up
             self._locked_magnitude[field_index] = (horizontal or 1.0, float(peak[2]) or 1.0)
+
+    def _panel_label(self, spec: dict) -> str:
+        """Colourbar label, saying what the quantity is and in what units.
+
+        In uncertainty mode the magnitude panel shows sqrt(sigma_E^2 + sigma_N^2), which
+        is not self-evident from the words "horizontal magnitude", so it is spelled out.
+        """
+        index = self.state.current_field_index
+        unit = self._field_units[index] if index < len(self._field_units) else ''
+        suffix = f' [{unit}]' if unit else ''
+
+        base = spec['label']
+        if self._show_sigmas and self.has_sigma(index):
+            base = ('Horizontal sigma = sqrt(sE^2 + sN^2)'
+                    if spec.get('sequential') else f'{base} sigma')
+
+        return base + suffix
 
     def _arrows(self, ve, vn):
         """Arrow components to draw: the vectors themselves, or all the same length.

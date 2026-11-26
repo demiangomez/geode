@@ -42,6 +42,7 @@ class DiagnosticsMixin:
         # Parallel to `fields`: the uncertainty view of the same panel, or None where
         # there is not one. The checkbox switches between the two without rebuilding.
         sigma_data = []
+        field_units = []
 
         # Per-panel caption, appended alongside each entry below so it keys off the field
         # object rather than its label -- the coseismic and postseismic panels for one
@@ -73,6 +74,10 @@ class DiagnosticsMixin:
             grid_lat.append(lat)
             sigma_data.append(ifield.enu_sigma)
             fcovar.append(ifield.enu_covar)
+            # The interseismic field is a rate; a coseismic offset and a postseismic
+            # amplitude are displacements.
+            field_units.append('mm/yr' if ifield.base_type == ConstraintType.INTERSEISMIC
+                               else 'mm')
             if sigmas:
                 # do not plot data from stations in uncertainty mode
                 fields.append(ifield.enu_sigma)
@@ -138,6 +143,7 @@ class DiagnosticsMixin:
                     grid_lat.append(self.grids.interpolation_geographic[1])
                     fcovar.append(None)
                     sigma_data.append(None)
+                    field_units.append('mm/yr' if not cumulative else 'mm')
                     field_notes.append(None)
 
                 cumulative_by_index = {epoch_indices[i]: bool(i)
@@ -162,6 +168,7 @@ class DiagnosticsMixin:
                                    epoch_limits=epoch_limits,
                                    epoch_indices=epoch_indices,
                                    sigma_data=sigma_data,
+                                   field_units=field_units,
                                    epoch_marks=sorted({c['onset'] for c in components})
                                    if not sigmas and epoch_limits else None,
                                    output_file=output_file)
