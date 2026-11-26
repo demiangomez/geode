@@ -240,3 +240,33 @@ Confirmed on the Ecuador stack (branch `stacker_refactor`); see
   independent `N` per component, and `_build_base_normal_equations` lays those out as three
   separate diagonal blocks. There is also no cross-*station* term anywhere, by construction,
   so common-mode error is invisible to the weighting.
+
+## ETM Stacker: grid_spacing is not purely cosmetic (2026-11-26)
+
+`EtmStackerConfig.grid_spacing` nominally controls the interpolation/display grid, and
+nothing in the solve reads the interpolated field -- `self.fields` is built after
+`solve()` and consumed only by `diagnostics.py` (the map, and the sparse stations'
+diagnostic ETM constraints) and by `do_export`/`do_test`. Station parameters come from the
+normal equations, and the constraint equations use station-to-station coefficients
+(`compute_constraint_coefficients`), not the grid.
+
+It leaks in anyway, by one path: `grid_system.create_from_stations` sets
+`pad_deg = (grid_spacing / 2 * 4) / 111`, so the grid's lon/lat extent depends on the
+spacing; `_compute_spline_responses` derives `length_scale` from that extent
+(`max - min ... / 50`) and the spline tension `p` from `length_scale`; and `p` is what
+builds `stations_vertical_response` and the `av` block of the SW-Okada system, both of
+which enter the solve.
+
+Measured on the Ecuador stack (velocities against the 25 km result):
+
+| grid_spacing | grid points | sqrt(var) | median change | max change |
+|---|---|---|---|---|
+| 25 (default) | 2909 | 1.0117 | - | - |
+| 35 | 1612 | 1.0117 | 0.053 | 0.089 mm/yr |
+| 50 | 921 | 1.0117 | 0.215 | 0.335 mm/yr |
+| 75 | 497 | 1.0117 | 0.384 | 0.609 mm/yr |
+
+`sqrt(var)` does not move, so this is not a fit-quality change -- it is the spline tension
+being silently reparameterised. Deriving `length_scale` from the station extent instead of
+the padded grid extent would make the grid a pure display parameter; that is a one-time
+change in results and has not been made.

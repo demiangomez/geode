@@ -20,6 +20,13 @@ from .widget_manager import WidgetManager
 from .interaction_handler import InteractionHandler
 
 
+# Upper bound on how many field arrows a single panel draws; _draw_quivers decimates the
+# grid to stay under it. Nothing below this is about accuracy -- the full grid is still
+# contoured, and the field itself is unchanged -- only about how many artists matplotlib
+# has to re-render on each interaction.
+_MAX_GRID_ARROWS = 700
+
+
 class FieldVisualizer:
     """
     Main orchestrator for field visualization.
@@ -366,6 +373,7 @@ class FieldVisualizer:
             self.state.x_stn, self.state.y_stn,
             s=10, c='black', marker='o',
             zorder=10,
+            label='full station',
             transform=self.renderer.projection
         )
         self.state.scatter_artists[index] = scatter
@@ -390,6 +398,7 @@ class FieldVisualizer:
                 self.state.x_sparse, self.state.y_sparse,
                 s=20, c='lime', marker='o',
                 zorder=10,
+                label='sparse station',
                 transform=self.renderer.projection
             )
             self.state.scatter_sparse[index] = scatter_sp
@@ -407,6 +416,17 @@ class FieldVisualizer:
                     transform=self.renderer.projection
                 )
                 self.state.quivers_sparse[index] = q_sp
+
+        # Which marker is which. The two station classes are not interchangeable -- a full
+        # station owns the parameters the field is built from, a sparse one is only
+        # predicted by it -- and nothing on the figure said so. Re-created rather than
+        # updated on every _draw_subplot: ax.legend() replaces the axes' existing legend,
+        # and switch_field removes and redraws these artists.
+        station_handles = [scatter]
+        if self.state.scatter_sparse[index] is not None:
+            station_handles.append(self.state.scatter_sparse[index])
+        ax.legend(handles=station_handles, loc='lower left', fontsize=7,
+                  framealpha=0.85, borderpad=0.4, handletextpad=0.3).set_zorder(20)
 
         ax.set_title(label, fontsize=12, fontweight='bold')
 
@@ -461,9 +481,17 @@ class FieldVisualizer:
         from matplotlib.offsetbox import AnchoredOffsetbox, HPacker, TextArea, DrawingArea
         from matplotlib.patches import FancyArrowPatch
 
+        # Decimate, the way _draw_ellipses already does. Drawing one arrow per grid point
+        # means 2909 arrows per panel at the default 25 km spacing, re-rendered on every
+        # pan, zoom and scale-slider drag -- which is both slow and unreadable, since at
+        # that density the arrows merge into a solid mass. The step is derived from the
+        # grid size rather than fixed, so the display stays legible at any grid_spacing.
+        step = max(1, int(np.ceil(np.sqrt(self.state.xi_grid.size / _MAX_GRID_ARROWS))))
+        sl = (slice(None, None, step), slice(None, None, step))
+
         q = ax.quiver(
-            self.state.xi_grid, self.state.yi_grid,
-            self.state.ve_grid, self.state.vn_grid,
+            self.state.xi_grid[sl], self.state.yi_grid[sl],
+            self.state.ve_grid[sl], self.state.vn_grid[sl],
             scale=scale,
             color=self.config.vector_color,
             width=self.config.vector_width,
