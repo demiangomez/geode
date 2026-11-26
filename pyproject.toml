@@ -41,7 +41,12 @@ dependencies = [
     "geopy==2.4.1",
     #h5py==3.4.0
     #hdf5storage>=0.1.18
-    "matplotlib>=2.0.0",
+    # Upper bound is load-bearing: ContourSet.collections, which
+    # etm/visualization/field_plot/field_visualizer.py uses to tear down contour
+    # artists, was deprecated in 3.8 ("removed two minor releases later") and is gone
+    # in 3.10. Lower bound is the version this project is developed and tested on
+    # with the pinned numpy 2.4.6; earlier 3.8.x releases are untested against numpy 2.
+    "matplotlib>=3.8.4,<3.10",
     "munch==2.5.0",
     "netifaces==0.11.0",
     "networkx",

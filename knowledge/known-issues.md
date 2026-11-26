@@ -270,3 +270,19 @@ Measured on the Ecuador stack (velocities against the 25 km result):
 being silently reparameterised. Deriving `length_scale` from the station extent instead of
 the padded grid extent would make the grid a pure display parameter; that is a one-time
 change in results and has not been made.
+
+## matplotlib is capped below 3.10 by ContourSet.collections (2026-11-26)
+
+`geode/etm/visualization/field_plot/field_visualizer.py` tears down its contour artists
+through `ContourSet.collections` (lines 789 and 834). That attribute was deprecated in
+matplotlib 3.8 -- the warning says "will be removed two minor releases later" -- and is
+gone in 3.10, so `pyproject.toml` and `environment.yml` both cap matplotlib at `<3.10`.
+
+The replacement is to remove the `ContourSet` itself: since 3.8 it is a single
+`Collection`, so `cs.remove()` does what the loop over `cs.collections` was for. Doing
+that lifts the cap. Until then the project cannot move to matplotlib 3.10 or later.
+
+The lower bound, `>=3.8.4`, is the version the project is developed and tested on
+alongside its pinned `numpy==2.4.6`. Earlier 3.8.x releases are untested against numpy 2
+rather than known to fail; PyPI metadata does not distinguish them, since every 3.8.x and
+3.9.x wheel declares only `numpy>=1.21`.

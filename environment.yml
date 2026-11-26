@@ -6,7 +6,8 @@ dependencies:
   - python=3.11
   - geopy
   - h5py
-  - matplotlib
+  # see pyproject.toml: <3.10 because ContourSet.collections is removed there
+  - matplotlib>=3.8.4,<3.10
   - networkx
   - numpy=2.4.6
   - pandas
