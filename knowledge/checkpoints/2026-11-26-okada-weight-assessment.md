@@ -119,9 +119,40 @@ distorts the fit.
 
 and `v = 0` gives oos U 2.41 against 2.48 at any `v >= 1` — the same sign as postseismic.
 
-**Net recommendation:** `h = 25, v = 0` for both constraint types, with the force balance
-on. Against the starting point (postseismic 5/5, coseismic 1/1, no force balance), the
-held-out residual goes 2.50 -> 2.13 in E/N and 2.84 -> 2.41 in U, both about -15%.
+**That `h = 25` recommendation was wrong, and is withdrawn.** It collapses the coseismic
+fields: at h=25 the Pedernales coseismic field peaks at 0.92 mm against a 38.64 mm median
+station offset (fieldmax 12.44 mm at h=1, 53.37 mm at h=0). The out-of-sample metric
+preferred h=25 (2.17 against 2.13) because a sparse station's prediction is dominated by
+the interseismic and postseismic fields and barely sees the coseismic one, so it was blind
+to this. **Use `h = 5` postseismic and `h = 1` coseismic, `v = 0` on both.**
+
+**The force balance also had to be gated by station count.** Its two rows cost 2 of the
+2N horizontal parameters, a fraction 1/N: 3% at N = 29, 50% at N = 2. Applied at every
+N >= 2 (as first committed, `077ddf2`) the small-N fields could no longer reproduce their
+own stations, which is what shows on the map as station vectors disagreeing with the field
+around them. Gated at N >= 10 (`_FORCE_BALANCE_MIN_SITES`, `0f13622`) they recover.
+
+`rel` below is the median over a field's constraining stations of
+|field at the station - that station's own fitted parameter| / |parameter|: 0 means the
+field passes through its stations, 1 means it predicts essentially nothing there.
+
+| force balance | cos_rel | post_rel | oos | decay | sink |
+|---|---|---|---|---|---|
+| never | 0.11 | 0.43 | 2.50 | -0.16 | 0.84 |
+| N >= 10 (shipped) | 0.11 | 0.78 | **2.86** | **-0.50** | 1.25 |
+| N >= 2 (withdrawn) | **0.80** | 0.94 | 2.39 | -0.51 | 1.01 |
+
+**No row dominates, and this is unresolved.** N >= 10 was chosen because a field that
+cannot reproduce its own stations is wrong on its face, and because the decay and the
+sinks were the reported defects -- but it is worse than no force balance at all on the
+held-out residual (2.86 against 2.50), on postseismic station fidelity (0.78 against 0.43)
+and on the sink ratio (1.25 against 0.84, overshooting the other way). Whether the
+far-field decay is worth those three is a judgement that has not been made on evidence.
+
+A soft force balance was tried as an alternative to the gate (scaling `mu_h` down from
+1e4 through 1e-1 instead of thresholding on N) and does not separate the two regimes: at
+every scale, coseismic fidelity and far-field decay move together in opposite directions
+(mu_h = 1e0 gives cos_rel 0.33 and decay -0.19; 1e4 gives 0.80 and -0.51).
 
 ## Known issues / limitations
 
