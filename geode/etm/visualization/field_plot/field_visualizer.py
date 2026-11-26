@@ -403,14 +403,40 @@ class FieldVisualizer:
                      contours=True, visible=True),
             ]
 
-        horizontal = np.hypot(self.state.ve_grid, self.state.vn_grid)
+        horizontal, kind = self._horizontal_scalar()
         return [
             dict(label='Horizontal magnitude', field=horizontal, vectors=True,
-                 contours=False, visible=True, sequential=True),
+                 contours=False, visible=True, sequential=True, sigma_kind=kind),
             dict(label='Up', field=self.state.vu_grid, vectors=False,
                  contours=True, visible=True),
             dict(label=None, field=None, vectors=False, contours=False, visible=False),
         ]
+
+    def _horizontal_scalar(self):
+        """The scalar the magnitude panel contours, and which definition was used.
+
+        Showing the field: the vector magnitude, hypot(E, N).
+
+        Showing the uncertainty: the SEMI-MAJOR AXIS of the error ellipse, so the colour
+        and the ellipses drawn over it are the same quantity. For the 2x2
+        [[sE^2, c], [c, sN^2]] that is sqrt of the larger eigenvalue,
+
+            lambda+ = (a + b) / 2 + sqrt(((a - b) / 2)^2 + c^2)
+
+        which is not hypot(sE, sN): the quadrature sum ignores the E-N correlation and is
+        the ellipse's RMS radius rather than its longest axis. It falls back to the
+        quadrature sum when the field carries no E-N covariance.
+        """
+        east, north = self.state.ve_grid, self.state.vn_grid
+
+        if not self._show_sigmas or self.state.cov_grid is None:
+            return np.hypot(east, north), 'magnitude'
+
+        var_e, var_n = east ** 2, north ** 2
+        covar = self.state.cov_grid
+        mean = (var_e + var_n) / 2.0
+        spread = np.sqrt(((var_e - var_n) / 2.0) ** 2 + covar ** 2)
+        return np.sqrt(np.clip(mean + spread, 0.0, None)), 'semi-major'
 
     def _draw_all_subplots(self) -> None:
         """Draw all three subplots."""
@@ -939,8 +965,12 @@ class FieldVisualizer:
 
         base = spec['label']
         if self._show_sigmas and self.has_sigma(index):
-            base = ('Horizontal sigma = sqrt(sE^2 + sN^2)'
-                    if spec.get('sequential') else f'{base} sigma')
+            if spec.get('sequential'):
+                base = ('Horizontal sigma, ellipse semi-major axis'
+                        if spec.get('sigma_kind') == 'semi-major'
+                        else 'Horizontal sigma = sqrt(sE^2 + sN^2)')
+            else:
+                base = f'{base} sigma'
 
         return base + suffix
 
